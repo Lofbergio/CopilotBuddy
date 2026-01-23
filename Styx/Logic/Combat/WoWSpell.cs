@@ -1,0 +1,466 @@
+#nullable disable
+using System;
+using System.Collections.Generic;
+using GreenMagic;
+using Styx.Helpers;
+using Styx.Patchables;
+using Styx.WoWInternals;
+
+namespace Styx.Logic.Combat
+{
+    public class WoWSpell : IEquatable<WoWSpell>
+    {
+        private readonly int _id;
+        private readonly SpellEntry _spellEntry;
+        private readonly WoWDb.Row _row;
+
+        private static readonly Dictionary<int, SpellInfoCache> _spellInfoCache;
+        private static readonly Dictionary<int, WoWDb.Row> _rowCache;
+
+        static WoWSpell()
+        {
+            _spellInfoCache = new Dictionary<int, SpellInfoCache>();
+            _rowCache = new Dictionary<int, WoWDb.Row>();
+        }
+
+        private WoWSpell(int id, WoWDb.Row row)
+        {
+            _id = id;
+            _row = row;
+            _spellEntry = row.GetStruct<SpellEntry>();
+        }
+
+        // SpellCooldown offsets for WoW 3.3.5a (build 12340)
+        private const uint SpellCooldownStruct = 13890988U;  // 0xD3F92C
+        private const uint SpellCooldownFunc = 8419712U;     // 0x808580
+
+        private bool GetSpellCooldown()
+        {
+            var executor = ObjectManager.Executor;
+            if (executor == null)
+            {
+                throw new Exception("Invalid executor used in GetSpellCooldown");
+            }
+
+            try
+            {
+                lock (executor.AssemblyLock)
+                {
+                    executor.Clear();
+                    executor.AddLine("push 0");
+                    executor.AddLine("push 0");
+                    executor.AddLine("push 0");
+                    executor.AddLine("push 0");
+                    executor.AddLine($"push {Id}");
+                    executor.AddLine($"mov ecx, {SpellCooldownStruct}");
+                    executor.AddLine($"call {SpellCooldownFunc}");
+                    executor.AddLine("retn");
+                    executor.Execute();
+                    int result = executor.Memory.Read<int>(executor.ReturnPointer);
+                    return result != 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.WriteException(ex);
+            }
+            return false;
+        }
+
+        public bool IsValid
+        {
+            get { return _id != 0 && _row != null; }
+        }
+
+        public uint BaseLevel
+        {
+            get { return _spellEntry.baseLevel; }
+        }
+
+        public uint Level
+        {
+            get { return _spellEntry.spellLevel; }
+        }
+
+        private uint RangeIndex
+        {
+            get { return _spellEntry.rangeIndex; }
+        }
+
+        /// <summary>
+        /// Gets the spell range ID (public for HB 4.3.4 compatibility).
+        /// </summary>
+        public uint SpellRangeId
+        {
+            get { return _spellEntry.rangeIndex; }
+        }
+
+        public uint ManaCostPercent
+        {
+            get { return _spellEntry.ManaCostPercentage; }
+        }
+
+        /// <summary>
+        /// Returns true if this spell is channeled.
+        /// Checks AttributesEx for channeled flag (0x44).
+        /// </summary>
+        public bool IsChanneled
+        {
+            get
+            {
+                // Channeled spells have bit 0x44 in AttributesEx
+                return (_spellEntry.Attributes & 0x44) != 0;
+            }
+        }
+
+        public int Id
+        {
+            get { return _id; }
+        }
+
+        public uint Category
+        {
+            get { return _spellEntry.Category; }
+        }
+
+        public WoWDispelType DispelType
+        {
+            get { return (WoWDispelType)_spellEntry.Dispel; }
+        }
+
+        public WoWSpellMechanic Mechanic
+        {
+            get { return (WoWSpellMechanic)_spellEntry.Mechanic; }
+        }
+
+        public uint MaxTargets
+        {
+            get { return _spellEntry.MaxTargetLevel; }
+        }
+
+        public WoWCreatureType TargetType
+        {
+            get { return (WoWCreatureType)_spellEntry.TargetCreatureType; }
+        }
+
+        public int CreatesItemId
+        {
+            get { return (int)_spellEntry.EffectItemType[0]; }
+        }
+
+        public SpellEffect SpellEffect1
+        {
+            get { return GetSpellEffect(0); }
+        }
+
+        public SpellEffect SpellEffect2
+        {
+            get { return GetSpellEffect(1); }
+        }
+
+        public SpellEffect SpellEffect3
+        {
+            get { return GetSpellEffect(2); }
+        }
+
+        public SpellEffect[] SpellEffects
+        {
+            get
+            {
+                SpellEffect[] effects = new SpellEffect[3];
+                for (int i = 0; i < 3; i++)
+                {
+                    effects[i] = GetSpellEffect(i);
+                }
+                return effects;
+            }
+        }
+
+        public WoWPowerType PowerType
+        {
+            get { return (WoWPowerType)_spellEntry.powerType; }
+        }
+
+        public SpellEntry InternalInfo
+        {
+            get { return _spellEntry; }
+        }
+
+        public int PowerCost
+        {
+            get
+            {
+                SpellInfoCache cache;
+                if (_spellInfoCache.TryGetValue(Id, out cache))
+                {
+                    return cache.PowerCost;
+                }
+                _spellInfoCache.Add(Id, GetSpellInfo());
+                return _spellInfoCache[Id].PowerCost;
+            }
+        }
+
+        public bool IsFunnel
+        {
+            get
+            {
+                SpellInfoCache cache;
+                if (_spellInfoCache.TryGetValue(Id, out cache))
+                {
+                    return cache.IsFunnel;
+                }
+                _spellInfoCache.Add(Id, GetSpellInfo());
+                return _spellInfoCache[Id].IsFunnel;
+            }
+        }
+
+        public uint CastTime
+        {
+            get
+            {
+                SpellInfoCache cache;
+                if (_spellInfoCache.TryGetValue(Id, out cache))
+                {
+                    return cache.CastTime;
+                }
+                _spellInfoCache.Add(Id, GetSpellInfo());
+                return _spellInfoCache[Id].CastTime;
+            }
+        }
+
+        public float MinRange
+        {
+            get
+            {
+                SpellInfoCache cache;
+                if (_spellInfoCache.TryGetValue(Id, out cache))
+                {
+                    return cache.MinRange;
+                }
+                _spellInfoCache.Add(Id, GetSpellInfo());
+                return _spellInfoCache[Id].MinRange;
+            }
+        }
+
+        public float MaxRange
+        {
+            get
+            {
+                SpellInfoCache cache;
+                if (_spellInfoCache.TryGetValue(Id, out cache))
+                {
+                    return cache.MaxRange;
+                }
+                _spellInfoCache.Add(Id, GetSpellInfo());
+                return _spellInfoCache[Id].MaxRange;
+            }
+        }
+
+        public uint MaxStackCount
+        {
+            get { return _spellEntry.StackAmount; }
+        }
+
+        public string Name
+        {
+            get 
+            { 
+                var result = Lua.GetReturnValues("return GetSpellInfo(" + Id + ")", "hax.lua");
+                if (result != null && result.Count > 0)
+                    return result[0] ?? "";
+                return "";
+            }
+        }
+
+        public string Rank
+        {
+            get 
+            { 
+                var result = Lua.GetReturnValues("return GetSpellInfo(" + Id + ")", "hax.lua");
+                if (result != null && result.Count > 1)
+                    return result[1] ?? "";
+                return "";
+            }
+        }
+
+        public string Tooltip
+        {
+            get { return ObjectManager.Wow.Read<string>(_spellEntry.ToolTip); }
+        }
+
+        public bool Cooldown
+        {
+            get { return GetSpellCooldown(); }
+        }
+
+        /// <summary>
+        /// Gets the remaining cooldown time for this spell.
+        /// </summary>
+        public TimeSpan CooldownTimeLeft
+        {
+            get
+            {
+                var luaTime = Lua.GetReturnVal<double>(string.Format("local x,y=GetSpellCooldown({0}); return x+y-GetTime()", Id), 0);
+                if (luaTime <= 0)
+                    return TimeSpan.Zero;
+                return TimeSpan.FromSeconds(luaTime);
+            }
+        }
+
+        public uint BaseCooldown
+        {
+            get { return _spellEntry.StartRecoveryTime; }
+        }
+
+        public bool HasRange
+        {
+            get
+            {
+                if (MinRange == 0f && MaxRange != 0f)
+                    return true;
+                if (MinRange == 0f)
+                    return MaxRange == 0f;
+                return false;
+            }
+        }
+
+        public int BaseDuration
+        {
+            get { return StyxWoW.Db[ClientDb.SpellDuration].GetRow(_spellEntry.DurationIndex).GetField<int>(1U); }
+        }
+
+        public int DurationPerLevel
+        {
+            get { return StyxWoW.Db[ClientDb.SpellDuration].GetRow(_spellEntry.DurationIndex).GetField<int>(2U); }
+        }
+
+        public int MaxDuration
+        {
+            get { return StyxWoW.Db[ClientDb.SpellDuration].GetRow(_spellEntry.DurationIndex).GetField<int>(3U); }
+        }
+
+        public WoWSpellSchool School
+        {
+            get { return (WoWSpellSchool)_spellEntry.SchoolMask; }
+        }
+
+        public bool CanCast
+        {
+            get { return Lua.GetReturnVal<bool>("return IsUsableSpell(select(1, GetSpellInfo(" + Id + ")))", 0U); }
+        }
+
+        public string RangeDescription
+        {
+            get { return StyxWoW.Db[ClientDb.SpellRange].GetRow(RangeIndex).GetField<string>(6U); }
+        }
+
+        public SpellEffect GetSpellEffect(int index)
+        {
+            if (index > 2)
+            {
+                throw new IndexOutOfRangeException("Index can't be higher than 2 for SpellEffects!");
+            }
+            return new SpellEffect(
+                (WoWApplyAuraType)_spellEntry.EffectApplyAuraName[index],
+                _spellEntry.EffectRealPointsPerLevel[index],
+                _spellEntry.EffectBasePoints[index],
+                _spellEntry.EffectMechanic[index],
+                _spellEntry.EffectImplicitTargetA[index],
+                _spellEntry.EffectImplicitTargetB[index],
+                _spellEntry.EffectRadiusIndex[index],
+                _spellEntry.EffectAmplitude[index],
+                _spellEntry.EffectMultipleValue[index],
+                _spellEntry.EffectChainTarget[index],
+                _spellEntry.EffectItemType[index],
+                _spellEntry.EffectMiscValueA[index],
+                _spellEntry.EffectMiscValueB[index],
+                _spellEntry.EffectTriggerSpell[index],
+                _spellEntry.EffectPointsPerComboPoint[index],
+                _spellEntry.EffectSpellClassMask[index]
+            );
+        }
+
+        private SpellInfoCache GetSpellInfo()
+        {
+            var result = Lua.GetReturnValues("return GetSpellInfo(" + Id + ")", "hax.lua");
+            int powerCost = 0;
+            bool isFunnel = false;
+            uint castTime = 0;
+            float minRange = 0f;
+            float maxRange = 0f;
+            
+            if (result != null && result.Count > 8)
+            {
+                int.TryParse(result[3], out powerCost);
+                bool.TryParse(result[4], out isFunnel);
+                uint.TryParse(result[6], out castTime);
+                float.TryParse(result[7], out minRange);
+                float.TryParse(result[8], out maxRange);
+            }
+
+            return new SpellInfoCache
+            {
+                PowerCost = powerCost,
+                IsFunnel = isFunnel,
+                CastTime = castTime,
+                MinRange = minRange,
+                MaxRange = maxRange
+            };
+        }
+
+        public void Cast()
+        {
+            SpellManager.CastSpellById(Id);
+        }
+
+        public static WoWSpell FromId(int id)
+        {
+            WoWDb.Row row;
+            if (!_rowCache.TryGetValue(id, out row))
+            {
+                var db = StyxWoW.Db[ClientDb.Spell];
+                if (db != null)
+                {
+                    row = db.GetRow((uint)id);
+                    _rowCache.Add(id, row);
+                }
+            }
+            if (row == null)
+            {
+                return null;
+            }
+            return new WoWSpell(id, row);
+        }
+
+        public override string ToString()
+        {
+            return string.Format("{0} ({1}), Range: {2}-{3}, CastTime: {4}, Cost: {5} ({6}%), Mechanic: {7}, Dispel: {8}, TargetType: {9}, Power: {10}",
+                Name,
+                Rank,
+                MinRange,
+                MaxRange,
+                CastTime,
+                PowerCost,
+                ManaCostPercent,
+                Mechanic,
+                DispelType,
+                TargetType,
+                (int)PowerType
+            );
+        }
+
+        public bool Equals(WoWSpell other)
+        {
+            return Id == other.Id;
+        }
+
+        private class SpellInfoCache
+        {
+            public int PowerCost;
+            public bool IsFunnel;
+            public uint CastTime;
+            public float MinRange;
+            public float MaxRange;
+        }
+    }
+}

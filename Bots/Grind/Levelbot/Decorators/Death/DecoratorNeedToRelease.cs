@@ -1,0 +1,17 @@
+using Styx.WoWInternals;
+using TreeSharp;
+
+namespace Levelbot.Decorators.Death
+{
+    public class DecoratorNeedToRelease : Decorator
+    {
+        public DecoratorNeedToRelease(Composite child) : base(child)
+        {
+        }
+
+        protected override bool CanRun(object context)
+        {
+            return !ObjectManager.Me.IsGhost && ObjectManager.Me.Dead;
+        }
+    }
+}

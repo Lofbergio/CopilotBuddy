@@ -1,0 +1,49 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows7.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <PlatformTarget>x86</PlatformTarget>
+    <Platforms>x86</Platforms>
+    <StartupObject>CopilotBuddy.UI.App</StartupObject>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Application icon (barre des tâches + exe) -->
+    <ApplicationIcon>Resources\bender.ico</ApplicationIcon>
+    <!-- Exclude satellite assemblies (localization folders like cs, de, es, fr, it, ja, ko, pl, pt-BR, ru, tr, zh-Hans, zh-Hant) -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Page Remove="UI\App.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ApplicationDefinition Include="UI\App.xaml" />
+  </ItemGroup>
+
+  <!-- Resources (icons) -->
+  <ItemGroup>
+    <Resource Include="Resources\bender.ico" />
+    <Resource Include="Resources\*.png" />
+  </ItemGroup>
+
+  <!-- Reference to fasmdll_managed.dll for FASM assembler -->
+  <ItemGroup>
+    <Reference Include="fasmdll_managed">
+      <HintPath>Lib\fasmdll_managed.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <!-- SQLite for NPC database (Data.bin) -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" />
+    <PackageReference Include="System.Data.SQLite.Core" Version="1.0.118" />
+    <PackageReference Include="System.Threading.AccessControl" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

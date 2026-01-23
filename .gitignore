@@ -1,0 +1,35 @@
+# Build outputs
+bin/
+obj/
+
+# Visual Studio temp files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.github/
+.test/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+*.lock.json
+
+# Rider
+.idea/
+*.sln.iml
+
+# Logs
+Logs/
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# Windows
+Thumbs.db
+Desktop.ini

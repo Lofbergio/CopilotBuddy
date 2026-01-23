@@ -1,0 +1,371 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using Styx.Combat.CombatRoutine;
+using Styx.Helpers;
+using Styx.Logic.Pathing;
+using Styx.Logic.POI;
+using Styx.WoWInternals;
+using Styx.WoWInternals.WoWObjects;
+
+namespace Styx.Logic
+{
+	public static class Mount
+	{
+		private static readonly WaitTimer _mountTimer = WaitTimer.TenSeconds;
+		private static readonly WaitTimer _combatTimer = WaitTimer.TenSeconds;
+		private static readonly List<WoWPoint> _cantMountSpots = new List<WoWPoint>();
+		private static CanMountDelegate? _defaultCanMount;
+		private static bool _wasMounted;
+
+		/// <summary>
+		/// Fired when the player mounts up (HB 4.3.4 compatibility).
+		/// </summary>
+		public static event EventHandler<MountUpEventArgs>? OnMountUp;
+
+		/// <summary>
+		/// Fired when the player dismounts (HB 4.3.4 compatibility).
+		/// </summary>
+		public static event EventHandler? OnDismount;
+
+		private static LocalPlayer? Me => ObjectManager.Me;
+
+		static Mount()
+		{
+			BotEvents.Player.OnMobKilled += OnMobKilled;
+		}
+
+		private static void OnMobKilled(BotEvents.Player.MobKilledEventArgs args)
+		{
+			_combatTimer.Reset();
+		}
+
+		public static void Dismount() => Dismount(string.Empty);
+
+		public static void ClearShapeshift()
+		{
+			LocalPlayer? me = Me;
+			if (me == null)
+				return;
+
+			if (me.Shapeshift != ShapeshiftForm.Normal)
+				Lua.DoString("CancelShapeshiftForm()");
+		}
+
+		public static void Dismount(string reason)
+		{
+			LocalPlayer? me = Me;
+			if (me == null) return;
+
+			if (!string.IsNullOrEmpty(reason))
+				Logging.Write("[Mount] Dismounting: {0}", reason);
+
+			ShapeshiftForm shapeshift = me.Shapeshift;
+			if (me.Mounted || shapeshift == ShapeshiftForm.FlightForm || shapeshift == ShapeshiftForm.EpicFlightForm)
+			{
+				if (string.IsNullOrEmpty(reason))
+					Logging.Write("[Mount] Dismounting...");
+					
+				WoWMovement.MoveStop();
+
+				if (shapeshift == ShapeshiftForm.FlightForm || shapeshift == ShapeshiftForm.EpicFlightForm)
+				{
+					Lua.DoString("CancelShapeshiftForm()");
+				}
+				else
+				{
+					Lua.DoString("Dismount()");
+				}
+			}
+		}
+
+		public static void MountUp()
+		{
+			if (_defaultCanMount == null)
+			{
+				_defaultCanMount = DefaultCanMount;
+			}
+			MountUp(_defaultCanMount);
+		}
+
+		private static bool DefaultCanMount()
+		{
+			return true;
+		}
+
+		public static void MountUp(CanMountDelegate extra)
+		{
+			if (!extra())
+				return;
+
+			if (!LevelbotSettings.Instance.UseMount)
+				return;
+
+			if (string.IsNullOrEmpty(LevelbotSettings.Instance.MountName))
+				return;
+
+			LocalPlayer? me = Me;
+			if (me == null || me.Level < 20)
+				return;
+
+			if (!CanMount())
+				return;
+
+			WoWMovement.MoveStop();
+			Logging.WriteDebug("[Mount] Mounting up: {0}", LevelbotSettings.Instance.MountName);
+			Thread.Sleep(200);
+
+			DoMount();
+			_mountTimer.Reset();
+		}
+
+		private static void DoMount()
+		{
+			LocalPlayer? me = Me;
+			if (me == null) return;
+
+			string mountName = LevelbotSettings.Instance.MountName;
+			if (string.IsNullOrEmpty(mountName)) return;
+
+			// Handle Blood Elf Paladin mount name differences
+			if (me.Race == WoWRace.BloodElf && me.Class == WoWClass.Paladin)
+			{
+				string lowerMount = mountName.ToLowerInvariant();
+				if (lowerMount == "warhorse" || lowerMount == "summon warhorse")
+				{
+					mountName = "Summon Charger";
+				}
+				else if (lowerMount == "charger" || lowerMount == "summon charger")
+				{
+					mountName = "Summon Charger";
+				}
+			}
+
+			Lua.DoString(string.Format("CallCompanion('MOUNT', {0})", GetMountIndex(mountName)));
+
+			int startTime = Environment.TickCount;
+			string lastError = me.LastRedErrorMessage;
+
+			while (!me.Mounted && Environment.TickCount - startTime < 6500)
+			{
+				if (me.Combat)
+					break;
+
+				if (!string.IsNullOrEmpty(lastError) && me.LastRedErrorMessage != lastError)
+				{
+					AddCantMountSpot(me.Location);
+					break;
+				}
+
+				Thread.Sleep(250);
+			}
+		}
+
+		private static int GetMountIndex(string mountName)
+		{
+			// Use Lua to find mount index
+			string luaCode = string.Format(@"
+				local mountName = '{0}'
+				for i = 1, GetNumCompanions('MOUNT') do
+					local _, name = GetCompanionInfo('MOUNT', i)
+					if name == mountName then
+						return i
+					end
+				end
+				return 0
+			", mountName.Replace("'", "\\'"));
+
+			string result = Lua.GetReturnVal<string>(luaCode, 0);
+			if (int.TryParse(result, out int index))
+			{
+				return index;
+			}
+			return 0;
+		}
+
+		public static bool CanMount()
+		{
+			if (!_combatTimer.IsFinished)
+				return false;
+
+			if (!_mountTimer.IsFinished)
+				return false;
+
+			LocalPlayer? me = Me;
+			if (me == null)
+				return false;
+
+			if (me.Dead || me.IsGhost)
+				return false;
+
+			WoWPoint location = me.Location;
+
+			// Check if we're in a known "can't mount" spot
+			foreach (WoWPoint spot in _cantMountSpots)
+			{
+				if (location.Distance(spot) < 10f)
+					return false;
+			}
+
+			bool canMount = me.IsOutdoors && !me.IsSwimming && !me.Combat;
+
+			if (!canMount)
+			{
+				AddCantMountSpot(location);
+			}
+
+			return canMount;
+		}
+
+		public static bool IsOutdoors
+		{
+			get
+			{
+				LocalPlayer? me = Me;
+				return me?.IsOutdoors ?? false;
+			}
+		}
+
+		public static void AddCantMountSpot(WoWPoint location)
+		{
+			if (!_cantMountSpots.Contains(location))
+			{
+				_cantMountSpots.Add(location);
+				Logging.WriteDebug("[Mount] Added can't mount spot at: {0}", location);
+			}
+		}
+
+		public static void ClearCantMountSpots()
+		{
+			_cantMountSpots.Clear();
+		}
+
+		public static void StateMount(LocationRetriever travelingTo)
+		{
+			if (!LevelbotSettings.Instance.UseMount || Me?.Mounted == true || !CanMount())
+				return;
+
+			MountUp(travelingTo);
+		}
+
+		public static void MountUp(LocationRetriever travelingTo)
+		{
+			MountUp(() =>
+			{
+				WoWUnit? firstUnit = Targeting.Instance.FirstUnit;
+				if (firstUnit != null && firstUnit.Distance < MountDistance)
+					return false;
+
+				return true;
+			});
+		}
+
+		public static bool ShouldMount(WoWPoint travelingTo)
+		{
+			LocalPlayer? me = Me;
+			if (me == null)
+				return false;
+
+			if (Battlegrounds.IsInsideBattleground || me.IsInInstance)
+				return true;
+
+			float distanceSqr = me.Location.DistanceSqr(travelingTo);
+			float mountDistanceSqr = MountDistance * MountDistance;
+
+			return distanceSqr >= mountDistanceSqr;
+		}
+
+		/// <summary>
+		/// Check if we should dismount for a given destination.
+		/// Ported from HB 4.3.4.
+		/// </summary>
+		public static bool ShouldDismount(WoWPoint travelingTo)
+		{
+			LocalPlayer? me = Me;
+			if (me == null)
+				return false;
+
+			if (!me.Mounted)
+				return false;
+
+			// Dismount if in combat and not moving
+			if (me.Combat && !me.IsMoving)
+			{
+				Logging.WriteDebug("[Mount] Dismounting - in combat and not moving");
+				return true;
+			}
+
+			if (travelingTo == WoWPoint.Empty)
+				return false;
+
+			WoWPoint location = me.Location;
+			float distance = location.Distance(travelingTo);
+
+			// If at a hotspot and there's a target nearby
+			if (BotPoi.Current.Type == PoiType.Hotspot)
+			{
+				if (distance <= 100f && Targeting.Instance.FirstUnit != null)
+				{
+					Logging.WriteDebug("[Mount] Dismounting - near hotspot with target");
+					return true;
+				}
+			}
+
+			// If at a kill POI and we're close
+			if (BotPoi.Current.Type == PoiType.Kill)
+			{
+				if (distance <= CharacterSettings.Instance.PullDistance)
+				{
+					Logging.WriteDebug("[Mount] Dismounting - near kill POI");
+					return true;
+				}
+			}
+
+			// Dismount for interacting with objects/NPCs
+			if (BotPoi.Current.Type == PoiType.Loot || 
+				BotPoi.Current.Type == PoiType.Skin ||
+				BotPoi.Current.Type == PoiType.Harvest ||
+				BotPoi.Current.Type == PoiType.Sell ||
+				BotPoi.Current.Type == PoiType.Repair ||
+				BotPoi.Current.Type == PoiType.Train ||
+				BotPoi.Current.Type == PoiType.Mail)
+			{
+				if (distance <= 10f)
+				{
+					Logging.WriteDebug("[Mount] Dismounting - near interaction POI");
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		/// <summary>
+		/// Pulses mount state and fires events (call from main bot pulse).
+		/// </summary>
+		public static void Pulse()
+		{
+			var me = Me;
+			if (me == null) return;
+
+			bool isMounted = me.Mounted;
+
+			if (isMounted && !_wasMounted)
+			{
+				// Just mounted
+				OnMountUp?.Invoke(null, new MountUpEventArgs(me.IsFlying, "Mount"));
+			}
+			else if (!isMounted && _wasMounted)
+			{
+				// Just dismounted
+				OnDismount?.Invoke(null, EventArgs.Empty);
+			}
+
+			_wasMounted = isMounted;
+		}
+
+		public static float MountDistance => (float)LevelbotSettings.Instance.MountDistance;
+
+		public delegate bool CanMountDelegate();
+	}
+}

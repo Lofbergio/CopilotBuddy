@@ -1,0 +1,208 @@
+// Decompiled with JetBrains decompiler
+// Type: Bots.Quest.Objectives.UseGameObjectObjective
+// Assembly: Honorbuddy, Version=2.0.0.5999, Culture=neutral, PublicKeyToken=50a565ab5c01ae50
+// MVID: FB7FEB85-27C0-4D17-B8DE-615FDFDA7752
+// Assembly location: C:\Users\Texy6\Desktop\Honorbuddy-cleaned.exe
+
+using CommonBehaviors.Actions;
+using CommonBehaviors.Decorators;
+using Styx;
+using Styx.Helpers;
+using Styx.Logic.Pathing;
+using Styx.Logic.POI;
+using Styx.Logic.Profiles.Quest;
+using Styx.Logic.Questing;
+using Styx.WoWInternals;
+using Styx.WoWInternals.WoWObjects;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
+using System.Threading;
+using TreeSharp;
+
+#nullable disable
+namespace Bots.Quest.Objectives;
+
+public class UseGameObjectObjective : QuestObjective
+{
+    private readonly UseObjectObjectiveInfo _useObjectInfo;
+    private WoWPoint? _cachedObjectiveLocation;
+    private WoWPoint? _cachedClosestLocation;
+    private int _locationUpdateCounter;
+    private Composite _behaviorTree;
+    private WoWGameObject _currentTarget;
+
+    public UseGameObjectObjective(
+        PlayerQuest quest,
+        List<WoWQuestStep> questSteps,
+        Styx.Logic.Questing.Quest.QuestObjective questObjective,
+        List<QuestObjective> prerequisites)
+        : base(quest, questSteps, prerequisites)
+    {
+        this.Objective = questObjective;
+        if (this.OverridedQuestInfo != null)
+            this._useObjectInfo = this.OverridedQuestInfo.FindUseGameObject((uint)questObjective.ID);
+    }
+
+    public Styx.Logic.Questing.Quest.QuestObjective Objective { get; private set; }
+
+    public override bool IsCompleted
+    {
+        get
+        {
+            QuestDescriptorData data;
+            return this.Quest.GetData(out data) && (int)data.ObjectivesDone[this.Objective.Index] >= this.Objective.Count;
+        }
+    }
+
+    public override bool CanComplete => this.DonePrerequisites && this.CanCompleteInternal();
+
+    public override WoWPoint GetObjectiveLocation()
+    {
+        List<WoWGameObject> gameObjects = ObjectManager.GetObjectsOfType<WoWGameObject>()
+            .Where(go => (long)go.Entry == (long)this.Objective.ID)
+            .ToList();
+            
+        if (gameObjects.Count <= 0)
+        {
+            if (!this._cachedObjectiveLocation.HasValue)
+            {
+                if (this._useObjectInfo != null && this._useObjectInfo.OverridedHotspots != null && this._useObjectInfo.OverridedHotspots.Count > 0)
+                {
+                    this._cachedObjectiveLocation = new WoWPoint?(this._useObjectInfo.OverridedHotspots.FindClosestTo(ObjectManager.Me.Location));
+                }
+                else
+                {
+                    WoWQuestStep closestQuestStep = this.GetClosestQuestStep();
+                    Vector3 position = new Vector3((float)closestQuestStep.StepPosition.X, (float)closestQuestStep.StepPosition.Y, 0.0f);
+                    if (!MeshHeightHelper.FindMeshHeight(ref position))
+                    {
+                        Logging.Write("Could not find mesh height for quest {0} on step {1}", this.Quest.Name, closestQuestStep.PoiID);
+                        this._cachedObjectiveLocation = new WoWPoint?(WoWPoint.Zero);
+                    }
+                    else
+                    {
+                        this._cachedObjectiveLocation = new WoWPoint?(MeshHeightHelper.ToWoWPoint(position));
+                    }
+                }
+            }
+            return this._cachedObjectiveLocation.Value;
+        }
+        
+        // Update cached location periodically
+        if (!this._cachedClosestLocation.HasValue || ++this._locationUpdateCounter % 25 == 0)
+        {
+            WoWPoint myLocation = ObjectManager.Me.Location;
+            WoWPoint closest = gameObjects[0].Location;
+            float closestDistSqr = myLocation.DistanceSqr(closest);
+            
+            for (int i = 1; i < gameObjects.Count; i++)
+            {
+                WoWPoint goLocation = gameObjects[i].Location;
+                float distSqr = myLocation.DistanceSqr(goLocation);
+                if (distSqr < closestDistSqr)
+                {
+                    closestDistSqr = distSqr;
+                    closest = goLocation;
+                }
+            }
+            this._cachedClosestLocation = new WoWPoint?(closest);
+            this._locationUpdateCounter = 0;
+        }
+        return this._cachedClosestLocation.Value;
+    }
+
+    public override Composite CreateBranch()
+    {
+        if (this._behaviorTree == (Composite)null)
+        {
+            this._behaviorTree = (Composite)new PrioritySelector(new Composite[3]
+            {
+                (Composite)new Decorator(new CanRunDecoratorDelegate(this.HasTargetGameObject), (Composite)new PrioritySelector(new Composite[2]
+                {
+                    (Composite)new Decorator(new CanRunDecoratorDelegate(this.IsWithinInteractRange), (Composite)new Sequence(new Composite[4]
+                    {
+                        (Composite)new ActionSetActivity(ctx => string.Format("Using {0} for quest {1}", this._currentTarget.Name, this.Quest.Name)),
+                        (Composite)new TreeSharp.Action(ctx => this.InteractWithGameObject(null)),
+                        (Composite)new Wait(10, ctx => !StyxWoW.Me.IsCasting, (Composite)new ActionIdle()),
+                        (Composite)new TreeSharp.Action(ctx => this.ClearTarget(null))
+                    })),
+                    (Composite)new Decorator(new CanRunDecoratorDelegate(this.NeedsToMove), (Composite)new Sequence(new Composite[2]
+                    {
+                        (Composite)new ActionSetActivity(ctx => string.Format("Moving to game object {0} for quest {1}", this._currentTarget.Name, this.Quest.Name)),
+                        (Composite)new TreeSharp.Action(ctx => this.MoveToTarget(null))
+                    }))
+                })),
+                (Composite)new DecoratorIsNotPoiType((IEnumerable<PoiType>)new PoiType[2]
+                {
+                    PoiType.Loot,
+                    PoiType.Skin
+                }, (Composite)new TreeSharp.Action(ctx => this.MoveTowardsObjective(null))),
+                (Composite)new ActionAlwaysSucceed()
+            });
+        }
+        return this._behaviorTree;
+    }
+
+    public override string ToString()
+    {
+        return string.Format("[UseGameObjectObjective GameObjectId: {0}, Count: {1}]", this.Objective.ID, this.Objective.Count);
+    }
+
+    private bool CanCompleteInternal()
+    {
+        if (this._useObjectInfo != null && this._useObjectInfo.OverridedHotspots != null && this._useObjectInfo.OverridedHotspots.Count > 0)
+            return true;
+        if (!this.QuestArea.HotspotsCreated)
+            this.QuestArea.CreateHotspots();
+        return this.QuestArea.Hotspots.Count > 0;
+    }
+
+    private bool HasTargetGameObject(object context)
+    {
+        this._currentTarget = ObjectManager.GetObjectsOfType<WoWGameObject>()
+            .FirstOrDefault(go => (long)go.Entry == (long)this.Objective.ID);
+        return (WoWObject)this._currentTarget != (WoWObject)null;
+    }
+
+    private bool IsWithinInteractRange(object context) => this._currentTarget.DistanceSqr < 25.0;
+
+    private RunStatus InteractWithGameObject(object context)
+    {
+        if (StyxWoW.Me.IsMoving)
+        {
+            WoWMovement.MoveStop();
+            Thread.Sleep(250);
+            return RunStatus.Running;
+        }
+        this._currentTarget.Interact();
+        Thread.Sleep(1500);
+        return RunStatus.Success;
+    }
+
+    private RunStatus ClearTarget(object context)
+    {
+        this._currentTarget = (WoWGameObject)null;
+        return RunStatus.Success;
+    }
+
+    private bool NeedsToMove(object context) => this._currentTarget.Distance >= 5.0;
+
+    private RunStatus MoveToTarget(object context)
+    {
+        Navigator.MoveTo(this._currentTarget.Location);
+        return RunStatus.Success;
+    }
+
+    private RunStatus MoveTowardsObjective(object context)
+    {
+        if (this.GetObjectiveLocation() == WoWPoint.Zero)
+        {
+            Logging.Write("Can not reach step {0} of {1} - blacklisting.", this.QuestSteps.First().PoiID, this.Quest.Name);
+            return RunStatus.Success;
+        }
+        Navigator.MoveTo(this.GetObjectiveLocation());
+        return RunStatus.Success;
+    }
+}
