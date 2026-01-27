@@ -16,6 +16,7 @@ namespace Styx.Logic.Pathing
 		private static int _currentPathIndex;
 		private static TripperNav.Navigator? _navigator;
 		private static IMover? _playerMover;
+		private static IStuckHandler? _stuckHandler;
 
 		public static float PathPrecision { get; set; } = 1.6f;
 		public static int LoadTilesAroundRadius { get; set; } = 2;
@@ -32,6 +33,19 @@ namespace Styx.Logic.Pathing
 				return _playerMover;
 			}
 			set => _playerMover = value;
+		}
+
+		/// <summary>
+		/// Gets or sets the stuck handler used for stuck detection and recovery.
+		/// </summary>
+		public static IStuckHandler StuckHandler
+		{
+			get
+			{
+				_stuckHandler ??= new StuckHandler();
+				return _stuckHandler;
+			}
+			set => _stuckHandler = value;
 		}
 
 		public static WoWPoint Destination => _destination;
@@ -129,6 +143,17 @@ namespace Styx.Logic.Pathing
 
 		public static void Clear()
 		{
+			// When we clear navigation (e.g. after an unstick), also reset stuck detection state.
+			// Otherwise, the stuck logic can immediately re-trigger on the next MoveTo call.
+			try
+			{
+				StuckHandler.Reset();
+			}
+			catch
+			{
+				// Ignore
+			}
+
 			_destination = WoWPoint.Zero;
 			_currentPath.Clear();
 			_currentPathIndex = 0;
@@ -173,6 +198,16 @@ namespace Styx.Logic.Pathing
 			{
 				_destination = destination;
 				_currentPath.Clear();
+
+				// New destination implies a new movement attempt; reset stuck state.
+				try
+				{
+					StuckHandler.Reset();
+				}
+				catch
+				{
+					// Ignore
+				}
 
 				// Try to use Tripper for pathfinding
 				if (IsNavigatorLoaded)

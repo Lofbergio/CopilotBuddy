@@ -17,6 +17,9 @@ namespace CommonBehaviors.Actions
 		private WoWPoint _lastLocation = WoWPoint.Empty;
 		private ulong _lastGuid;
 		private bool _hasLoggedMove;
+		private WaitTimer _stuckCheckTimer = new WaitTimer(TimeSpan.FromSeconds(2));
+		private WoWPoint _lastStuckResetLocation = WoWPoint.Empty;
+		private ulong _lastStuckResetGuid;
 
 		protected override RunStatus Run(object context)
 		{
@@ -80,6 +83,17 @@ namespace CommonBehaviors.Actions
 				_hasLoggedMove = true;
 			}
 
+			// Important: reset stuck state when destination/target changes.
+			// Otherwise, the stuck timer can "age" while path is still being generated,
+			// and we end up declaring stuck immediately when a new path finally appears.
+			if (_lastStuckResetGuid != _lastGuid || _lastStuckResetLocation != _lastLocation)
+			{
+				_lastStuckResetGuid = _lastGuid;
+				_lastStuckResetLocation = _lastLocation;
+				Navigator.StuckHandler.Reset();
+				_stuckCheckTimer.Reset();
+			}
+
 			// HB MoP/WoD: Use precision based on POI type
 			float precision = 40f;
 			switch (botPoi.Type)
@@ -90,6 +104,11 @@ namespace CommonBehaviors.Actions
 				case PoiType.Skin:
 				case PoiType.Harvest:
 					precision = 15f;
+					break;
+				case PoiType.Quest:
+				case PoiType.QuestPickUp:
+				case PoiType.QuestTurnIn:
+					precision = 5f;  // Quest interactions need close range
 					break;
 				case PoiType.Sell:
 				case PoiType.Buy:
@@ -105,7 +124,20 @@ namespace CommonBehaviors.Actions
 				Mount.StateMount(() => _lastLocation);
 			}
 
-			return Navigator.GetRunStatusFromMoveResult(Navigator.MoveTo(_lastLocation, precision));
+			MoveResult moveResult = Navigator.MoveTo(_lastLocation, precision);
+
+			// Check stuck only while we're actively issuing movement.
+			// This matches HB behavior more closely and avoids false-stuck while waiting on pathing.
+			if (moveResult == MoveResult.Moved && _stuckCheckTimer.IsFinished)
+			{
+				_stuckCheckTimer.Reset();
+				if (Navigator.StuckHandler.IsStuck())
+				{
+					Navigator.StuckHandler.Unstick();
+				}
+			}
+
+			return Navigator.GetRunStatusFromMoveResult(moveResult);
 		}
 	}
 }
