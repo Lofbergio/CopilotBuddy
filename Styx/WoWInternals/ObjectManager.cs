@@ -218,6 +218,13 @@ namespace Styx.WoWInternals
                 return false;
             }
             
+            // Protection: ne pas re-hooker si déjà fait
+            if (Executor != null && Executor.IsInitialized)
+            {
+                Log("[ObjectManager] HookEndscene: Déjà hooké, skip");
+                return true;
+            }
+            
             try
             {
                 Log($"[ObjectManager] D3DDevicePtr = 0x{D3DDevicePtr:X8}");
