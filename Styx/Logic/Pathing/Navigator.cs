@@ -142,6 +142,16 @@ namespace Styx.Logic.Pathing
 
 		public static MoveResult MoveTo(WoWPoint destination, string destinationName)
 		{
+			return MoveTo(destination, PathPrecision, destinationName);
+		}
+
+		public static MoveResult MoveTo(WoWPoint destination, float precision)
+		{
+			return MoveTo(destination, precision, "Navigation");
+		}
+
+		public static MoveResult MoveTo(WoWPoint destination, float precision, string destinationName)
+		{
 			if (destination == WoWPoint.Zero)
 				return MoveResult.Failed;
 
@@ -151,7 +161,7 @@ namespace Styx.Logic.Pathing
 
 			// Check if we're already at the destination
 			float distance = me.Location.Distance(destination);
-			if (distance < PathPrecision)
+			if (distance < precision)
 			{
 				_destination = WoWPoint.Zero;
 				_currentPath.Clear();
@@ -202,11 +212,17 @@ namespace Styx.Logic.Pathing
 			}
 
 			// Move along path
+			// Use smaller precision for intermediate waypoints, larger for final destination
 			if (_currentPath.Count > 0 && _currentPathIndex < _currentPath.Count)
 			{
 				WoWPoint nextPoint = _currentPath[_currentPathIndex];
+				
+				// For intermediate waypoints, use PathPrecision (1.6)
+				// For final waypoint, use requested precision
+				bool isFinalPoint = (_currentPathIndex == _currentPath.Count - 1);
+				float waypointPrecision = isFinalPoint ? precision : PathPrecision;
 
-				if (me.Location.Distance(nextPoint) < PathPrecision)
+				if (me.Location.Distance(nextPoint) < waypointPrecision)
 				{
 					_currentPathIndex++;
 					if (_currentPathIndex >= _currentPath.Count)
@@ -224,15 +240,6 @@ namespace Styx.Logic.Pathing
 			}
 
 			return MoveResult.PathGenerationFailed;
-		}
-
-		public static MoveResult MoveTo(WoWPoint destination, float precision)
-		{
-			float oldPrecision = PathPrecision;
-			PathPrecision = precision;
-			MoveResult result = MoveTo(destination);
-			PathPrecision = oldPrecision;
-			return result;
 		}
 
 		public static bool CanNavigateFully(WoWPoint start, WoWPoint destination)

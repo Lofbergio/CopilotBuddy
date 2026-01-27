@@ -840,7 +840,7 @@ namespace Bots.Grind
                                             ),
                                             // Check if need to mail
                                             new DecoratorContinue(
-                                                ctx => NeedToMail(),
+                                                ctx => NeedToMail() && ProfileManager.CurrentProfile.MailboxManager.GetClosestMailbox() != null,
                                                 new ActionSetPoi(ctx => new BotPoi(
                                                     ProfileManager.CurrentProfile.MailboxManager.GetClosestMailbox().Location, 
                                                     PoiType.Mail))

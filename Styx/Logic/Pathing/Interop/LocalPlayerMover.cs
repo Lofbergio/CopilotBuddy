@@ -51,16 +51,19 @@ namespace Styx.Logic.Pathing.Interop
                 return;
 
             WoWPoint targetPoint = new WoWPoint(point.X, point.Y, point.Z);
-
-            // If experimental path following is enabled, extend the target point
-            if (StyxSettings.Instance.UseExperimentalPathFollowing)
+            
+            // Limit click distance to avoid clicking through walls
+            // Like HB 3.3.5a, click on intermediate point if target is far
+            float distance = ObjectManager.Me.Location.Distance(targetPoint);
+            if (distance > 10f)
             {
+                // Click on a point 8 yards away in the direction of target
                 Vector3 direction = point - new Vector3(ObjectManager.Me.Location.X, ObjectManager.Me.Location.Y, ObjectManager.Me.Location.Z);
                 direction.Normalize();
                 targetPoint = new WoWPoint(
-                    point.X + direction.X * Navigator.PathPrecision,
-                    point.Y + direction.Y * Navigator.PathPrecision,
-                    point.Z + direction.Z * Navigator.PathPrecision
+                    ObjectManager.Me.Location.X + direction.X * 8f,
+                    ObjectManager.Me.Location.Y + direction.Y * 8f,
+                    ObjectManager.Me.Location.Z + direction.Z * 8f
                 );
             }
 

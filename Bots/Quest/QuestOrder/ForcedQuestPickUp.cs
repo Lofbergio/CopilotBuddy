@@ -51,6 +51,12 @@ public class ForcedQuestPickUp : ForcedBehavior
     {
         get
         {
+            // Check if quest is already in completed quests (turned in)
+            var completedQuests = ObjectManager.Me.QuestLog.GetCompletedQuests();
+            if (completedQuests != null && completedQuests.Contains(this.QuestId))
+                return true;
+
+            // Check if quest is in log and has completion info
             PlayerQuest questById = ObjectManager.Me.QuestLog.GetQuestById(this.QuestId);
             return questById != null && questById.GetCompletionInfo(out WoWQuestCompletionInfo _);
         }

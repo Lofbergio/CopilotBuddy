@@ -91,6 +91,12 @@ namespace CommonBehaviors.Actions
 				case PoiType.Harvest:
 					precision = 15f;
 					break;
+				case PoiType.Sell:
+				case PoiType.Buy:
+				case PoiType.Mail:
+				case PoiType.Repair:
+					precision = 4f;  // Close enough to interact
+					break;
 			}
 
 			// Mount if needed
