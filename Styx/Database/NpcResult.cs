@@ -10,7 +10,7 @@ namespace Styx.Database
     public class NpcResult
     {
         /// <summary>
-        /// Creates an NpcResult from a SQLite data reader.
+        /// Creates an NpcResult from a SQLiteDataReader (HB API).
         /// </summary>
         internal NpcResult(SQLiteDataReader reader)
         {
@@ -38,7 +38,7 @@ namespace Styx.Database
         /// <summary>
         /// Gets or sets the NPC name.
         /// </summary>
-        public string Name { get; set; } = string.Empty;
+        public string Name { get; set; }
 
         /// <summary>
         /// Gets or sets the NPC title.

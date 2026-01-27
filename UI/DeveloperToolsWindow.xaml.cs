@@ -789,7 +789,7 @@ namespace CopilotBuddy.UI
 
         private class WGameObject : WObject
         {
-            public Styx.WoWInternals.WoWObjects.WoWGameObjectType SubType { get; set; }
+            public Styx.WoWGameObjectType SubType { get; set; }
         }
 
         private class WUnit : WObject

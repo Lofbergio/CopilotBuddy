@@ -7,6 +7,7 @@ namespace Tripper.Navigation
     /// <summary>
     /// P/Invoke declarations for Navigation.dll C exports.
     /// Provides low-level access to Detour navmesh pathfinding functionality.
+    /// EXACT MATCH to DllMain.cpp exports from .Reference\C++\Navigation
     /// </summary>
     internal static class NativeMethods
     {
@@ -15,34 +16,31 @@ namespace Tripper.Navigation
         #region Structures
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct XYZ_C
+        internal struct XYZ
         {
             public float X;
             public float Y;
             public float Z;
 
-            public XYZ_C(float x, float y, float z)
+            public XYZ(float x, float y, float z)
             {
                 X = x;
                 Y = y;
                 Z = z;
             }
 
-            public XYZ_C(Vector3 vec)
+            public XYZ(Vector3 vec)
             {
                 X = vec.X;
                 Y = vec.Y;
                 Z = vec.Z;
             }
 
-            public Vector3 ToVector3()
-            {
-                return new Vector3(X, Y, Z);
-            }
+            public Vector3 ToVector3() => new Vector3(X, Y, Z);
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        internal struct NavStats_C
+        internal struct NavStats
         {
             public float PathfindTimeMs;
             public int PolysVisited;
@@ -50,17 +48,22 @@ namespace Tripper.Navigation
             public int ShortcutsApplied;
             public int StuckRecoveries;
             public int PathRecalculations;
+            public int RaycastAttempts;
+            public int RaycastHits;
+            public int LastShortcutIndex;
+            public float LastShortcutDistance;
+            public float LastRaycastHitFraction;
         }
 
         /// <summary>
         /// Native PathResult structure from Navigation.dll.
-        /// Matches C++ PathResult struct.
+        /// Matches C++ PathResult struct in PathResult.h
         /// </summary>
         [StructLayout(LayoutKind.Sequential)]
-        internal struct PathResult_C
+        internal struct PathResult
         {
-            public IntPtr Points;              // XYZ_C*
-            public IntPtr StraightPathFlags;   // StraightPathFlags* (byte*)
+            public IntPtr Points;              // XYZ* array
+            public IntPtr StraightPathFlags;   // unsigned char* (StraightPathFlags)
             public IntPtr PolyTypes;           // unsigned char* (AreaType)
             public IntPtr AbilityFlags;        // unsigned char* (AbilityFlags)
             public int Length;
@@ -70,52 +73,36 @@ namespace Tripper.Navigation
 
         #endregion
 
-        #region Mesh Loading
-
-        /// <summary>
-        /// Loads navigation meshes from the standard mmaps directory.
-        /// </summary>
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool Nav_LoadMaps();
-
-        /// <summary>
-        /// Unloads all navigation meshes and releases resources.
-        /// </summary>
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void Nav_UnloadMaps();
-
-        #endregion
-
-        #region Basic Pathfinding
+        #region Basic Pathfinding - EXACT NAMES from DllMain.cpp
 
         /// <summary>
         /// Calculates a path from start to end position.
-        /// Returns array of path points that must be freed with FreePathArr_C.
+        /// Returns array of XYZ points that must be freed with FreePathArr.
+        /// Navigation.dll initializes automatically in DllMain - no LoadMaps needed.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern IntPtr CalculatePath_C(
+        internal static extern IntPtr CalculatePath(
             uint mapId,
-            XYZ_C start,
-            XYZ_C end,
-            [MarshalAs(UnmanagedType.I1)] bool straightPath,
-            out int outLength);
+            XYZ start,
+            XYZ end,
+            [MarshalAs(UnmanagedType.I1)] bool smoothPath,
+            out int length);
 
         /// <summary>
-        /// Frees path array allocated by CalculatePath_C.
+        /// Frees path array allocated by CalculatePath.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void FreePathArr_C(IntPtr arr);
+        internal static extern void FreePathArr(IntPtr pathArr);
 
         /// <summary>
-        /// Calculates extended path result with detailed information.
-        /// Returns PathResult structure that must be freed with FreePathResult.
+        /// Calculates extended path result with detailed information (flags, status).
+        /// Returns PathResult pointer that must be freed with FreePathResult.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         internal static extern IntPtr CalculatePathEx(
             uint mapId,
-            XYZ_C start,
-            XYZ_C end,
+            XYZ start,
+            XYZ end,
             [MarshalAs(UnmanagedType.I1)] bool straightPath);
 
         /// <summary>
@@ -126,235 +113,276 @@ namespace Tripper.Navigation
 
         #endregion
 
-        #region Extended Navigation API
-
-        /// <summary>
-        /// Performs a raycast from start to end, returning hit position and distance.
-        /// </summary>
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool Raycast_C(
-            uint mapId,
-            XYZ_C start,
-            XYZ_C end,
-            out XYZ_C hitPos,
-            out float tHit);
+        #region Advanced Detour Navigation Functions - Like HB RecastManaged
 
         /// <summary>
         /// Finds the nearest valid navmesh point to a given position.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool FindNearestPoint_C(
+        internal static extern bool FindNearestPoly(
             uint mapId,
-            XYZ_C position,
-            out XYZ_C nearest);
+            XYZ center,
+            float searchRadius,
+            out XYZ nearestPoint);
 
         /// <summary>
-        /// Finds nearest navmesh point with custom search extents.
+        /// Finds polygons within a circle around a point.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool FindNearestPointEx_C(
+        internal static extern int FindPolysAroundCircle(
             uint mapId,
-            XYZ_C position,
-            float extentX,
-            float extentY,
-            float extentZ,
-            out XYZ_C nearest);
-
-        /// <summary>
-        /// Finds a random navigable point within radius of center position.
-        /// </summary>
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool FindRandomPoint_C(
-            uint mapId,
-            XYZ_C center,
+            XYZ center,
             float radius,
-            out XYZ_C randomPoint);
+            IntPtr results,
+            int maxResults);
 
         /// <summary>
-        /// Sets the traversal cost for a specific area type on a map.
+        /// Finds distance to nearest wall/boundary.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern float FindDistanceToWall(
+            uint mapId,
+            XYZ position,
+            float maxRadius,
+            out XYZ hitPoint);
+
+        /// <summary>
+        /// Checks if a point is on the navmesh.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool SetAreaCost_C(
+        internal static extern bool IsPointOnNavMesh(
             uint mapId,
-            int areaType,
-            float cost);
-
-        #endregion
-
-        #region OffMesh Connections
+            XYZ point,
+            float tolerance);
 
         /// <summary>
-        /// Checks if position is an offmesh connection and retrieves metadata.
+        /// Finds a random navigable point within radius.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool IsOffMeshConnection_C(
+        internal static extern bool FindRandomPointAroundCircle(
             uint mapId,
-            XYZ_C position,
-            out XYZ_C outEnd,
-            out byte outType,
-            out uint outInteractId);
-
-        /// <summary>
-        /// Adds a custom offmesh connection at runtime.
-        /// </summary>
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void AddOffMeshConnection_C(
-            uint mapId,
-            XYZ_C start,
-            XYZ_C end,
+            XYZ center,
             float radius,
-            byte flags,
-            byte type,
-            uint interactId);
+            out XYZ outResult);
 
         /// <summary>
-        /// Loads offmesh connections for a specific tile from .offmesh file.
+        /// Checks if there's line of sight between two points on navmesh.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool LoadTileOffMesh_C(
+        internal static extern bool HasLineOfSight(
             uint mapId,
-            int tileX,
-            int tileY);
+            XYZ start,
+            XYZ end);
 
         #endregion
 
-        #region Query Filter
-
-        /// <summary>
-        /// Sets polygon flags to include in pathfinding queries.
-        /// </summary>
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void SetIncludeFlags_C(ushort flags);
-
-        /// <summary>
-        /// Sets polygon flags to exclude from pathfinding queries.
-        /// </summary>
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void SetExcludeFlags_C(ushort flags);
-
-        #endregion
-
-        #region Tile Management
-
-        /// <summary>
-        /// Converts world coordinates to tile coordinates.
-        /// </summary>
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void WorldToTile_C(
-            float worldX,
-            float worldZ,
-            out int tileX,
-            out int tileY);
-
-        /// <summary>
-        /// Ensures tiles within specified ring distance are loaded.
-        /// </summary>
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void EnsureTiles_C(
-            uint mapId,
-            XYZ_C position,
-            int ring);
-
-        /// <summary>
-        /// Ensures tiles are loaded in direction of movement.
-        /// </summary>
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void EnsureTilesDirectional_C(
-            uint mapId,
-            XYZ_C position,
-            XYZ_C velocity,
-            int ring);
-
-        #endregion
-
-        #region Detour Low-Level API
+        #region Poly Reference Functions
 
         /// <summary>
         /// Finds the nearest polygon reference to a position.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool FindNearestPolyRef_C(
+        internal static extern bool FindNearestPolyRef(
             uint mapId,
-            XYZ_C position,
-            XYZ_C extents,
+            XYZ position,
+            XYZ extents,
             out ulong outPolyRef,
-            out XYZ_C nearestPoint);
+            out XYZ nearestPoint);
 
         /// <summary>
         /// Gets the height at a position on a specific polygon.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool GetPolyHeight_C(
+        internal static extern bool GetPolyHeight(
             uint mapId,
             ulong polyRef,
-            XYZ_C position,
+            XYZ position,
             out float outHeight);
 
         /// <summary>
-        /// Finds the closest point on a polygon to a given position.
+        /// Finds the closest point on a polygon.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool ClosestPointOnPoly_C(
+        internal static extern bool ClosestPointOnPoly(
             uint mapId,
             ulong polyRef,
-            XYZ_C position,
-            out XYZ_C closestPoint);
+            XYZ position,
+            out XYZ closestPoint);
 
         /// <summary>
-        /// Finds the closest point on a polygon boundary.
+        /// Finds the closest point on polygon boundary.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         [return: MarshalAs(UnmanagedType.I1)]
-        internal static extern bool ClosestPointOnPolyBoundary_C(
+        internal static extern bool ClosestPointOnPolyBoundary(
             uint mapId,
             ulong polyRef,
-            XYZ_C position,
-            out XYZ_C closestPoint);
+            XYZ position,
+            out XYZ closestPoint);
 
         /// <summary>
         /// Queries polygons within a bounding box.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int QueryPolygons_C(
+        internal static extern int QueryPolygons(
             uint mapId,
-            XYZ_C center,
-            XYZ_C extents,
-            [Out] ulong[] outPolys,
+            XYZ center,
+            XYZ extents,
+            IntPtr outPolys,
             int maxPolys);
 
         /// <summary>
         /// Finds local polygon neighbourhood around a position.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int FindLocalNeighbourhood_C(
+        internal static extern int FindLocalNeighbourhood(
             uint mapId,
             ulong startPolyRef,
-            XYZ_C center,
+            XYZ center,
             float radius,
-            [Out] ulong[] outPolys,
-            [Out] ulong[] outParents,
+            IntPtr outPolys,
+            IntPtr outParents,
             int maxResults);
 
         /// <summary>
         /// Gets wall segments for a polygon.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int GetPolyWallSegments_C(
+        internal static extern int GetPolyWallSegments(
             uint mapId,
             ulong polyRef,
-            [Out] XYZ_C[] outSegmentStart,
-            [Out] XYZ_C[] outSegmentEnd,
+            IntPtr outSegmentStart,
+            IntPtr outSegmentEnd,
             int maxSegments);
+
+        #endregion
+
+        #region Sliced Pathfinding - HB Style
+
+        /// <summary>
+        /// Initializes a sliced (async) path search.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        internal static extern bool InitSlicedFindPath(
+            uint mapId,
+            XYZ start,
+            XYZ end);
+
+        /// <summary>
+        /// Updates sliced pathfinding with iteration limit.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        internal static extern bool UpdateSlicedFindPath(int maxIterations);
+
+        /// <summary>
+        /// Updates sliced pathfinding with time budget (ms).
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        internal static extern bool UpdateSlicedFindPathMs(float msBudget);
+
+        /// <summary>
+        /// Finalizes sliced path and returns result.
+        /// Must free result with FreePathArr.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern IntPtr FinalizeSlicedFindPath(
+            int maxPathSize,
+            out int length);
+
+        #endregion
+
+        #region Query Filter
+
+        /// <summary>
+        /// Sets polygon flags to include in pathfinding.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void SetIncludeFlags(ushort flags);
+
+        /// <summary>
+        /// Sets polygon flags to exclude from pathfinding.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void SetExcludeFlags(ushort flags);
+
+        /// <summary>
+        /// Sets traversal cost for an area type.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void SetAreaCost(uint areaId, float cost);
+
+        /// <summary>
+        /// Gets traversal cost for an area type.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern float GetAreaCost(uint areaId);
+
+        #endregion
+
+        #region Tile Management
+
+        /// <summary>
+        /// Checks if a specific tile is loaded.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        internal static extern bool IsTileLoaded(
+            uint mapId,
+            int x,
+            int y);
+
+        /// <summary>
+        /// Gets count of loaded tiles for a map.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int GetLoadedTilesCount(uint mapId);
+
+        /// <summary>
+        /// Enables or disables tile streaming mode.
+        /// When enabled, tiles are loaded on-demand instead of all at once.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void SetTileStreamingEnabled(
+            [MarshalAs(UnmanagedType.I1)] bool enabled);
+
+        #endregion
+
+        #region Path Following
+
+        /// <summary>
+        /// Updates path following with raycast shortcuts.
+        /// Returns the new waypoint index to use.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int UpdatePathFollowing(
+            uint mapId,
+            XYZ currentPos,
+            int pathLength,
+            IntPtr pathPoints,
+            int currentWaypointIndex,
+            int agentId);
+
+        #endregion
+
+        #region Randomization
+
+        /// <summary>
+        /// Sets path randomization for more natural movement.
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void SetPathRandomization(
+            [MarshalAs(UnmanagedType.I1)] bool enabled,
+            float magnitude);
 
         #endregion
 
@@ -364,13 +392,45 @@ namespace Tripper.Navigation
         /// Gets current navigation statistics.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern NavStats_C GetNavStats_C();
+        internal static extern void GetNavStats(out NavStats outStats);
 
         /// <summary>
         /// Resets navigation statistics counters.
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        internal static extern void ResetNavStats_C();
+        internal static extern void ResetNavStats();
+
+        #endregion
+
+        #region NavStatus Helpers
+
+        [DllImport(DllName, EntryPoint = "NavStatus_FailureFlag", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern uint NavStatusFailureFlag();
+
+        [DllImport(DllName, EntryPoint = "NavStatus_SuccessFlag", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern uint NavStatusSuccessFlag();
+
+        [DllImport(DllName, EntryPoint = "NavStatus_InProgressFlag", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern uint NavStatusInProgressFlag();
+
+        [DllImport(DllName, EntryPoint = "NavStatus_PartialResultFlag", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern uint NavStatusPartialResultFlag();
+
+        [DllImport(DllName, EntryPoint = "NavStatus_IsFailure", CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        internal static extern bool NavStatusIsFailure(uint status);
+
+        [DllImport(DllName, EntryPoint = "NavStatus_IsSuccess", CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        internal static extern bool NavStatusIsSuccess(uint status);
+
+        [DllImport(DllName, EntryPoint = "NavStatus_IsInProgress", CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        internal static extern bool NavStatusIsInProgress(uint status);
+
+        [DllImport(DllName, EntryPoint = "NavStatus_HasFlag", CallingConvention = CallingConvention.Cdecl)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        internal static extern bool NavStatusHasFlag(uint status, uint flag);
 
         #endregion
     }

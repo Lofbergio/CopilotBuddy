@@ -162,52 +162,65 @@ namespace Styx.WoWInternals.WoWObjects
         public bool Triggered => (Flags & GameObjectFlags.Triggered) != 0;
         public bool Transport => (Flags & GameObjectFlags.Transport) != 0;
         public bool IsTransport => Transport;
+        
+        // HB 4.3.4 style: IsHerb and IsMineral use LockType, not SubType
+        public bool IsHerb => LockType == WoWLockType.Herbalism;
+        public bool IsMineral => Entry != 185877U && LockType == WoWLockType.Mining;
+        
+        public WoWLockType LockType
+        {
+            get
+            {
+                LockEntry? lockRecord = LockRecord;
+                return lockRecord.HasValue && lockRecord.Value.Type[0] == 2 
+                    ? (WoWLockType)lockRecord.Value.LockProperties[0] 
+                    : WoWLockType.None;
+            }
+        }
+        
+        internal LockEntry? LockRecord
+        {
+            get
+            {
+                if (!GetDataSlot(GameObjectDataSlot.LockId, out int lockId))
+                    return null;
+                if (lockId == 0)
+                    return null;
+                // TODO: Implement WoWDb[ClientDb.Lock].GetRow(lockId).GetStruct<LockEntry>()
+                // For now return null - herbs/minerals detection will need DBC support
+                return null;
+            }
+        }
+        
         public bool CanLoot
         {
             get
             {
                 // Un coffre peut être looté s'il n'est pas verrouillé et en état Ready
-                if (SubType == WoWGameObjectType.Chest || SubType == WoWGameObjectType.Fishinghole)
+                if (SubType == WoWGameObjectType.Chest || SubType == WoWGameObjectType.FishingHole)
                 {
                     return !Locked && State == WoWGameObjectState.Ready;
                 }
                 return false;
             }
         }
-        public bool CanMine
-        {
-            get
-            {
-                return SubType == WoWGameObjectType.MiningNode && 
-                       State == WoWGameObjectState.Ready;
-            }
-        }
-        public bool IsMineral => SubType == WoWGameObjectType.MiningNode;
-        public bool CanHarvest
-        {
-            get
-            {
-                return SubType == WoWGameObjectType.Herb && 
-                       State == WoWGameObjectState.Ready;
-            }
-        }
-        public bool CanFish
-        {
-            get
-            {
-                return SubType == WoWGameObjectType.FishingBobber;
-            }
-        }
+        
+        // HB 4.3.4: CanMine uses IsMineral (which checks LockType)
+        public bool CanMine => IsMineral && State == WoWGameObjectState.Ready;
+        
+        // HB 4.3.4: CanHarvest uses IsHerb (which checks LockType) 
+        public bool CanHarvest => IsHerb && State == WoWGameObjectState.Ready;
+        
+        public bool CanFish => SubType == WoWGameObjectType.FishingBobber;
         
         #endregion
         
         #region Type Helpers
+        // HB 4.3.4: IsChest checks a dictionary of chest entries, simplified here
         public bool IsChest => SubType == WoWGameObjectType.Chest;
-        public bool IsMiningNode => SubType == WoWGameObjectType.MiningNode;
-        public bool IsHerb => SubType == WoWGameObjectType.Herb;
         public bool IsDoor => SubType == WoWGameObjectType.Door;
         public bool IsButton => SubType == WoWGameObjectType.Button;
-        public bool IsQuestGiver => SubType == WoWGameObjectType.Questgiver;
+        public bool IsQuestGiver => SubType == WoWGameObjectType.QuestGiver;
         public bool IsMailbox => SubType == WoWGameObjectType.Mailbox;
         public string Model => Name;
         public WoWSpellFocus SpellFocus
@@ -399,48 +412,6 @@ namespace Styx.WoWInternals.WoWObjects
         Active = 1,
         ActiveAlternative = 2,
         Destroyed = 3
-    }
-    public enum WoWGameObjectType : byte
-    {
-        Door = 0,
-        Button = 1,
-        Questgiver = 2,
-        Chest = 3,
-        Binder = 4,
-        Generic = 5,
-        Trap = 6,
-        Chair = 7,
-        SpellFocus = 8,
-        Text = 9,
-        Goober = 10,
-        Transport = 11,
-        AreaDamage = 12,
-        Camera = 13,
-        MapObject = 14,
-        MOTransport = 15,
-        DuelArbiter = 16,
-        FishingBobber = 17,
-        Ritual = 18,
-        Mailbox = 19,
-        AuctionHouse = 20,
-        SpellCaster = 22,
-        MeetingStone = 23,
-        FlagStand = 24,
-        Fishinghole = 25,
-        FlagDrop = 26,
-        MiniGame = 27,
-        LotteryKiosk = 28,
-        CapturePoint = 29,
-        AuraGenerator = 30,
-        DungeonDifficulty = 31,
-        BarberChair = 32,
-        DestructibleBuilding = 33,
-        GuildBank = 34,
-        Trapdoor = 35,
-        
-        // Types spéciaux pour gathering
-        Herb = 50,         // Ajouté pour clarté
-        MiningNode = 51    // Ajouté pour clarté
     }
 
     /// <summary>

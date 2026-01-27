@@ -174,8 +174,16 @@ namespace Styx.WoWInternals
         /// </summary>
         public static WoWUnitReaction CompareFactions(WoWFaction factionA, WoWFaction factionB)
         {
+            // Null checks
+            if (factionA == null || factionB == null)
+                return WoWUnitReaction.Neutral;
+
             FactionTemplateRecord templateA = factionA._template;
             FactionTemplateRecord templateB = factionB._template;
+
+            // Check if templates are valid (faction not found in DBC)
+            if (templateA.FactionId == 0 || templateB.FactionId == 0)
+                return WoWUnitReaction.Neutral;
 
             // Check if B's faction group is in A's enemy mask
             if ((templateB.FactionGroup & templateA.EnemyMask) != 0)

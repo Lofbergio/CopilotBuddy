@@ -99,9 +99,9 @@ namespace Styx.Patchables
         CGUnit_C__UnitReaction = 7492032,           // 0x725FC0
         CGUnit_C_CalculateThreat = 7566528,         // 0x737AC0
         
-        // Movement
-        CGPlayer_C__ClickToMove = 7500800,          // 0x728100
-        CGPlayer_C__ClickToMoveStop = 7517088,      // 0x72C020
+// Movement - FROM 335offsetsall.txt
+		CGPlayer_C__ClickToMove = 7509504,          // 0x727400
+		CGPlayer_C__ClickToMoveStop = 7519904,      // 0x72B3A0
         
         // Collision
         TraceLine = 8010608,                        // 0x7A3770

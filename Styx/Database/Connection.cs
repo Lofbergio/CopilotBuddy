@@ -10,12 +10,19 @@ namespace Styx.Database
 {
     /// <summary>
     /// Provides SQLite database connection for NPC data.
-    /// Uses encrypted Data.bin file from HB.
+    /// Uses encrypted Data.bin file from HB (SEE encryption).
     /// </summary>
     public static class Connection
     {
         private static SQLiteConnection _connection;
         private static readonly Regex ParamRegex = new Regex(@"@[\w_]*", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static bool _isAvailable = true;
+        private static bool _initialized = false;
+
+        /// <summary>
+        /// Indicates if the database is available.
+        /// </summary>
+        public static bool IsAvailable => _isAvailable && _connection != null;
 
         /// <summary>
         /// Gets the SQLite connection instance.
@@ -24,29 +31,65 @@ namespace Styx.Database
         {
             get
             {
-                if (_connection == null)
+                if (!_initialized)
                 {
-                    var builder = new SQLiteConnectionStringBuilder
-                    {
-                        Password = "JkejXP5_fG2vN-jlFVME",
-                        DataSource = System.IO.Path.Combine(Logging.ApplicationPath, "Data.bin")
-                    };
-                    _connection = new SQLiteConnection(builder.ConnectionString);
-                    _connection.StateChange += OnStateChange;
-                    _connection.Open();
-                    SQLiteFunction.RegisterFunction(typeof(DistanceFunction));
-                    SQLiteFunction.RegisterFunction(typeof(PathDistanceFunction));
+                    _initialized = true;
+                    TryInitialize();
                 }
                 return _connection;
             }
         }
 
-        private static void OnStateChange(object sender, StateChangeEventArgs e)
+        private static void TryInitialize()
         {
-            if (e.CurrentState == ConnectionState.Closed || e.CurrentState == ConnectionState.Broken)
+            try
             {
-                _connection.Close();
+                var dbPath = System.IO.Path.Combine(Logging.ApplicationPath, "Data.bin");
+                if (!System.IO.File.Exists(dbPath))
+                {
+                    Logging.Write(LogLevel.Normal, "[Database] Data.bin not found at: {0}", dbPath);
+                    _isAvailable = false;
+                    return;
+                }
+
+                // Use SQLiteConnectionStringBuilder like HB does
+                var builder = new SQLiteConnectionStringBuilder();
+                builder.Password = "JkejXP5_fG2vN-jlFVME";
+                builder.DataSource = dbPath;
+                builder.ReadOnly = true;
+
+                _connection = new SQLiteConnection(builder.ConnectionString);
+                _connection.StateChange += OnConnectionStateChange;
                 _connection.Open();
+
+                // Register custom functions for distance calculations
+                SQLiteFunction.RegisterFunction(typeof(VectorDistanceFunction));
+                SQLiteFunction.RegisterFunction(typeof(PathDistanceFunction));
+
+                Logging.Write(LogLevel.Normal, "[Database] Data.bin loaded successfully");
+            }
+            catch (Exception ex)
+            {
+                Logging.Write(LogLevel.Normal, "[Database] Failed to load Data.bin: {0}", ex.Message);
+                Logging.WriteDebug("[Database] Exception: {0}", ex);
+                _isAvailable = false;
+                _connection = null;
+            }
+        }
+
+        private static void OnConnectionStateChange(object sender, StateChangeEventArgs e)
+        {
+            if (e.CurrentState == ConnectionState.Broken)
+            {
+                try
+                {
+                    _connection?.Close();
+                    _connection?.Open();
+                }
+                catch (Exception ex)
+                {
+                    Logging.WriteDebug("[Database] Failed to reconnect: {0}", ex.Message);
+                }
             }
         }
 
@@ -55,11 +98,14 @@ namespace Styx.Database
         /// </summary>
         internal static SQLiteCommand CreateCommand(string commandText)
         {
+            if (!IsAvailable)
+                return null;
+
             var command = new SQLiteCommand(commandText, Instance);
             var matches = ParamRegex.Matches(commandText);
             foreach (Match match in matches)
             {
-                command.Parameters.Add(new SQLiteParameter(match.Value));
+                command.Parameters.Add(new SQLiteParameter(match.Value, null));
             }
             return command;
         }
@@ -69,6 +115,9 @@ namespace Styx.Database
         /// </summary>
         internal static SQLiteDataReader ExecuteReader(SQLiteCommand command, params object[] args)
         {
+            if (command == null)
+                return null;
+
             for (int i = 0; i < args.Length; i++)
             {
                 command.Parameters[i].Value = args[i];
@@ -81,40 +130,61 @@ namespace Styx.Database
         /// </summary>
         internal static int ExecuteNonQuery(SQLiteCommand command, params object[] args)
         {
+            if (command == null)
+                return 0;
+
             for (int i = 0; i < args.Length; i++)
             {
                 command.Parameters[i].Value = args[i];
             }
             return command.ExecuteNonQuery();
         }
+    }
 
-        /// <summary>
-        /// SQLite function for vector distance calculation.
-        /// </summary>
-        [SQLiteFunction(Arguments = 6, FuncType = FunctionType.Scalar, Name = "VECTORDISTANCE")]
-        public sealed class DistanceFunction : SQLiteFunction
+    /// <summary>
+    /// Custom SQL function for vector distance calculation (squared).
+    /// </summary>
+    [SQLiteFunction(Name = "VECTORDISTANCE", Arguments = 6, FuncType = FunctionType.Scalar)]
+    public class VectorDistanceFunction : SQLiteFunction
+    {
+        public override object Invoke(object[] args)
         {
-            public override object Invoke(object[] args)
-            {
-                var p1 = new WoWPoint(Convert.ToSingle(args[0]), Convert.ToSingle(args[1]), Convert.ToSingle(args[2]));
-                var p2 = new WoWPoint(Convert.ToSingle(args[3]), Convert.ToSingle(args[4]), Convert.ToSingle(args[5]));
-                return p1.DistanceSqr(p2);
-            }
+            double x1 = Convert.ToDouble(args[0]);
+            double y1 = Convert.ToDouble(args[1]);
+            double z1 = Convert.ToDouble(args[2]);
+            double x2 = Convert.ToDouble(args[3]);
+            double y2 = Convert.ToDouble(args[4]);
+            double z2 = Convert.ToDouble(args[5]);
+
+            double dx = x2 - x1;
+            double dy = y2 - y1;
+            double dz = z2 - z1;
+            return dx * dx + dy * dy + dz * dz;
         }
+    }
 
-        /// <summary>
-        /// SQLite function for path distance calculation.
-        /// </summary>
-        [SQLiteFunction(Arguments = 6, FuncType = FunctionType.Scalar, Name = "PATHDISTANCE")]
-        public sealed class PathDistanceFunction : SQLiteFunction
+    /// <summary>
+    /// Custom SQL function for path distance calculation.
+    /// Uses pathfinding when available, falls back to Euclidean distance.
+    /// </summary>
+    [SQLiteFunction(Name = "PATHDISTANCE", Arguments = 6, FuncType = FunctionType.Scalar)]
+    public class PathDistanceFunction : SQLiteFunction
+    {
+        public override object Invoke(object[] args)
         {
-            public override object Invoke(object[] args)
-            {
-                var p1 = new WoWPoint(Convert.ToSingle(args[0]), Convert.ToSingle(args[1]), Convert.ToSingle(args[2]));
-                var p2 = new WoWPoint(Convert.ToSingle(args[3]), Convert.ToSingle(args[4]), Convert.ToSingle(args[5]));
-                // TODO: Use actual path distance via Navigator when available
-                return p1.DistanceSqr(p2);
-            }
+            double x1 = Convert.ToDouble(args[0]);
+            double y1 = Convert.ToDouble(args[1]);
+            double z1 = Convert.ToDouble(args[2]);
+            double x2 = Convert.ToDouble(args[3]);
+            double y2 = Convert.ToDouble(args[4]);
+            double z2 = Convert.ToDouble(args[5]);
+
+            // For now, use Euclidean distance squared
+            // TODO: Integrate with Navigator.PathDistance when available
+            double dx = x2 - x1;
+            double dy = y2 - y1;
+            double dz = z2 - z1;
+            return dx * dx + dy * dy + dz * dz;
         }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Styx.Helpers;
 using Styx.Logic.Pathing;
 using Styx.Logic.Profiles;
@@ -170,9 +171,68 @@ namespace Styx.Logic.POI
 		{
 			get
 			{
-				if (_asObject == null && Guid != 0UL)
+				// HB 4.3.4 style: Always re-search if _asObject is null (don't cache null)
+				if (_asObject == null || !_asObject.IsValid)
 				{
-					_asObject = ObjectManager.GetObjectByGuid<WoWObject>(Guid);
+					_asObject = null; // Reset if invalid
+					
+					switch (Type)
+					{
+						case PoiType.Buy:
+						case PoiType.Sell:
+						case PoiType.Repair:
+						case PoiType.Train:
+						case PoiType.Fly:
+							// For vendor POIs from profile, search by Entry in ObjectManager
+							// Use _location directly to avoid recursion with Location property
+							if (_object0 is Vendor || Entry > 0)
+							{
+								_asObject = ObjectManager.GetObjectsOfType<WoWUnit>(false)
+									.FirstOrDefault(u => u.Entry == Entry && u.Location.Distance(_location) < 50);
+							}
+							break;
+							
+						case PoiType.Mail:
+							// Find nearest mailbox
+							_asObject = ObjectManager.ObjectList
+								.OfType<WoWGameObject>()
+								.Where(g => g.SubType == WoWGameObjectType.Mailbox)
+								.OrderBy(g => g.DistanceSqr)
+								.FirstOrDefault();
+							break;
+							
+						case PoiType.QuestPickUp:
+						case PoiType.QuestTurnIn:
+							// Search for unit or gameobject by entry
+							_asObject = ObjectManager.ObjectList
+								.Where(o => o is WoWUnit || o is WoWGameObject)
+								.FirstOrDefault(o => o.Entry == Entry);
+							break;
+						
+						case PoiType.Kill:
+						case PoiType.Loot:
+						case PoiType.Skin:
+							// For kill/loot/skin, search by GUID first, then by Entry
+							if (Guid != 0UL)
+							{
+								_asObject = ObjectManager.GetObjectByGuid<WoWObject>(Guid);
+							}
+							if (_asObject == null && Entry > 0)
+							{
+								_asObject = ObjectManager.ObjectList
+									.Where(o => o is WoWUnit || o is WoWGameObject)
+									.FirstOrDefault(o => o.Entry == Entry);
+							}
+							break;
+							
+						default:
+							// Default: search by GUID if we have one
+							if (Guid != 0UL)
+							{
+								_asObject = ObjectManager.GetObjectByGuid<WoWObject>(Guid);
+							}
+							break;
+					}
 				}
 				return _asObject;
 			}

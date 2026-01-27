@@ -74,6 +74,7 @@ namespace Styx.Logic.Pathing
 
 		static Navigator()
 		{
+			Logging.WriteDebug("[Navigator] Static constructor called - subscribing to events");
 			BotEvents.Player.OnMapChanged += OnMapChanged;
 			BotEvents.OnBotStart += OnBotStart;
 			BotEvents.OnBotStop += OnBotStop;
@@ -87,24 +88,37 @@ namespace Styx.Logic.Pathing
 
 		private static void OnBotStart(EventArgs args)
 		{
+			Logging.WriteDebug("[Navigator] OnBotStart event received");
 			Clear();
 			// Load navigation meshes on bot start
 			if (_navigator == null)
 			{
+				Logging.WriteDebug("[Navigator] Creating new Tripper.Navigator instance");
 				_navigator = new TripperNav.Navigator();
 				_navigator.LogMessage += msg => Logging.WriteDebug("[Tripper] {0}", msg);
 			}
 			if (!_navigator.IsLoaded)
 			{
 				Logging.Write("[Navigator] Loading navigation meshes...");
-				if (_navigator.LoadMeshes())
+				try
 				{
-					Logging.Write("[Navigator] Navigation meshes loaded successfully.");
+					if (_navigator.LoadMeshes())
+					{
+						Logging.Write("[Navigator] Navigation meshes loaded successfully.");
+					}
+					else
+					{
+						Logging.Write(LogLevel.Quiet, "[Navigator] Failed to load navigation meshes. Using direct movement.");
+					}
 				}
-				else
+				catch (Exception ex)
 				{
-					Logging.Write(LogLevel.Quiet, "[Navigator] Failed to load navigation meshes. Using direct movement.");
+					Logging.Write(LogLevel.Quiet, "[Navigator] Exception loading navigation meshes: {0}", ex.Message);
 				}
+			}
+			else
+			{
+				Logging.WriteDebug("[Navigator] Navigation meshes already loaded");
 			}
 		}
 
@@ -202,8 +216,10 @@ namespace Styx.Logic.Pathing
 					nextPoint = _currentPath[_currentPathIndex];
 				}
 
-				// Click to move
+				// HB 3.3.5a: Simply call ClickToMove - anti-spam is handled there
+				// WoWMovement.ClickToMove already checks if we're moving to the same destination
 				WoWMovement.ClickToMove(nextPoint);
+				
 				return MoveResult.Moved;
 			}
 

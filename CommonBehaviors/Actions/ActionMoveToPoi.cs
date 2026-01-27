@@ -2,27 +2,104 @@ using Styx.Helpers;
 using Styx.Logic;
 using Styx.Logic.Pathing;
 using Styx.Logic.POI;
+using Styx.WoWInternals;
+using Styx.WoWInternals.WoWObjects;
 using TreeSharp;
 
 namespace CommonBehaviors.Actions
 {
+	/// <summary>
+	/// HB MoP/WoD style ActionMoveToPoi with anti-spam logging.
+	/// Tracks last target GUID and location to avoid spamming logs.
+	/// </summary>
 	public class ActionMoveToPoi : NavigationAction
 	{
+		private WoWPoint _lastLocation = WoWPoint.Empty;
+		private ulong _lastGuid;
+		private bool _hasLoggedMove;
+
 		protected override RunStatus Run(object context)
 		{
-			if (Mount.ShouldMount(BotPoi.Current.Location))
-			{
-				Mount.StateMount(() => BotPoi.Current.Location);
-			}
+			BotPoi botPoi = BotPoi.Current;
 
-			if (BotPoi.Current.Location == WoWPoint.Zero)
+			if (botPoi.Location == WoWPoint.Zero)
 			{
 				Logging.Write("ActionMoveToPoi: I don't want to move to (0,0,0)");
+				_hasLoggedMove = false;
 				return RunStatus.Failure;
 			}
 
-			Logging.Write("ActionMoveToPoi: Moving to {0}", BotPoi.Current);
-			return base.Run(BotPoi.Current.Location);
+			// HB MoP/WoD: Track target unit for moving targets
+			WoWObject? asObject = botPoi.AsObject;
+			WoWUnit? unit = asObject?.ToUnit();
+			bool targetChanged = false;
+
+			if (unit != null)
+			{
+				ulong guid = unit.Guid;
+				WoWPoint location = unit.Location;
+
+				// If target is moving, update location only if significantly changed
+				if (unit.IsMoving)
+				{
+					LocalPlayer? me = ObjectManager.Me;
+					if (_lastLocation == WoWPoint.Empty || _lastGuid != guid || 
+					    (me != null && _lastLocation.DistanceSqr(me.Location) < 900f))
+					{
+						targetChanged = (_lastGuid != guid);
+						_lastGuid = guid;
+						_lastLocation = location;
+					}
+				}
+				else
+				{
+					// Target stopped, update if changed
+					if (_lastGuid != guid || _lastLocation != location)
+					{
+						targetChanged = (_lastGuid != guid);
+						_lastGuid = guid;
+						_lastLocation = location;
+					}
+				}
+			}
+			else
+			{
+				// No unit target, use POI location
+				if (_lastGuid != 0UL || _lastLocation != botPoi.Location)
+				{
+					targetChanged = true;
+				}
+				_lastGuid = 0UL;
+				_lastLocation = botPoi.Location;
+			}
+
+			// Log only once when target changes (not every tick)
+			if (targetChanged || !_hasLoggedMove)
+			{
+				Logging.Write("Moving to {0}", BotPoi.Current);
+				_hasLoggedMove = true;
+			}
+
+			// HB MoP/WoD: Use precision based on POI type
+			float precision = 40f;
+			switch (botPoi.Type)
+			{
+				case PoiType.Hotspot:
+				case PoiType.Kill:
+				case PoiType.Loot:
+				case PoiType.Skin:
+				case PoiType.Harvest:
+					precision = 15f;
+					break;
+			}
+
+			// Mount if needed
+			if (Mount.ShouldMount(_lastLocation))
+			{
+				Mount.StateMount(() => _lastLocation);
+			}
+
+			return Navigator.GetRunStatusFromMoveResult(Navigator.MoveTo(_lastLocation, precision));
 		}
 	}
 }

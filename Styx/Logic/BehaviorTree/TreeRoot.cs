@@ -109,6 +109,12 @@ namespace Styx.Logic.BehaviorTree
 					Current.Start();
 					Current.Root?.Start(null);
 					IsRunning = true;
+					
+					// Initialize Navigator BEFORE RaiseBotStart to ensure mesh loading happens
+					// Navigator's static constructor subscribes to OnBotStart, so we need to
+					// force it to initialize first by touching it
+					_ = Navigator.PathPrecision; // Forces static constructor to run
+					
 					// RaiseBotStart triggers OnBotStart which calls SpellManager.Refresh()
 					// This must be called BEFORE the worker thread starts (like HB 3.3.5a smethod_3)
 					BotEvents.RaiseBotStart();
@@ -134,16 +140,28 @@ namespace Styx.Logic.BehaviorTree
 
 		public static void Stop()
 		{
+			Logging.Write("Stopping the bot...");
+
+			if (!IsRunning || Current == null)
+				return;
+
 			try
 			{
-				if (IsRunning && Current != null)
-				{
-					Navigator.Clear();
-					BotEvents.OnBotStopping();
-					Current.Stop();
-					Current.Root?.Stop(null);
-					BotEvents.RaiseBotStopped();
-				}
+				// HB 3.3.5a: Grab a frame to ensure memory consistency
+				try { ObjectManager.Executor?.GrabFrame(); } catch { }
+
+				// Clear navigation first (HB behavior)
+				try { Navigator.Clear(); } catch { }
+
+				// Notify handlers the bot is stopping
+				try { BotEvents.OnBotStopping(); } catch { }
+
+				// Stop the bot's current actions and stop the root behavior
+				try { Current.Stop(); } catch { }
+				try { Current.Root?.Stop(new object()); } catch { }
+
+				// Notify handlers that stop is complete
+				try { BotEvents.RaiseBotStopped(); } catch { }
 			}
 			catch (Exception ex)
 			{
@@ -151,11 +169,19 @@ namespace Styx.Logic.BehaviorTree
 			}
 			finally
 			{
+				// Signal the worker thread to exit
 				IsRunning = false;
-				if (_workerThread != null && _workerThread.IsAlive)
+
+				// HB 3.3.5a: Wait for thread to exit gracefully
+				if (_workerThread != null)
 				{
-					_workerThread.Abort();
+					// Give the thread time to exit on its own
+					if (!_workerThread.Join(TimeSpan.FromSeconds(2)))
+					{
+						Logging.WriteDebug("Worker thread did not exit gracefully");
+					}
 				}
+				_workerThread = null;
 			}
 		}
 

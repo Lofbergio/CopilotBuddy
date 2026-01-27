@@ -11,14 +11,17 @@ namespace Styx.WoWInternals
 	{
 		#region Constants - Offsets 3.3.5a (12340)
 
-		// Click to move function address
-		private const uint CTM_Function = 0x00727F90;  // 7503760 decimal
+		// Click to move function address - FROM 335offsetsall.txt
+		private const uint CTM_Function = 0x00727400;  // 7509504 decimal
 		// Stop movement function
-		private const uint StopMovement_Function = 0x0072D320;  // 7524128 decimal
-		// Click to move base address
-		private const uint ClickToMove_Base = 0xCA11B8;  // 13242808 decimal
+		private const uint StopMovement_Function = 0x0072B3A0;  // 7519904 decimal
+		// Click to move base address - FROM HB 3.3.5a (0xCA11D8)
+		private const uint ClickToMove_Base = 0xCA11D8;  // 13243864 decimal
 		// Active input control pointer
 		private const uint ActiveInputControl_Ptr = 0xC24D54;  // 12732756 decimal
+		// GetActivePlayerObject - FROM 335offsetsall.txt
+		private const uint GetActivePlayerObject_Function = 0x004038F0;  // 4208880 decimal
+
 
 		#endregion
 
@@ -160,68 +163,57 @@ namespace Styx.WoWInternals
 
 		public static void ClickToMove(WoWPoint destination)
 		{
-			ClickToMove(destination, 0UL);
+			CallClickToMove(ClickToMoveType.Move, 0UL, destination, 0f);
 		}
 
 		public static void ClickToMove(WoWPoint destination, ulong interactGuid)
 		{
-			StyxWoW.ResetAfk();
-
 			ClickToMoveType moveType = interactGuid == 0UL ? ClickToMoveType.Move : ClickToMoveType.NpcInteract;
-
-			// Use Lua for movement as it's simpler and doesn't require memory injection
-			if (moveType == ClickToMoveType.Move)
-			{
-				// Use the click to move Lua function
-				string luaCode = string.Format(
-					"SetCVar('autointeract', '1'); MoveForwardStart(); MoveForwardStop();",
-					destination.X, destination.Y, destination.Z);
-				Lua.DoString(luaCode);
-
-				// Alternative: Face and move
-				LocalPlayer? me = ObjectManager.Me;
-				if (me != null)
-				{
-					float angle = (float)Math.Atan2(destination.Y - me.Location.Y, destination.X - me.Location.X);
-					Face(angle);
-					Move(MovementDirection.Forward);
-				}
-			}
-			else
-			{
-				// Interact with object
-				Lua.DoString("InteractUnit('target')");
-			}
+			CallClickToMove(moveType, interactGuid, destination, 0f);
 		}
 
-		public static void Face(float angle)
+		public static void ClickToMove(ulong guid, WoWPoint loc, ClickToMoveType type)
+		{
+			CallClickToMove(type, guid, loc, 0f);
+		}
+
+		public static void ClickToMove(ulong guid, ClickToMoveType type)
+		{
+			CallClickToMove(type, guid, WoWPoint.Empty, 0f);
+		}
+
+		public static void ClickToMove(ulong guid, WoWPoint loc, float precision, ClickToMoveType type)
+		{
+			CallClickToMove(type, guid, loc, precision);
+		}
+
+		// HB 3.3.5a style CTM execution
+		private static void CallClickToMove(ClickToMoveType clickToMoveType, ulong guid, WoWPoint clickPos, float facing)
 		{
 			StyxWoW.ResetAfk();
-			// Normalize angle to 0-2PI
-			while (angle < 0) angle += (float)(2 * Math.PI);
-			while (angle > 2 * Math.PI) angle -= (float)(2 * Math.PI);
 
-			// Set facing via memory
-			LocalPlayer? me = ObjectManager.Me;
-			if (me == null) return;
+			ExecutorRand? executor = ObjectManager.Executor;
+			if (executor == null)
+				throw new Exception("Invalid executor used in CGPlayer_C__ClickToMove");
 
-			Memory? memory = ObjectManager.Wow;
-			if (memory == null) return;
-
-			// Write facing angle to player's rotation field
-			try
+			using (AllocatedMemory allocatedMemory = new AllocatedMemory(20))
 			{
-				uint baseAddress = me.BaseAddress;
-				if (baseAddress != 0)
+				allocatedMemory.Write<WoWPoint>("ClickPos", clickPos);
+				allocatedMemory.Write<ulong>("GUID", guid);
+
+				lock (executor.AssemblyLock)
 				{
-					// Rotation offset in player structure
-					const uint RotationOffset = 0x7A8;  // Player rotation
-					memory.Write(baseAddress + RotationOffset, angle);
+					executor.Clear();
+					executor.AddLine("push {0}", (uint)BitConverter.SingleToInt32Bits(facing));
+					executor.AddLine("push {0}", allocatedMemory["ClickPos"]);
+					executor.AddLine("push {0}", allocatedMemory["GUID"]);
+					executor.AddLine("push {0}", (uint)clickToMoveType);
+					executor.AddLine("call {0}", GetActivePlayerObject_Function);
+					executor.AddLine("mov ecx, eax");
+					executor.AddLine("call {0}", CTM_Function);
+					executor.AddLine("retn");
+					executor.Execute();
 				}
-			}
-			catch (Exception ex)
-			{
-				Logging.WriteException(ex);
 			}
 		}
 
@@ -231,7 +223,7 @@ namespace Styx.WoWInternals
 			if (me == null) return;
 
 			float angle = (float)Math.Atan2(target.Y - me.Location.Y, target.X - me.Location.X);
-			Face(angle);
+			me.SetFacing(angle);
 		}
 
 		public static void Face(WoWUnit target)
@@ -326,7 +318,9 @@ namespace Styx.WoWInternals
 
 		public static void ConstantFace(float angle)
 		{
-			Face(angle);
+			LocalPlayer? me = ObjectManager.Me;
+			if (me == null) return;
+			me.SetFacing(angle);
 		}
 
 		public static void ConstantFace(ulong guid)
