@@ -40,11 +40,18 @@ namespace Styx.WoWInternals
             return unescaped;
         }
 
+        // Shared buffer for Lua return values (reused across calls like HB 3.3.5a)
+        private static readonly byte[] _luaBuffer = new byte[4000];
+
         public static List<string> GetReturnValues(string lua)
         {
-            return GetReturnValues(lua, "CopilotBuddy");
+            return GetReturnValues(lua, "CopilotBuddy.lua");
         }
 
+        /// <summary>
+        /// Executes Lua and returns multiple values with script name.
+        /// HB 3.3.5a exact implementation.
+        /// </summary>
         public static List<string> GetReturnValues(string lua, string scriptName)
         {
             var executor = ObjectManager.Executor;
@@ -57,127 +64,143 @@ namespace Styx.WoWInternals
 
             try
             {
-                // Get Lua state from global
-                uint pState = wow.Read<uint>((uint)GlobalOffsets.LuaState);
-                if (pState == 0)
+                // Read Lua full state (same offset as HB 3.3.5a)
+                uint fullState = wow.Read<uint>((uint)GlobalOffsets.LuaState);
+                if (fullState == 0)
                     return new List<string>();
 
-                // Encode script and name
-                byte[] luaBytes = Encoding.UTF8.GetBytes(lua);
-                byte[] nameBytes = Encoding.UTF8.GetBytes(scriptName);
+                byte[] bytes = Encoding.UTF8.GetBytes(lua);
+                byte[] bytes2 = Encoding.UTF8.GetBytes(scriptName);
+                List<byte> list = new List<byte>(bytes.Length + 1 + bytes2.Length + 1);
+                list.AddRange(bytes);
+                list.Add(0);
+                list.AddRange(bytes2);
+                list.Add(0);
 
-                // Allocate memory for script
-                var scriptMemory = new AllocatedMemory(luaBytes.Length + nameBytes.Length + 2);
-                try
+                using (var allocatedMemory = new AllocatedMemory(list.Count))
                 {
-                    scriptMemory.WriteBytes(0, luaBytes);
-                    scriptMemory.WriteByte(luaBytes.Length, 0); // null terminator
-                    scriptMemory.WriteBytes(luaBytes.Length + 1, nameBytes);
-                    scriptMemory.WriteByte(luaBytes.Length + 1 + nameBytes.Length, 0); // null terminator
+                    allocatedMemory.WriteBytes(0, list.ToArray());
+                    uint address = allocatedMemory.Address;
+                    uint num2 = (uint)(allocatedMemory.Address + bytes.Length + 1);
 
-                    uint luaPtr = scriptMemory.Address;
-                    uint namePtr = (uint)(scriptMemory.Address + luaBytes.Length + 1);
-
-                    // Allocate return buffer
                     if (_returnBuffer == null)
                         _returnBuffer = new AllocatedMemory(4000);
 
-                    // Clear return buffer
-                    _returnBuffer.Write(0, 0);
+                    // Clear buffer (HB 3.3.5a pattern)
+                    _returnBuffer.WriteBytes(0, _luaBuffer);
 
                     lock (executor.AssemblyLock)
                     {
                         executor.Clear();
 
-                        // lua_gettop(pState)
-                        executor.AddLine("push {0}", pState);
+                        // HB 3.3.5a exact ASM sequence:
+                        // 1. lua_gettop to get current stack position
+                        executor.AddLine("push {0}", fullState);
                         executor.AddLine("call {0}", (uint)GlobalOffsets.FrameScript_GetTop);
-                        executor.AddLine("add esp, 4");
-                        executor.AddLine("push eax"); // save top
+                        executor.AddLine("add esp, 0x4");
+                        executor.AddLine("mov ebx, eax");   // ebx = old top
+                        executor.AddLine("push ebx");       // save ebx on stack
 
-                        // luaL_loadbuffer(pState, lua, len, name)
-                        executor.AddLine("push {0}", namePtr);
-                        executor.AddLine("push {0}", luaBytes.Length);
-                        executor.AddLine("push {0}", luaPtr);
-                        executor.AddLine("push {0}", pState);
+                        // 2. luaL_loadbuffer
+                        executor.AddLine("push {0}", num2);
+                        executor.AddLine("push {0}", lua.Length);
+                        executor.AddLine("push {0}", address);
+                        executor.AddLine("push {0}", fullState);
                         executor.AddLine("call {0}", (uint)GlobalOffsets.FrameScript_Load);
-                        executor.AddLine("add esp, 16");
-
-                        // Check for load errors
+                        executor.AddLine("add esp, 0x10");
                         executor.AddLine("test eax, eax");
-                        executor.AddLine("jnz @error");
+                        executor.AddLine("jnz @Finally");
 
-                        // lua_pcall(pState, 0, LUA_MULTRET, 0)
-                        executor.AddLine("push 0");
-                        executor.AddLine("push -1");
-                        executor.AddLine("push 0");
-                        executor.AddLine("push {0}", pState);
+                        // 3. lua_pcall with error handler at -2
+                        executor.AddLine("push {0}", -2);
+                        executor.AddLine("push {0}", -1);
+                        executor.AddLine("push {0}", 0);
+                        executor.AddLine("push {0}", fullState);
                         executor.AddLine("call {0}", (uint)GlobalOffsets.FrameScript_PCall);
-                        executor.AddLine("add esp, 16");
-
-                        // Check for pcall errors
+                        executor.AddLine("add esp, 0x10");
                         executor.AddLine("test eax, eax");
-                        executor.AddLine("jnz @error");
+                        executor.AddLine("jnz @Finally");
 
-                        // Calculate number of return values
-                        executor.AddLine("push {0}", pState);
+                        // 4. Get new top, calculate return count
+                        executor.AddLine("push {0}", fullState);
                         executor.AddLine("call {0}", (uint)GlobalOffsets.FrameScript_GetTop);
-                        executor.AddLine("add esp, 4");
-                        executor.AddLine("pop ecx"); // restore old top
-                        executor.AddLine("sub eax, ecx");
-                        executor.AddLine("mov [{0}], eax", _returnBuffer.Address);
+                        executor.AddLine("add esp, 0x4");
+                        executor.AddLine("cmp eax, ebx");
+                        executor.AddLine("jle @FailNoRetValues");
+                        executor.AddLine("sub eax, ebx");
 
-                        // Process return values
-                        executor.AddLine("mov edi, {0}", _returnBuffer.Address + 4);
-                        executor.AddLine("mov esi, ecx");
-                        executor.AddLine("inc esi");
-                        executor.AddLine("@loop:");
-                        executor.AddLine("cmp eax, 0");
-                        executor.AddLine("jle @done");
+                        // 5. Store count in return buffer
+                        executor.AddLine("mov ecx, {0}", _returnBuffer.Address);
+                        executor.AddLine("mov [ecx], eax");
+                        executor.AddLine("add eax, ebx");   // eax = new top (for loop comparison)
+
+                        // 6. Loop to read each return value
+                        executor.AddLine("@LoopStart:");
+                        executor.AddLine("add ecx, 0x4");
+                        executor.AddLine("inc ebx");
+                        executor.AddLine("push eax");       // save eax
+                        executor.AddLine("push ecx");       // save ecx
 
                         // lua_tolstring(pState, index, NULL)
-                        executor.AddLine("push 0");
-                        executor.AddLine("push esi");
-                        executor.AddLine("push {0}", pState);
+                        executor.AddLine("push {0}", 0);
+                        executor.AddLine("push ebx");
+                        executor.AddLine("push {0}", fullState);
                         executor.AddLine("call {0}", (uint)GlobalOffsets.FrameScript_ToLString);
-                        executor.AddLine("add esp, 12");
+                        executor.AddLine("add esp, 0xC");
 
-                        executor.AddLine("mov [edi], eax");
-                        executor.AddLine("add edi, 4");
-                        executor.AddLine("inc esi");
-                        executor.AddLine("dec eax");
-                        executor.AddLine("jmp @loop");
+                        executor.AddLine("pop ecx");        // restore ecx
+                        executor.AddLine("mov [ecx], eax"); // store string pointer
+                        executor.AddLine("pop eax");        // restore eax
+                        executor.AddLine("cmp ebx, eax");
+                        executor.AddLine("jl @LoopStart");
 
-                        // Error handling
-                        executor.AddLine("@error:");
-                        executor.AddLine("mov dword [{0}], -1", _returnBuffer.Address);
+                        // Success - return 0
+                        executor.AddLine("mov eax, 0");
+                        executor.AddLine("jmp @Finally");
 
-                        executor.AddLine("@done:");
-                        executor.AddLine("xor eax, eax");
+                        // No return values
+                        executor.AddLine("@FailNoRetValues:");
+                        executor.AddLine("mov eax, -1");
+                        executor.AddLine("jmp @Finally");
+
+                        // Cleanup: restore Lua stack with lua_settop
+                        executor.AddLine("@Finally:");
+                        executor.AddLine("pop ebx");        // restore ebx (old top)
+                        executor.AddLine("push eax");       // save result
+                        executor.AddLine("push ebx");
+                        executor.AddLine("push {0}", fullState);
+                        executor.AddLine("call {0}", (uint)GlobalOffsets.FrameScript__SetTop);
+                        executor.AddLine("add esp, 0x8");
+                        executor.AddLine("pop eax");        // restore result
                         executor.AddLine("retn");
 
                         executor.Execute();
                     }
 
-                    // Read return values
-                    int count = _returnBuffer.Read<int>(0);
-                    if (count < 0)
-                        return new List<string>();
-
-                    var results = new List<string>(count);
-                    for (int i = 0; i < count; i++)
+                    // Read result from executor
+                    int num3 = executor.Memory.Read<int>(executor.ReturnPointer);
+                    if (num3 == 0)
                     {
-                        uint strPtr = _returnBuffer.Read<uint>((i + 1) * 4);
-                        if (strPtr != 0)
-                            results.Add(wow.Read<string>(strPtr));
-                        else
-                            results.Add(string.Empty);
+                        // Success - read return values
+                        int num4 = _returnBuffer.Read<int>(0);
+                        var results = new List<string>(num4);
+                        for (int i = 0; i < num4; i++)
+                        {
+                            uint strPtr = _returnBuffer.Read<uint>((i + 1) * 4);
+                            results.Add(executor.Memory.ReadString(strPtr));
+                        }
+                        return results;
                     }
-                    return results;
-                }
-                finally
-                {
-                    scriptMemory?.Dispose();
+                    else if (num3 < 0)
+                    {
+                        // No return values
+                        return new List<string>();
+                    }
+                    else
+                    {
+                        Logging.WriteDebug("Lua failed! Status: {0}", num3);
+                        return new List<string>();
+                    }
                 }
             }
             catch (Exception)

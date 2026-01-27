@@ -197,6 +197,19 @@ namespace Styx
 			_onBotStop?.Invoke(EventArgs.Empty);
 		}
 
+		/// <summary>
+		/// Raises OnBotStart event - called BEFORE bot starts running.
+		/// This is where SpellManager.Refresh() gets called.
+		/// Equivalent to HB 3.3.5a smethod_3()
+		/// </summary>
+		internal static void RaiseBotStart()
+		{
+			_onBotStart?.Invoke(EventArgs.Empty);
+		}
+
+		/// <summary>
+		/// Raises OnBotStarted event - called AFTER bot has started.
+		/// </summary>
 		internal static void RaiseBotStarted()
 		{
 			_onBotStarted?.Invoke(EventArgs.Empty);

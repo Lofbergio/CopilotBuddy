@@ -40,25 +40,41 @@ namespace Styx.Logic.Combat
 
 		public static void Refresh()
 		{
+			Logging.Write("[SpellManager] Refresh() called. LastCount={0}, CurrentCount={1}", _lastKnownSpellCount, NumKnownSpells);
+			
 			if (_lastKnownSpellCount == 0 || NumKnownSpells != _lastKnownSpellCount)
 			{
 				Logging.Write("[SpellManager] Refreshing known spells...");
 				_knownSpells.Clear();
 
 				LocalPlayer? me = StyxWoW.Me;
-				if (me == null) return;
+				if (me == null)
+				{
+					Logging.Write("[SpellManager] ERROR: LocalPlayer is null!");
+					return;
+				}
 
-				foreach (WoWSpell spell in me.KnownSpells)
+				var knownSpells = me.KnownSpells;
+				Logging.Write("[SpellManager] Found {0} spells from LocalPlayer.KnownSpells", knownSpells.Count);
+				
+				foreach (WoWSpell spell in knownSpells)
 				{
 					if (!_knownSpells.ContainsKey(spell.Name))
 					{
 						_knownSpells.Add(spell.Name, spell);
-						Logging.WriteDebug("[SpellManager] Added spell: {0}", spell.Name);
 					}
 				}
 
 				_lastKnownSpellCount = NumKnownSpells;
-				Logging.Write("[SpellManager] Spell refresh complete.");
+				Logging.Write("[SpellManager] Spell refresh complete. {0} unique spells loaded.", _knownSpells.Count);
+				
+				// Log first few spells for debugging
+				int count = 0;
+				foreach (var kvp in _knownSpells)
+				{
+					if (count++ < 10)
+						Logging.WriteDebug("[SpellManager] Spell: {0} (ID: {1})", kvp.Key, kvp.Value.Id);
+				}
 			}
 		}
 
@@ -184,7 +200,10 @@ namespace Styx.Logic.Combat
 		public static bool CanCastSpell(string name)
 		{
 			if (!HasSpell(name))
+			{
+				// Only log once per spell to avoid spam
 				return false;
+			}
 
 			if (GlobalCooldown)
 				return false;
@@ -212,30 +231,64 @@ namespace Styx.Logic.Combat
 			return CanCast(spell.Name, target, checkRange, checkMovement);
 		}
 
+		/// <summary>
+		/// HB 4.3.4 compatible CanCast with full validation.
+		/// Checks: HasSpell, GCD, Cooldown, IsCasting, Movement (if checkMovement), Power/Mana via spell.CanCast
+		/// </summary>
 		public static bool CanCast(string spellName, WoWUnit target, bool checkRange = true, bool checkMovement = false)
 		{
-			if (!CanCast(spellName))
-		{
-			Logging.WriteDebug("[SpellManager] CanCast({0}) = false", spellName);
-			return false;
-		}
-		if (target == null || !target.IsValid)
-		{
-			Logging.WriteDebug("[SpellManager] CanCast({0}) target invalid", spellName);
-			return false;
-		}
-		Logging.WriteDebug("[SpellManager] CanCast({0}) = true", spellName);
-		// Additional checks could be added here for range/movement
-		return true;
-	}
+			// Step 1: Check if we know the spell
+			if (!HasSpell(spellName))
+				return false;
 
-	public static bool Cast(string spellName) => CastSpell(spellName);
+			WoWSpell? spell = GetSpellByName(spellName);
+			if (spell == null)
+				return false;
 
-	public static bool Cast(string spellName, WoWUnit target)
-	{
-		Logging.WriteDebug("[SpellManager] Cast({0}, {1}) called", spellName, target?.Name ?? "null");
-		if (target == null)
-			return Cast(spellName);
+			// Step 2: Check if we're currently casting (can't cast while casting)
+			LocalPlayer? me = StyxWoW.Me;
+			if (me == null)
+				return false;
+
+			if (me.IsCasting)
+				return false;
+
+			// Step 3: Check Global Cooldown
+			if (GlobalCooldown)
+				return false;
+
+			// Step 4: Check spell-specific cooldown
+			if (spell.Cooldown)
+				return false;
+
+			// Step 5: Check movement restrictions (cast time spells can't be cast while moving)
+			if (checkMovement && spell.CastTime > 0 && me.IsMoving)
+				return false;
+
+			// Step 6: Check if spell is usable (mana/power check via WoW's IsUsableSpell)
+			// This is the most reliable check as it uses the game's own validation
+			if (!spell.CanCast)
+				return false;
+
+			// Step 7: Target validation (if target required)
+			if (target != null && !target.IsValid)
+				return false;
+
+			return true;
+		}
+
+		public static bool CanCast(WoWSpell spell, WoWUnit target, bool checkRange = true, bool checkMovement = false)
+		{
+			if (spell == null)
+				return false;
+			return CanCast(spell.Name, target, checkRange, checkMovement);
+		}
+
+		public static bool Cast(string spellName) => CastSpell(spellName);
+
+		public static bool Cast(string spellName, WoWUnit target)
+		{
+			if (target == null)
 				return Cast(spellName);
 			
 			// Target the unit and cast

@@ -30,42 +30,8 @@ namespace Styx.Logic.Combat
             _spellEntry = row.GetStruct<SpellEntry>();
         }
 
-        // SpellCooldown offsets for WoW 3.3.5a (build 12340)
-        private const uint SpellCooldownStruct = 13890988U;  // 0xD3F92C
-        private const uint SpellCooldownFunc = 8419712U;     // 0x808580
-
-        private bool GetSpellCooldown()
-        {
-            var executor = ObjectManager.Executor;
-            if (executor == null)
-            {
-                throw new Exception("Invalid executor used in GetSpellCooldown");
-            }
-
-            try
-            {
-                lock (executor.AssemblyLock)
-                {
-                    executor.Clear();
-                    executor.AddLine("push 0");
-                    executor.AddLine("push 0");
-                    executor.AddLine("push 0");
-                    executor.AddLine("push 0");
-                    executor.AddLine($"push {Id}");
-                    executor.AddLine($"mov ecx, {SpellCooldownStruct}");
-                    executor.AddLine($"call {SpellCooldownFunc}");
-                    executor.AddLine("retn");
-                    executor.Execute();
-                    int result = executor.Memory.Read<int>(executor.ReturnPointer);
-                    return result != 0;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logging.WriteException(ex);
-            }
-            return false;
-        }
+        // NOTE: ASM injection for cooldown removed - using Lua instead (see Cooldown property)
+        // The old GetSpellCooldown() method caused crashes (InjectionFinishedEvent never fired)
 
         public bool IsValid
         {
@@ -265,10 +231,8 @@ namespace Styx.Logic.Combat
         {
             get 
             { 
-                var result = Lua.GetReturnValues("return GetSpellInfo(" + Id + ")", "hax.lua");
-                if (result != null && result.Count > 0)
-                    return result[0] ?? "";
-                return "";
+                // Use SpellDb to avoid Lua calls which can crash the game
+                return SpellDb.GetSpellName(Id);
             }
         }
 
@@ -276,10 +240,8 @@ namespace Styx.Logic.Combat
         {
             get 
             { 
-                var result = Lua.GetReturnValues("return GetSpellInfo(" + Id + ")", "hax.lua");
-                if (result != null && result.Count > 1)
-                    return result[1] ?? "";
-                return "";
+                // Use SpellDb to avoid Lua calls which can crash the game
+                return SpellDb.GetSpellRank(Id);
             }
         }
 
@@ -288,10 +250,56 @@ namespace Styx.Logic.Combat
             get { return ObjectManager.Wow.Read<string>(_spellEntry.ToolTip); }
         }
 
+        // Cooldown check using Lua (from .Reference code that worked)
+        // Uses Lua GetSpellCooldown instead of injected executor call to avoid crashes
+        private static readonly Dictionary<int, (double expiresAt, long lastQueryTicks)> _cooldownCache = new Dictionary<int, (double, long)>();
+        private const int CooldownCacheMinMs = 50; // minimal interval between Lua queries for same spell
+
         public bool Cooldown
         {
-            get { return GetSpellCooldown(); }
+            get
+            {
+                long nowTicks = Environment.TickCount;
+                (var expiresAt, var lastQuery) = _cooldownCache.TryGetValue(Id, out var entry) ? entry : (0.0, 0L);
+                
+                // If cached and not expired and queried recently, reuse
+                if (expiresAt > 0.0 && expiresAt > GetTimeSeconds() && (nowTicks - lastQuery) < CooldownCacheMinMs)
+                    return true;
+
+                // Query Lua: start, duration
+                try
+                {
+                    var lua = Lua.GetReturnValues($"local s,d,_,_=GetSpellCooldown({Id}); if s==0 or d==0 then return 0,0 else return s,d end", "cooldown.lua");
+                    if (lua != null && lua.Count >= 2)
+                    {
+                        if (double.TryParse(lua[0], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double start) && 
+                            double.TryParse(lua[1], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double dur))
+                        {
+                            if (start > 0 && dur > 0)
+                            {
+                                double remaining = (start + dur) - GetTimeSeconds();
+                                if (remaining > 0)
+                                {
+                                    _cooldownCache[Id] = ((start + dur), nowTicks);
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // If Lua fails, assume not on cooldown
+                    return false;
+                }
+                
+                // Not on cooldown
+                _cooldownCache[Id] = (0.0, nowTicks);
+                return false;
+            }
         }
+
+        private static double GetTimeSeconds() => Lua.GetReturnVal<double>("return GetTime()", 0);
 
         /// <summary>
         /// Gets the remaining cooldown time for this spell.

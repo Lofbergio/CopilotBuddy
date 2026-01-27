@@ -34,6 +34,8 @@ namespace Styx.Logic.BehaviorTree
 
 		private static void OnBotStart(EventArgs args)
 		{
+			// Initialize spell database from Spells.bin before refreshing spells
+			SpellDb.Initialize();
 			Lua.DoString("ClearTarget();");
 			Lua.DoString("MoveForwardStop();MoveBackwardStop();StrafeLeftStop();StrafeRightStop();");
 			BotPoi.Clear();
@@ -92,6 +94,11 @@ namespace Styx.Logic.BehaviorTree
 			{
 				try
 				{
+					// Grab frame first to sync with WoW's main thread (like HB 3.3.5a)
+					if (ObjectManager.Executor != null)
+					{
+						ObjectManager.Executor.GrabFrame();
+					}
 					ObjectManager.Update();
 					string lastUsedPath = LevelbotSettings.Instance.LastUsedPath;
 					if (!string.IsNullOrEmpty(lastUsedPath) && System.IO.File.Exists(lastUsedPath))
@@ -100,10 +107,11 @@ namespace Styx.Logic.BehaviorTree
 					}
 					Current.Initialize();
 					Current.Start();
-					BotEvents.RaiseBotStarted();
 					Current.Root?.Start(null);
 					IsRunning = true;
-
+					// RaiseBotStart triggers OnBotStart which calls SpellManager.Refresh()
+					// This must be called BEFORE the worker thread starts (like HB 3.3.5a smethod_3)
+					BotEvents.RaiseBotStart();
 					_workerThread = new Thread(WorkerThread);
 					_workerThread.IsBackground = true;
 					_workerThread.Name = "TreeRoot Worker";
