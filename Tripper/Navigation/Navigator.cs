@@ -86,6 +86,19 @@ namespace Tripper.Navigation
         /// </summary>
         public uint CurrentMapId { get; private set; }
 
+        /// <summary>
+        /// Path post-processing mode. Default is MoveAwayFromEdges to avoid stairs/wall issues.
+        /// Matches Honorbuddy's PathPostProcessing behavior.
+        /// </summary>
+        public PathPostProcessing PathPostProcessing { get; set; } = PathPostProcessing.MoveAwayFromEdges;
+
+        /// <summary>
+        /// Edge distance threshold for MoveAwayFromEdges post-processing.
+        /// Points closer than this to a wall will be moved away.
+        /// Default: 2.0 yards (like HB).
+        /// </summary>
+        public float EdgeDistance { get; set; } = 2.0f;
+
         #endregion
 
         #region Initialization
@@ -176,7 +189,10 @@ namespace Tripper.Navigation
                 {
                     // Navigation.dll initializes automatically in DllMain
                     // Tiles are loaded on-demand when CalculatePath is called
-                    // Just mark as loaded and test with a simple call
+                    
+                    // Set area costs in DLL (like HB WoD SetDefaultQueryFilterCosts)
+                    SetDefaultAreaCosts();
+                    
                     IsLoaded = true;
                     Log("Navigation system ready (tiles load on-demand)");
                     return true;
@@ -186,6 +202,40 @@ namespace Tripper.Navigation
                     Log($"Exception initializing navigation: {ex.Message}");
                     return false;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Sets default area costs in the native DLL filter.
+        /// Matches HB WoD SetDefaultQueryFilterCosts pattern.
+        /// Road=0.5 (strong priority), Ground=1.66, Water=3.33, etc.
+        /// </summary>
+        private void SetDefaultAreaCosts()
+        {
+            try
+            {
+                // HB WoD pattern from WowNavigator.SetDefaultQueryFilterCosts
+                // Lower cost = preferred path. Road should be much lower to force road usage.
+                NativeMethods.SetAreaCost((uint)AreaType.Ground, 1.66f);
+                NativeMethods.SetAreaCost((uint)AreaType.Road, 0.5f);            // STRONG PRIORITY - much lower cost!
+                NativeMethods.SetAreaCost((uint)AreaType.Water, 3.33f);
+                NativeMethods.SetAreaCost((uint)AreaType.Lava, 55.0f);
+                NativeMethods.SetAreaCost((uint)AreaType.Fall, 1.7f);
+                NativeMethods.SetAreaCost((uint)AreaType.Gate, 1.66f);
+                NativeMethods.SetAreaCost((uint)AreaType.Elevator, 3.16f);
+                NativeMethods.SetAreaCost((uint)AreaType.Portal, 1.66f);
+                NativeMethods.SetAreaCost((uint)AreaType.DefendersPortal, 3.16f);
+                NativeMethods.SetAreaCost((uint)AreaType.HordePortal, 1.66f);
+                NativeMethods.SetAreaCost((uint)AreaType.AlliancePortal, 1.66f);
+                NativeMethods.SetAreaCost((uint)AreaType.Blocked, 100.0f);
+                NativeMethods.SetAreaCost((uint)AreaType.InteractUnit, 1.66f);
+                NativeMethods.SetAreaCost((uint)AreaType.InteractObject, 1.66f);
+                
+                Log("Default area costs set (Road=0.5, Ground=1.66)");
+            }
+            catch (Exception ex)
+            {
+                Log($"Failed to set area costs: {ex.Message}");
             }
         }
 
@@ -317,6 +367,27 @@ namespace Tripper.Navigation
                             }
                         }
 
+                        // Apply path post-processing (like HB's MoveAwayFromEdges)
+                        if (PathPostProcessing != PathPostProcessing.None && points.Length > 2)
+                        {
+                            try
+                            {
+                                if (PathPostProcessing == PathPostProcessing.MoveAwayFromEdges)
+                                {
+                                    PathPostProcessor.MoveAwayFromEdges(mapId, ref points, ref flags, EdgeDistance);
+                                }
+                                else if (PathPostProcessing == PathPostProcessing.Randomize)
+                                {
+                                    PathPostProcessor.Randomize(mapId, ref points, ref flags);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Log($"Path post-processing failed: {ex.Message}");
+                                // Continue with unprocessed path
+                            }
+                        }
+
                         // Create full result
                         var result = new PathFindResult
                         {
@@ -427,18 +498,60 @@ namespace Tripper.Navigation
 
         /// <summary>
         /// Performs a raycast from start to end position.
+        /// Returns detailed raycast information including hit position and visited polygons.
         /// </summary>
         /// <param name="mapId">Map ID.</param>
         /// <param name="start">Ray start position.</param>
         /// <param name="end">Ray end position.</param>
-        /// <param name="hitPosition">Output hit position if raycast hits.</param>
-        /// <param name="hitDistance">Output normalized hit distance (0-1).</param>
-        /// <returns>True if raycast hit a navmesh boundary.</returns>
-        public bool Raycast(uint mapId, Vector3 start, Vector3 end, out Vector3 hitPosition, out float hitDistance)
+        /// <param name="hitT">Output normalized hit distance (0-1, 1.0 = no hit).</param>
+        /// <param name="hitNormal">Output hit normal vector.</param>
+        /// <returns>Detour status code.</returns>
+        public Status Raycast(uint mapId, Vector3 start, Vector3 end, out float hitT, out Vector3 hitNormal)
         {
-            hitPosition = Vector3.Zero;
-            hitDistance = 0f;
+            hitT = 1.0f;
+            hitNormal = Vector3.Zero;
 
+            if (!IsLoaded)
+                return Status.Failure;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var startC = new NativeMethods.XYZ(start);
+                    var endC = new NativeMethods.XYZ(end);
+                    var extents = new NativeMethods.XYZ(Extents);
+
+                    // First find the start polygon
+                    if (!NativeMethods.FindNearestPolyRef(mapId, startC, extents, out ulong startRef, out _))
+                        return Status.Failure;
+
+                    // Perform raycast
+                    ulong[] path = new ulong[256];
+                    NativeMethods.XYZ hitNormalC;
+                    uint status = NativeMethods.Raycast(mapId, startRef, startC, endC, 
+                        out hitT, out hitNormalC, path, out int pathCount, 256);
+
+                    hitNormal = hitNormalC.ToVector3();
+                    return new Status(status);
+                }
+                catch (Exception ex)
+                {
+                    Log($"Raycast exception: {ex.Message}");
+                    return Status.Failure;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Checks if there's line of sight between two points on the navmesh.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="start">Start position.</param>
+        /// <param name="end">End position.</param>
+        /// <returns>True if there's clear line of sight.</returns>
+        public bool HasLineOfSight(uint mapId, Vector3 start, Vector3 end)
+        {
             if (!IsLoaded)
                 return false;
 
@@ -448,25 +561,769 @@ namespace Tripper.Navigation
                 {
                     var startC = new NativeMethods.XYZ(start);
                     var endC = new NativeMethods.XYZ(end);
-                    NativeMethods.XYZ hitC;
-
-                    // Use HasLineOfSight - returns true if NO obstacle (clear path)
-                    bool hasLOS = NativeMethods.HasLineOfSight(mapId, startC, endC);
-                    if (!hasLOS)
-                    {
-                        // Hit something - estimate hit position as midpoint for now
-                        hitPosition = (start + end) / 2;
-                        hitDistance = 0.5f;
-                        return true;
-                    }
-                    return false;
+                    return NativeMethods.HasLineOfSight(mapId, startC, endC);
                 }
                 catch (Exception ex)
                 {
-                    Log($"Raycast exception: {ex.Message}");
+                    Log($"HasLineOfSight exception: {ex.Message}");
                     return false;
                 }
             }
+        }
+
+        /// <summary>
+        /// Finds distance to the nearest wall/boundary from a position.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="position">Position to check.</param>
+        /// <param name="maxRadius">Maximum search radius.</param>
+        /// <param name="hitPoint">Output hit point on wall.</param>
+        /// <returns>Distance to wall, or -1 if failed.</returns>
+        public float FindDistanceToWall(uint mapId, Vector3 position, float maxRadius, out Vector3 hitPoint)
+        {
+            hitPoint = Vector3.Zero;
+
+            if (!IsLoaded)
+                return -1f;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var posC = new NativeMethods.XYZ(position);
+                    NativeMethods.XYZ hitC;
+                    float distance = NativeMethods.FindDistanceToWall(mapId, posC, maxRadius, out hitC);
+                    hitPoint = hitC.ToVector3();
+                    return distance;
+                }
+                catch (Exception ex)
+                {
+                    Log($"FindDistanceToWall exception: {ex.Message}");
+                    return -1f;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Checks if a point is on the navmesh.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="point">Point to check.</param>
+        /// <param name="tolerance">Search tolerance.</param>
+        /// <returns>True if the point is on the navmesh.</returns>
+        public bool IsPointOnNavMesh(uint mapId, Vector3 point, float tolerance = 3.0f)
+        {
+            if (!IsLoaded)
+                return false;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var pointC = new NativeMethods.XYZ(point);
+                    return NativeMethods.IsPointOnNavMesh(mapId, pointC, tolerance);
+                }
+                catch (Exception ex)
+                {
+                    Log($"IsPointOnNavMesh exception: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the height at a position on a specific polygon.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="polyRef">Polygon reference.</param>
+        /// <param name="position">Position to check.</param>
+        /// <param name="height">Output height.</param>
+        /// <returns>True if height was found.</returns>
+        public bool GetPolyHeight(uint mapId, PolygonReference polyRef, Vector3 position, out float height)
+        {
+            height = 0f;
+
+            if (!IsLoaded)
+                return false;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var posC = new NativeMethods.XYZ(position);
+                    return NativeMethods.GetPolyHeight(mapId, polyRef.Id, posC, out height);
+                }
+                catch (Exception ex)
+                {
+                    Log($"GetPolyHeight exception: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Finds the closest point on a polygon.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="polyRef">Polygon reference.</param>
+        /// <param name="position">Position to check.</param>
+        /// <param name="closestPoint">Output closest point.</param>
+        /// <returns>True if closest point was found.</returns>
+        public bool ClosestPointOnPoly(uint mapId, PolygonReference polyRef, Vector3 position, out Vector3 closestPoint)
+        {
+            closestPoint = Vector3.Zero;
+
+            if (!IsLoaded)
+                return false;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var posC = new NativeMethods.XYZ(position);
+                    NativeMethods.XYZ closestC;
+                    bool success = NativeMethods.ClosestPointOnPoly(mapId, polyRef.Id, posC, out closestC);
+                    if (success)
+                        closestPoint = closestC.ToVector3();
+                    return success;
+                }
+                catch (Exception ex)
+                {
+                    Log($"ClosestPointOnPoly exception: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Finds the closest point on polygon boundary.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="polyRef">Polygon reference.</param>
+        /// <param name="position">Position to check.</param>
+        /// <param name="closestPoint">Output closest point on boundary.</param>
+        /// <returns>True if closest point was found.</returns>
+        public bool ClosestPointOnPolyBoundary(uint mapId, PolygonReference polyRef, Vector3 position, out Vector3 closestPoint)
+        {
+            closestPoint = Vector3.Zero;
+
+            if (!IsLoaded)
+                return false;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var posC = new NativeMethods.XYZ(position);
+                    NativeMethods.XYZ closestC;
+                    bool success = NativeMethods.ClosestPointOnPolyBoundary(mapId, polyRef.Id, posC, out closestC);
+                    if (success)
+                        closestPoint = closestC.ToVector3();
+                    return success;
+                }
+                catch (Exception ex)
+                {
+                    Log($"ClosestPointOnPolyBoundary exception: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Finds the nearest polygon reference to a position.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="position">Position to search from.</param>
+        /// <param name="polyRef">Output polygon reference.</param>
+        /// <param name="nearestPoint">Output nearest point on polygon.</param>
+        /// <returns>True if a polygon was found.</returns>
+        public bool FindNearestPolyRef(uint mapId, Vector3 position, out PolygonReference polyRef, out Vector3 nearestPoint)
+        {
+            polyRef = PolygonReference.Invalid;
+            nearestPoint = Vector3.Zero;
+
+            if (!IsLoaded)
+                return false;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var posC = new NativeMethods.XYZ(position);
+                    var extentsC = new NativeMethods.XYZ(Extents);
+                    NativeMethods.XYZ nearestC;
+                    bool success = NativeMethods.FindNearestPolyRef(mapId, posC, extentsC, out ulong refId, out nearestC);
+                    if (success)
+                    {
+                        polyRef = new PolygonReference(refId);
+                        nearestPoint = nearestC.ToVector3();
+                    }
+                    return success;
+                }
+                catch (Exception ex)
+                {
+                    Log($"FindNearestPolyRef exception: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Queries polygons within a bounding box centered at position.
+        /// Like HB's NavMesh.QueryPolygons.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="center">Center of search area.</param>
+        /// <param name="extents">Search extents (half-dimensions).</param>
+        /// <param name="maxResults">Maximum polygons to return.</param>
+        /// <returns>Array of polygon references found.</returns>
+        public PolygonReference[] QueryPolygons(uint mapId, Vector3 center, Vector3 extents, int maxResults = 256)
+        {
+            if (!IsLoaded || maxResults <= 0)
+                return Array.Empty<PolygonReference>();
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var centerC = new NativeMethods.XYZ(center);
+                    var extentsC = new NativeMethods.XYZ(extents);
+
+                    // Allocate buffer for results
+                    ulong[] polyRefs = new ulong[maxResults];
+                    
+                    unsafe
+                    {
+                        fixed (ulong* ptr = polyRefs)
+                        {
+                            int count = NativeMethods.QueryPolygons(mapId, centerC, extentsC, 
+                                (IntPtr)ptr, maxResults);
+                            
+                            if (count <= 0)
+                                return Array.Empty<PolygonReference>();
+
+                            var results = new PolygonReference[count];
+                            for (int i = 0; i < count; i++)
+                                results[i] = new PolygonReference(polyRefs[i]);
+                            
+                            return results;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"QueryPolygons exception: {ex.Message}");
+                    return Array.Empty<PolygonReference>();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Finds local polygon neighbourhood around a starting polygon.
+        /// Useful for local obstacle detection and area analysis.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="startPoly">Starting polygon reference.</param>
+        /// <param name="center">Center position.</param>
+        /// <param name="radius">Search radius.</param>
+        /// <param name="maxResults">Maximum results.</param>
+        /// <returns>Array of polygon references in the neighbourhood.</returns>
+        public PolygonReference[] FindLocalNeighbourhood(uint mapId, PolygonReference startPoly, 
+            Vector3 center, float radius, int maxResults = 64)
+        {
+            if (!IsLoaded || !startPoly.IsValid || maxResults <= 0)
+                return Array.Empty<PolygonReference>();
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var centerC = new NativeMethods.XYZ(center);
+
+                    ulong[] polys = new ulong[maxResults];
+                    ulong[] parents = new ulong[maxResults];
+
+                    unsafe
+                    {
+                        fixed (ulong* polysPtr = polys)
+                        fixed (ulong* parentsPtr = parents)
+                        {
+                            int count = NativeMethods.FindLocalNeighbourhood(mapId, startPoly.Id, centerC, radius,
+                                (IntPtr)polysPtr, (IntPtr)parentsPtr, maxResults);
+
+                            if (count <= 0)
+                                return Array.Empty<PolygonReference>();
+
+                            var results = new PolygonReference[count];
+                            for (int i = 0; i < count; i++)
+                                results[i] = new PolygonReference(polys[i]);
+
+                            return results;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"FindLocalNeighbourhood exception: {ex.Message}");
+                    return Array.Empty<PolygonReference>();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets wall segments for a polygon (edges that are boundaries).
+        /// Useful for edge avoidance and MoveAwayFromEdges post-processing.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="polyRef">Polygon reference.</param>
+        /// <param name="maxSegments">Maximum segments to return.</param>
+        /// <returns>List of wall segments (start, end point pairs).</returns>
+        public (Vector3 start, Vector3 end)[] GetPolyWallSegments(uint mapId, PolygonReference polyRef, int maxSegments = 32)
+        {
+            if (!IsLoaded || !polyRef.IsValid || maxSegments <= 0)
+                return Array.Empty<(Vector3, Vector3)>();
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    NativeMethods.XYZ[] starts = new NativeMethods.XYZ[maxSegments];
+                    NativeMethods.XYZ[] ends = new NativeMethods.XYZ[maxSegments];
+
+                    unsafe
+                    {
+                        fixed (NativeMethods.XYZ* startsPtr = starts)
+                        fixed (NativeMethods.XYZ* endsPtr = ends)
+                        {
+                            int count = NativeMethods.GetPolyWallSegments(mapId, polyRef.Id,
+                                (IntPtr)startsPtr, (IntPtr)endsPtr, maxSegments);
+
+                            if (count <= 0)
+                                return Array.Empty<(Vector3, Vector3)>();
+
+                            var results = new (Vector3, Vector3)[count];
+                            for (int i = 0; i < count; i++)
+                            {
+                                results[i] = (starts[i].ToVector3(), ends[i].ToVector3());
+                            }
+
+                            return results;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"GetPolyWallSegments exception: {ex.Message}");
+                    return Array.Empty<(Vector3, Vector3)>();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Finds polygons within a circle around a point.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="center">Center position.</param>
+        /// <param name="radius">Search radius.</param>
+        /// <param name="maxResults">Maximum results.</param>
+        /// <returns>Array of polygon center positions.</returns>
+        public Vector3[] FindPolysAroundCircle(uint mapId, Vector3 center, float radius, int maxResults = 64)
+        {
+            if (!IsLoaded || maxResults <= 0)
+                return Array.Empty<Vector3>();
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var centerC = new NativeMethods.XYZ(center);
+                    NativeMethods.XYZ[] results = new NativeMethods.XYZ[maxResults];
+
+                    unsafe
+                    {
+                        fixed (NativeMethods.XYZ* ptr = results)
+                        {
+                            int count = NativeMethods.FindPolysAroundCircle(mapId, centerC, radius,
+                                (IntPtr)ptr, maxResults);
+
+                            if (count <= 0)
+                                return Array.Empty<Vector3>();
+
+                            var positions = new Vector3[count];
+                            for (int i = 0; i < count; i++)
+                                positions[i] = results[i].ToVector3();
+
+                            return positions;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"FindPolysAroundCircle exception: {ex.Message}");
+                    return Array.Empty<Vector3>();
+                }
+            }
+        }
+
+        #endregion
+
+        #region Sliced Pathfinding
+
+        /// <summary>
+        /// Initializes a sliced (async) path search.
+        /// Use UpdateSlicedFindPath() to incrementally compute the path.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="start">Start position.</param>
+        /// <param name="end">End position.</param>
+        /// <returns>True if initialization succeeded.</returns>
+        public bool InitSlicedFindPath(uint mapId, Vector3 start, Vector3 end)
+        {
+            if (!IsLoaded)
+                return false;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var startC = new NativeMethods.XYZ(start);
+                    var endC = new NativeMethods.XYZ(end);
+                    return NativeMethods.InitSlicedFindPath(mapId, startC, endC);
+                }
+                catch (Exception ex)
+                {
+                    Log($"InitSlicedFindPath exception: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates sliced pathfinding with iteration limit.
+        /// </summary>
+        /// <param name="maxIterations">Maximum iterations to perform.</param>
+        /// <returns>True if path search is complete or still in progress.</returns>
+        public bool UpdateSlicedFindPath(int maxIterations)
+        {
+            if (!IsLoaded)
+                return false;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    return NativeMethods.UpdateSlicedFindPath(maxIterations);
+                }
+                catch (Exception ex)
+                {
+                    Log($"UpdateSlicedFindPath exception: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates sliced pathfinding with time budget.
+        /// </summary>
+        /// <param name="msBudget">Time budget in milliseconds.</param>
+        /// <returns>True if path search is complete or still in progress.</returns>
+        public bool UpdateSlicedFindPathMs(float msBudget)
+        {
+            if (!IsLoaded)
+                return false;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    return NativeMethods.UpdateSlicedFindPathMs(msBudget);
+                }
+                catch (Exception ex)
+                {
+                    Log($"UpdateSlicedFindPathMs exception: {ex.Message}");
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Finalizes sliced path search and returns the path.
+        /// </summary>
+        /// <param name="maxPathSize">Maximum path size.</param>
+        /// <returns>Array of path points, or empty if failed.</returns>
+        public Vector3[] FinalizeSlicedFindPath(int maxPathSize = 256)
+        {
+            if (!IsLoaded)
+                return Array.Empty<Vector3>();
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    IntPtr pathPtr = NativeMethods.FinalizeSlicedFindPath(maxPathSize, out int length);
+                    if (pathPtr == IntPtr.Zero || length <= 0)
+                        return Array.Empty<Vector3>();
+
+                    try
+                    {
+                        var points = new Vector3[length];
+                        unsafe
+                        {
+                            NativeMethods.XYZ* ptr = (NativeMethods.XYZ*)pathPtr.ToPointer();
+                            for (int i = 0; i < length; i++)
+                            {
+                                points[i] = ptr[i].ToVector3();
+                            }
+                        }
+                        return points;
+                    }
+                    finally
+                    {
+                        NativeMethods.FreePathArr(pathPtr);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"FinalizeSlicedFindPath exception: {ex.Message}");
+                    return Array.Empty<Vector3>();
+                }
+            }
+        }
+
+        #endregion
+
+        #region Path Following
+
+        /// <summary>
+        /// Updates path following with raycast shortcuts.
+        /// Returns the new waypoint index to skip to if a shortcut is found.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="currentPos">Current position.</param>
+        /// <param name="path">Path points array.</param>
+        /// <param name="currentWaypointIndex">Current waypoint index.</param>
+        /// <param name="agentId">Agent ID for multi-agent support.</param>
+        /// <returns>New waypoint index (may be ahead if shortcut found).</returns>
+        public int UpdatePathFollowing(uint mapId, Vector3 currentPos, Vector3[] path, int currentWaypointIndex, int agentId = 0)
+        {
+            if (!IsLoaded || path == null || path.Length == 0)
+                return currentWaypointIndex;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var currentC = new NativeMethods.XYZ(currentPos);
+                    
+                    // Convert path to native array
+                    var nativePath = new NativeMethods.XYZ[path.Length];
+                    for (int i = 0; i < path.Length; i++)
+                        nativePath[i] = new NativeMethods.XYZ(path[i]);
+
+                    unsafe
+                    {
+                        fixed (NativeMethods.XYZ* pathPtr = nativePath)
+                        {
+                            return NativeMethods.UpdatePathFollowing(mapId, currentC, path.Length,
+                                (IntPtr)pathPtr, currentWaypointIndex, agentId);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"UpdatePathFollowing exception: {ex.Message}");
+                    return currentWaypointIndex;
+                }
+            }
+        }
+
+        #endregion
+
+        #region Statistics
+
+        /// <summary>
+        /// Gets current navigation statistics (internal use only).
+        /// HB WoD doesn't expose NavStats publicly.
+        /// </summary>
+        /// <returns>Navigation statistics.</returns>
+        internal NativeMethods.NavStats GetNavStats()
+        {
+            NativeMethods.GetNavStats(out var stats);
+            return stats;
+        }
+
+        /// <summary>
+        /// Resets navigation statistics counters.
+        /// </summary>
+        internal void ResetNavStats()
+        {
+            NativeMethods.ResetNavStats();
+        }
+
+        #endregion
+
+        #region Query Filter Settings
+
+        /// <summary>
+        /// Sets polygon include flags for pathfinding.
+        /// </summary>
+        /// <param name="flags">Include flags.</param>
+        public void SetIncludeFlags(ushort flags)
+        {
+            NativeMethods.SetIncludeFlags(flags);
+        }
+
+        /// <summary>
+        /// Sets polygon exclude flags for pathfinding.
+        /// </summary>
+        /// <param name="flags">Exclude flags.</param>
+        public void SetExcludeFlags(ushort flags)
+        {
+            NativeMethods.SetExcludeFlags(flags);
+        }
+
+        /// <summary>
+        /// Sets path randomization for more natural movement.
+        /// </summary>
+        /// <param name="enabled">Enable randomization.</param>
+        /// <param name="magnitude">Randomization magnitude (0-1).</param>
+        public void SetPathRandomization(bool enabled, float magnitude = 0.05f)
+        {
+            NativeMethods.SetPathRandomization(enabled, magnitude);
+        }
+
+        /// <summary>
+        /// Enables or disables tile streaming mode.
+        /// </summary>
+        /// <param name="enabled">Enable tile streaming.</param>
+        public void SetTileStreamingEnabled(bool enabled)
+        {
+            NativeMethods.SetTileStreamingEnabled(enabled);
+        }
+
+        /// <summary>
+        /// Ensures tiles around position are loaded (HB-style streaming).
+        /// Use this before pathfinding to ensure navmesh coverage.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="position">Center position.</param>
+        /// <param name="ring">Tile ring radius (2 = 5x5 tiles).</param>
+        public void EnsureTilesAroundPosition(uint mapId, Vector3 position, int ring = 2)
+        {
+            if (!IsLoaded)
+                return;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var posC = new NativeMethods.XYZ(position);
+                    NativeMethods.EnsureTiles(mapId, posC, ring);
+                }
+                catch (Exception ex)
+                {
+                    Log($"EnsureTilesAroundPosition exception: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Prefetches tiles in movement direction for smoother streaming.
+        /// Call this regularly during movement for best performance.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="position">Current position.</param>
+        /// <param name="velocity">Current velocity/movement direction.</param>
+        /// <param name="ring">Base tile ring radius.</param>
+        public void EnsureTilesDirectional(uint mapId, Vector3 position, Vector3 velocity, int ring = 2)
+        {
+            if (!IsLoaded)
+                return;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    var posC = new NativeMethods.XYZ(position);
+                    var velC = new NativeMethods.XYZ(velocity);
+                    NativeMethods.EnsureTilesDirectional(mapId, posC, velC, ring);
+                }
+                catch (Exception ex)
+                {
+                    Log($"EnsureTilesDirectional exception: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets direct pointer to dtNavMeshQuery for advanced NavBridge use.
+        /// WARNING: Use with caution - direct Detour access.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <returns>Pointer to dtNavMeshQuery, or IntPtr.Zero if unavailable.</returns>
+        public IntPtr GetNavMeshQueryPtr(uint mapId)
+        {
+            if (!IsLoaded)
+                return IntPtr.Zero;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    return NativeMethods.GetNavMeshQuery(mapId);
+                }
+                catch (Exception ex)
+                {
+                    Log($"GetNavMeshQueryPtr exception: {ex.Message}");
+                    return IntPtr.Zero;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets direct pointer to default dtQueryFilter for advanced use.
+        /// WARNING: Use with caution - direct Detour access.
+        /// </summary>
+        /// <returns>Pointer to dtQueryFilter.</returns>
+        public IntPtr GetDefaultFilterPtr()
+        {
+            if (!IsLoaded)
+                return IntPtr.Zero;
+
+            lock (_meshLock)
+            {
+                try
+                {
+                    return NativeMethods.GetDefaultFilter();
+                }
+                catch (Exception ex)
+                {
+                    Log($"GetDefaultFilterPtr exception: {ex.Message}");
+                    return IntPtr.Zero;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Checks if a specific tile is loaded.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <param name="tileX">Tile X coordinate.</param>
+        /// <param name="tileY">Tile Y coordinate.</param>
+        /// <returns>True if tile is loaded.</returns>
+        public bool IsTileLoaded(uint mapId, int tileX, int tileY)
+        {
+            return NativeMethods.IsTileLoaded(mapId, tileX, tileY);
+        }
+
+        /// <summary>
+        /// Gets count of loaded tiles for a map.
+        /// </summary>
+        /// <param name="mapId">Map ID.</param>
+        /// <returns>Number of loaded tiles.</returns>
+        public int GetLoadedTilesCount(uint mapId)
+        {
+            return NativeMethods.GetLoadedTilesCount(mapId);
         }
 
         #endregion
