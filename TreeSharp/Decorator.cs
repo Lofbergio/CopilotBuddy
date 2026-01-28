@@ -61,6 +61,13 @@ namespace TreeSharp
                 yield break;
             }
 
+            // Check for null decorated child
+            if (DecoratedChild == null)
+            {
+                yield return RunStatus.Failure;
+                yield break;
+            }
+
             DecoratedChild.Start(context);
             while (DecoratedChild.Tick(context) == RunStatus.Running)
             {

@@ -48,6 +48,10 @@ namespace TreeSharp
                 // Keep in mind; we ARE an enumerator here. So we do execute each child in tandem.
                 foreach (Composite node in Children)
                 {
+                    // Skip null children to prevent NullReferenceException
+                    if (node == null)
+                        continue;
+                        
                     // All behaviors are 'Decorators' by default. This just makes it simple.
                     // and allows us to not have another class that is nothing but a Decorator : Behavior
                     // Though; it may be a good idea in the future to add.

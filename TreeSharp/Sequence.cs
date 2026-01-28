@@ -28,6 +28,10 @@ namespace TreeSharp
             }
             foreach (Composite node in Children)
             {
+                // Skip null children to prevent NullReferenceException
+                if (node == null)
+                    continue;
+                    
                 node.Start(context);
                 while (node.Tick(context) == RunStatus.Running)
                 {

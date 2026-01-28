@@ -35,9 +35,7 @@ namespace TreeSharp
             try
             {
                 if (!_enumerator.MoveNext())
-                {
                     throw new ApplicationException("Iterator completed unexpectedly - did Execute() yield all status values correctly?");
-                }
 
                 LastStatus = _enumerator.Current;
             }
@@ -70,7 +68,23 @@ namespace TreeSharp
         public virtual void Start(object context)
         {
             LastStatus = null;
-            _enumerator = Execute(context).GetEnumerator();
+            
+            try
+            {
+                var executeResult = Execute(context);
+                if (executeResult == null)
+                    throw new ApplicationException($"Execute() returned null for {GetType().Name}");
+                
+                _enumerator = executeResult.GetEnumerator();
+                
+                if (_enumerator == null)
+                    throw new ApplicationException($"GetEnumerator() returned null for {GetType().Name}");
+            }
+            catch (Exception ex)
+            {
+                Styx.Helpers.Logging.WriteException(ex);
+                throw;
+            }
         }
 
         public virtual void Stop(object context)
