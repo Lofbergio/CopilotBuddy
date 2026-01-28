@@ -20,12 +20,12 @@ namespace Styx.Logic.Questing;
 
 public abstract class CustomForcedBehavior
 {
-  private bool bool_0;
-  private List<string> list_0 = new List<string>();
-  private readonly Dictionary<string, string> dictionary_0;
-  private Composite composite_0;
-  private readonly string string_0;
-  private static Regex regex_0 = new Regex("^\\$[^:]+:[:]?[ \t]*([^$]+)[ \t]*\\$$");
+  private bool _hasAttributeProblem;
+  private List<string> _processedAttributes = new List<string>();
+  private readonly Dictionary<string, string> _args;
+  private Composite _behaviorTreeHook;
+  private readonly string _elementName;
+  private static Regex VariableSubstitutionRegex = new Regex("^\\$[^:]+:[:]?[ \t]*([^$]+)[ \t]*\\$$");
 
   // Helper class to replace Class587<T1, T2> - a simple tuple for attribute name pairs
   private sealed class AttributeNamePair<T1, T2>
@@ -47,7 +47,7 @@ public abstract class CustomForcedBehavior
     string[] attributeNameAliases)
     where T : class
   {
-    return (T) this.method_1<T>(attributeName, isAttributeRequired, constraints, attributeNameAliases);
+    return (T) this.GetAttributeValueAsObject<T>(attributeName, isAttributeRequired, constraints, attributeNameAliases);
   }
 
   public T[] GetAttributeAsArray<T>(
@@ -58,14 +58,14 @@ public abstract class CustomForcedBehavior
     char[] separatorCharacters)
   {
     if (typeof (T) == typeof (WoWPoint))
-      return (T[]) this.method_2(attributeName, isAttributeRequired, attributeNameAliases);
+      return (T[]) this.ParseWoWPointArray(attributeName, isAttributeRequired, attributeNameAliases);
     constraints = constraints ?? (CustomForcedBehavior.IConstraintChecker<T>) new CustomForcedBehavior.ConstrainTo.Anything<T>();
     char[] chArray = separatorCharacters;
     if (chArray == null)
       chArray = new char[3]{ ' ', ',', ';' };
     separatorCharacters = chArray;
     bool flag = false;
-    string str = this.method_7(isAttributeRequired, attributeName, attributeNameAliases);
+    string str = this.FindAttributeKeyOrAlias(isAttributeRequired, attributeName, attributeNameAliases);
     List<T> objList = new List<T>();
     if (str != null && this.Args.ContainsKey(str))
     {
@@ -74,7 +74,7 @@ public abstract class CustomForcedBehavior
         T obj;
         try
         {
-          obj = this.method_5<T>(str, string_2);
+          obj = this.ConvertStringToType<T>(str, string_2);
         }
         catch (Exception ex)
         {
@@ -108,7 +108,7 @@ public abstract class CustomForcedBehavior
     string[] attributeNameAliases)
     where T : struct
   {
-    return (T?) this.method_1<T>(attributeName, isAttributeRequired, constraints, attributeNameAliases);
+    return (T?) this.GetAttributeValueAsObject<T>(attributeName, isAttributeRequired, constraints, attributeNameAliases);
   }
 
   public T[] GetNumberedAttributesAsArray<T>(
@@ -126,8 +126,8 @@ public abstract class CustomForcedBehavior
     List<T> list_1 = new List<T>();
 
     // Filter keys that match the base name pattern
-    foreach (string string_1 in this.Args.Keys.Where<string>(key => capturedThis.method_4(capturedBaseName, key, isWoWPoint)))
-      flag |= this.method_0<T>(string_1, constraints, list_1);
+    foreach (string string_1 in this.Args.Keys.Where<string>(key => capturedThis.IsKeyMatchingBasePattern(capturedBaseName, key, isWoWPoint)))
+      flag |= this.TryProcessSingleNumberedAttribute<T>(string_1, constraints, list_1);
 
     if (aliasBaseNames != null)
     {
@@ -136,9 +136,9 @@ public abstract class CustomForcedBehavior
         .SelectMany<string, string, AttributeNamePair<string, string>>(
           (Func<string, IEnumerable<string>>) (alias => (IEnumerable<string>) this.Args.Keys),
           (Func<string, string, AttributeNamePair<string, string>>) ((alias, key) => new AttributeNamePair<string, string>(alias, key)))
-        .Where<AttributeNamePair<string, string>>(pair => capturedThis.method_4(pair.aliasBaseName, pair.attributeName, isWoWPoint))
+        .Where<AttributeNamePair<string, string>>(pair => capturedThis.IsKeyMatchingBasePattern(pair.aliasBaseName, pair.attributeName, isWoWPoint))
         .Select<AttributeNamePair<string, string>, string>((Func<AttributeNamePair<string, string>, string>) (pair => pair.attributeName)))
-        flag |= this.method_0<T>(string_1, constraints, list_1);
+        flag |= this.TryProcessSingleNumberedAttribute<T>(string_1, constraints, list_1);
     }
 
     if (list_1.Count < countRequired)
@@ -155,7 +155,7 @@ public abstract class CustomForcedBehavior
     return list_1.ToArray();
   }
 
-  private bool method_0<T>(
+  private bool TryProcessSingleNumberedAttribute<T>(
     string string_1,
     CustomForcedBehavior.IConstraintChecker<T> iconstraintChecker_0,
     List<T> list_1)
@@ -168,23 +168,23 @@ public abstract class CustomForcedBehavior
       if (!string_1.EndsWith("X") && this.Args.ContainsKey(string_1_1 + "X"))
         return false;
     }
-    object obj = this.method_1<T>(string_1_1, false, iconstraintChecker_0, (string[]) null);
+    object obj = this.GetAttributeValueAsObject<T>(string_1_1, false, iconstraintChecker_0, (string[]) null);
     if (obj == null)
       return true;
     list_1.Add((T) obj);
     return false;
   }
 
-  private object method_1<T>(
+  private object GetAttributeValueAsObject<T>(
     string string_1,
     bool bool_1,
     CustomForcedBehavior.IConstraintChecker<T> iconstraintChecker_0,
     string[] string_2)
   {
     if (typeof (T) == typeof (WoWPoint))
-      return this.method_3(string_1, bool_1, string_2);
+      return this.ParseWoWPointArray(string_1, bool_1, string_2);
     iconstraintChecker_0 = iconstraintChecker_0 ?? (CustomForcedBehavior.IConstraintChecker<T>) new CustomForcedBehavior.ConstrainTo.Anything<T>();
-    string str = this.method_7(bool_1, string_1, string_2);
+    string str = this.FindAttributeKeyOrAlias(bool_1, string_1, string_2);
     if (str == null || !this.Args.ContainsKey(str))
       return (object) null;
     string string_2_1 = this.Args[str];
@@ -192,7 +192,7 @@ public abstract class CustomForcedBehavior
     object obj2;
     try
     {
-      obj1 = this.method_5<T>(str, string_2_1);
+      obj1 = this.ConvertStringToType<T>(str, string_2_1);
       goto label_7;
     }
     catch (Exception ex)
@@ -210,10 +210,10 @@ label_7:
     return (object) null;
   }
 
-  private object method_2(string string_1, bool bool_1, string[] string_2)
+  private object ParseWoWPointArray(string string_1, bool bool_1, string[] string_2)
   {
     bool flag = false;
-    string str1 = this.method_7(bool_1, string_1, string_2);
+    string str1 = this.FindAttributeKeyOrAlias(bool_1, string_1, string_2);
     List<WoWPoint> woWpointList = new List<WoWPoint>();
     char[] separator1 = new char[2]{ ' ', ',' };
     char[] separator2 = new char[2]{ '|', ';' };
@@ -232,7 +232,7 @@ label_7:
           double? nullable1 = new double?();
           try
           {
-            nullable1 = new double?(this.method_5<double>(str1, strArray[0]));
+            nullable1 = new double?(this.ConvertStringToType<double>(str1, strArray[0]));
           }
           catch (Exception ex)
           {
@@ -241,7 +241,7 @@ label_7:
           double? nullable2 = new double?();
           try
           {
-            nullable2 = new double?(this.method_5<double>(str1, strArray[1]));
+            nullable2 = new double?(this.ConvertStringToType<double>(str1, strArray[1]));
           }
           catch (Exception ex)
           {
@@ -250,7 +250,7 @@ label_7:
           double? nullable3 = new double?();
           try
           {
-            nullable3 = new double?(this.method_5<double>(str1, strArray[2]));
+            nullable3 = new double?(this.ConvertStringToType<double>(str1, strArray[2]));
           }
           catch (Exception ex)
           {
@@ -271,7 +271,7 @@ label_7:
     return (object) woWpointList.ToArray();
   }
 
-  private object method_3(string string_1_1, bool bool_1, string[] string_2)
+  private object ParseSingleWoWPoint(string string_1_1, bool bool_1, string[] string_2)
   {
     if (string_1_1 == null)
       string_1_1 = "";
@@ -284,9 +284,9 @@ label_7:
       string_2_2 = ((IEnumerable<string>) string_2).Select<string, string>((Func<string, string>) (string_1_3 => string_1_3 + "Y")).ToArray<string>();
       string_2_3 = ((IEnumerable<string>) string_2).Select<string, string>((Func<string, string>) (string_1_4 => string_1_4 + "Z")).ToArray<string>();
     }
-    string str1 = this.method_7(false, string_1_1 + "X", string_2_1);
-    string str2 = this.method_7(false, string_1_1 + "Y", string_2_2);
-    string str3 = this.method_7(false, string_1_1 + "Z", string_2_3);
+    string str1 = this.FindAttributeKeyOrAlias(false, string_1_1 + "X", string_2_1);
+    string str2 = this.FindAttributeKeyOrAlias(false, string_1_1 + "Y", string_2_2);
+    string str3 = this.FindAttributeKeyOrAlias(false, string_1_1 + "Z", string_2_3);
     string str4 = str1 ?? str2 ?? str3;
     string str5;
     if (str4 != null)
@@ -296,13 +296,13 @@ label_7:
     }
     else
       str5 = string_1_1;
-    double? nullable1 = (double?) this.method_1<double>(str5 + "X", bool_1, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
-    double? nullable2 = (double?) this.method_1<double>(str5 + "Y", bool_1, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
-    double? nullable3 = (double?) this.method_1<double>(str5 + "Z", bool_1, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
+    double? nullable1 = (double?) this.GetAttributeValueAsObject<double>(str5 + "X", bool_1, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
+    double? nullable2 = (double?) this.GetAttributeValueAsObject<double>(str5 + "Y", bool_1, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
+    double? nullable3 = (double?) this.GetAttributeValueAsObject<double>(str5 + "Z", bool_1, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
     return nullable1.HasValue && nullable2.HasValue && nullable3.HasValue ? (object) new WoWPoint(nullable1.Value, nullable2.Value, nullable3.Value) : (object) null;
   }
 
-  private bool method_4(string string_1, string string_2, bool bool_1)
+  private bool IsKeyMatchingBasePattern(string string_1, string string_2, bool bool_1)
   {
     if (!string_2.StartsWith(string_1))
       return false;
@@ -312,7 +312,7 @@ label_7:
     return s.Length == 0 || int.TryParse(s, out int _);
   }
 
-  private T method_5<T>(string string_1, string string_2)
+  private T ConvertStringToType<T>(string string_1, string string_2)
   {
     Type type = typeof (T);
     if (type == typeof (bool))
@@ -361,18 +361,18 @@ label_7:
 
   public bool IsAttributeProblem
   {
-    get => this.bool_0;
+    get => this._hasAttributeProblem;
     protected set
     {
       if (!value)
         return;
-      this.bool_0 = true;
+      this._hasAttributeProblem = true;
     }
   }
 
   public void OnStart_HandleAttributeProblem()
   {
-    this.method_9();
+    this.WarnUnusedAttributes();
     if (this.IsAttributeProblem)
     {
       this.LogMessage("error", "Stopping Honorbuddy.  Please repair the profile!");
@@ -419,7 +419,7 @@ label_7:
       }
     }
     messageColor = new Color?(messageColor ?? Color.DarkGray);
-    string message = $"[{this.string_0}{messageType}{str}]: " + string.Format(format, args);
+    string message = $"[{this._elementName}{messageType}{str}]: " + string.Format(format, args);
     if (messageType == "(debug)")
       Logging.WriteDebug(messageColor.Value, message);
     else
@@ -451,7 +451,7 @@ label_7:
     return (questCompleteRequirement != CustomForcedBehavior.QuestCompleteRequirement.Complete || flag) && (questCompleteRequirement != CustomForcedBehavior.QuestCompleteRequirement.NotComplete || !flag);
   }
 
-  private int method_6(string string_1_1, string[] string_2)
+  private int CountAttributeAliasesFound(string string_1_1, string[] string_2)
   {
     int num = 0;
     if (!string.IsNullOrEmpty(string_1_1))
@@ -461,10 +461,10 @@ label_7:
     return num;
   }
 
-  private string method_7(bool bool_1, string string_1_1, string[] string_2)
+  private string FindAttributeKeyOrAlias(bool bool_1, string string_1_1, string[] string_2)
   {
-    this.method_8(string_1_1, string_2);
-    if (this.method_6(string_1_1, string_2) > 1)
+    this.MarkAttributeAsProcessed(string_1_1, string_2);
+    if (this.CountAttributeAliasesFound(string_1_1, string_2) > 1)
     {
       List<string> stringList = new List<string>();
       stringList.Add(string_1_1);
@@ -493,22 +493,22 @@ label_7:
     return (string) null;
   }
 
-  private void method_8(string string_1, string[] string_2)
+  private void MarkAttributeAsProcessed(string string_1, string[] string_2)
   {
-    if (!string.IsNullOrEmpty(string_1) && !this.list_0.Contains(string_1))
-      this.list_0.Add(string_1);
+    if (!string.IsNullOrEmpty(string_1) && !this._processedAttributes.Contains(string_1))
+      this._processedAttributes.Add(string_1);
     if (string_2 == null)
       return;
     foreach (string str in string_2)
     {
-      if (!this.list_0.Contains(str))
-        this.list_0.Add(str);
+      if (!this._processedAttributes.Contains(str))
+        this._processedAttributes.Add(str);
     }
   }
 
-  private void method_9()
+  private void WarnUnusedAttributes()
   {
-    foreach (object obj in (IEnumerable<string>) this.Args.Keys.Where<string>((Func<string, bool>) (string_1 => !this.list_0.Contains(string_1))).OrderBy<string, string>((Func<string, string>) (string_1 => string_1)))
+    foreach (object obj in (IEnumerable<string>) this.Args.Keys.Where<string>((Func<string, bool>) (string_1 => !this._processedAttributes.Contains(string_1))).OrderBy<string, string>((Func<string, string>) (string_1 => string_1)))
       this.LogMessage("warning", "Attribute '{0}' is not recognized by this behavior--ignoring it.", obj);
   }
 
@@ -518,21 +518,21 @@ label_7:
 
   protected CustomForcedBehavior(Dictionary<string, string> args)
   {
-    this.dictionary_0 = args;
-    this.string_0 = $"{this.GetType().Name}-v{this.method_10(this.SubversionRevision)}";
+    this._args = args;
+    this._elementName = $"{this.GetType().Name}-v{this.ExtractVersionFromSubversionTag(this.SubversionRevision)}";
   }
 
   public XElement Element { get; set; }
 
-  public Dictionary<string, string> Args => this.dictionary_0;
+  public Dictionary<string, string> Args => this._args;
 
   public Composite Branch
   {
     get
     {
-      Composite branch = this.composite_0;
+      Composite branch = this._behaviorTreeHook;
       if ((object) branch == null)
-        branch = this.composite_0 = this.CreateBehavior();
+        branch = this._behaviorTreeHook = this.CreateBehavior();
       return branch;
     }
   }
@@ -558,9 +558,9 @@ label_7:
   {
   }
 
-  private string method_10(string string_1)
+  private string ExtractVersionFromSubversionTag(string string_1)
   {
-    return CustomForcedBehavior.regex_0.Replace(string_1, "$1").Trim();
+    return CustomForcedBehavior.VariableSubstitutionRegex.Replace(string_1, "$1").Trim();
   }
 
   [Obsolete("Use GetAttributeAsNullable<boolean>(attributeName, isAttributeRequired, null, attributeNameAliases), instead")]
@@ -569,8 +569,8 @@ label_7:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<boolean>(\"{attributeName}\", {isAttributeRequired}, null, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
-    string str1 = this.method_7(isAttributeRequired, attributeName, attributeNameAliases);
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<boolean>(\"{attributeName}\", {isAttributeRequired}, null, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    string str1 = this.FindAttributeKeyOrAlias(isAttributeRequired, attributeName, attributeNameAliases);
     if (str1 == null)
       return new bool?();
     string str2 = this.Args[str1];
@@ -595,7 +595,7 @@ label_7:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<Color>(\"{attributeName}\", {isAttributeRequired}, null, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<Color>(\"{attributeName}\", {isAttributeRequired}, null, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     KnownColor? attributeAsEnum = this.GetAttributeAsEnum<KnownColor>(attributeName, isAttributeRequired, attributeNameAliases);
     return attributeAsEnum.HasValue ? new Color?(Color.FromKnownColor(attributeAsEnum.Value)) : new Color?();
   }
@@ -608,9 +608,9 @@ label_7:
     double maxValue,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<double>(\"{attributeName}\", {isAttributeRequired}, {(minValue != double.MinValue || maxValue != double.MaxValue ? (object) $"new ConstrainTo.Domain<double>({minValue}, {maxValue})" : (object) "null")}, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
-    string str = this.method_7(isAttributeRequired, attributeName, attributeNameAliases);
-    return str != null ? this.method_13(str, this.Args[str], minValue, maxValue) : new double?();
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<double>(\"{attributeName}\", {isAttributeRequired}, {(minValue != double.MinValue || maxValue != double.MaxValue ? (object) $"new ConstrainTo.Domain<double>({minValue}, {maxValue})" : (object) "null")}, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    string str = this.FindAttributeKeyOrAlias(isAttributeRequired, attributeName, attributeNameAliases);
+    return str != null ? this.ParseDoubleWithRange(str, this.Args[str], minValue, maxValue) : new double?();
   }
 
   [Obsolete("Use GetAttributeAsArray<double>(attributeName, isAttributeRequired, new ConstrainTo.Domain<double>(lowerBound, upperBound), attributeNameAliases, null), instead")]
@@ -621,8 +621,8 @@ label_7:
     double maxValue,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsArray<double>(\"{attributeName}\", {isAttributeRequired}, {(minValue != double.MinValue || maxValue != double.MaxValue ? (object) $"new ConstrainTo.Domain<double>({minValue}, {maxValue})" : (object) "null")}, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")}, null)");
-    string str1 = this.method_7(isAttributeRequired, attributeName, attributeNameAliases);
+    this.LogDeprecatedMethodUsage($"GetAttributeAsArray<double>(\"{attributeName}\", {isAttributeRequired}, {(minValue != double.MinValue || maxValue != double.MaxValue ? (object) $"new ConstrainTo.Domain<double>({minValue}, {maxValue})" : (object) "null")}, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")}, null)");
+    string str1 = this.FindAttributeKeyOrAlias(isAttributeRequired, attributeName, attributeNameAliases);
     if (str1 == null)
       return (double[]) null;
     List<double> doubleList = new List<double>();
@@ -631,7 +631,7 @@ label_7:
     char[] separator = new char[2]{ ' ', ',' };
     foreach (string string_2 in str2.Split(separator, StringSplitOptions.RemoveEmptyEntries))
     {
-      double? nullable = this.method_13(str1, string_2, minValue, maxValue);
+      double? nullable = this.ParseDoubleWithRange(str1, string_2, minValue, maxValue);
       if (nullable.HasValue)
         doubleList.Add(nullable.Value);
       else
@@ -647,11 +647,11 @@ label_7:
     string[] attributeNameAliases)
     where T : struct
   {
-    this.method_17($"GetAttributeAsNullable<{typeof (T).GetType().Name}>(\"{attributeName}\", {isAttributeRequired}, null, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<{typeof (T).GetType().Name}>(\"{attributeName}\", {isAttributeRequired}, null, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     Type enumType = typeof (T);
     if (!enumType.IsEnum)
       throw new ArgumentException("Type parameter must be an enum.");
-    string str = this.method_7(isAttributeRequired, attributeName, attributeNameAliases);
+    string str = this.FindAttributeKeyOrAlias(isAttributeRequired, attributeName, attributeNameAliases);
     if (str == null)
       return new T?();
     T? attributeAsEnum;
@@ -683,7 +683,7 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.FactionId, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.FactionId, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     return this.GetAttributeAsInteger(attributeName, isAttributeRequired, 1, int.MaxValue, attributeNameAliases);
   }
 
@@ -693,7 +693,7 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.HotbarButton, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.HotbarButton, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     return this.GetAttributeAsInteger(attributeName, isAttributeRequired, 1, 12, attributeNameAliases);
   }
 
@@ -705,9 +705,9 @@ label_10:
     int maxValue,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, {(minValue != int.MinValue || maxValue != int.MaxValue ? (object) $"new ConstrainTo.Domain<int>({minValue}, {maxValue})" : (object) "null")}, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
-    string str = this.method_7(isAttributeRequired, attributeName, attributeNameAliases);
-    return str != null ? this.method_14(str, this.Args[str], minValue, maxValue) : new int?();
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, {(minValue != int.MinValue || maxValue != int.MaxValue ? (object) $"new ConstrainTo.Domain<int>({minValue}, {maxValue})" : (object) "null")}, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    string str = this.FindAttributeKeyOrAlias(isAttributeRequired, attributeName, attributeNameAliases);
+    return str != null ? this.ParseIntWithRange(str, this.Args[str], minValue, maxValue) : new int?();
   }
 
   [Obsolete("Use GetAttributeAsArray<int>(attributeName, isAttributeRequired, new ConstrainTo.Domain<int>(lowerBound, upperBound), attributeNameAliases, null), instead")]
@@ -718,8 +718,8 @@ label_10:
     int maxValue,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsArray<int>(\"{attributeName}\", {isAttributeRequired}, {(minValue != int.MinValue || maxValue != int.MaxValue ? (object) $"new ConstrainTo.Domain<int>({minValue}, {maxValue})" : (object) "null")}, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")}, null)");
-    string str1 = this.method_7(isAttributeRequired, attributeName, attributeNameAliases);
+    this.LogDeprecatedMethodUsage($"GetAttributeAsArray<int>(\"{attributeName}\", {isAttributeRequired}, {(minValue != int.MinValue || maxValue != int.MaxValue ? (object) $"new ConstrainTo.Domain<int>({minValue}, {maxValue})" : (object) "null")}, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")}, null)");
+    string str1 = this.FindAttributeKeyOrAlias(isAttributeRequired, attributeName, attributeNameAliases);
     if (str1 == null)
       return (int[]) null;
     bool flag = false;
@@ -728,7 +728,7 @@ label_10:
     char[] separator = new char[2]{ ' ', ',' };
     foreach (string string_2 in str2.Split(separator, StringSplitOptions.RemoveEmptyEntries))
     {
-      int? nullable = this.method_14(str1, string_2, minValue, maxValue);
+      int? nullable = this.ParseIntWithRange(str1, string_2, minValue, maxValue);
       if (nullable.HasValue)
         intList.Add(nullable.Value);
       else
@@ -743,7 +743,7 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.ItemId, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.ItemId, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     return this.GetAttributeAsInteger(attributeName, isAttributeRequired, 1, int.MaxValue, attributeNameAliases);
   }
 
@@ -753,7 +753,7 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.MobId, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.MobId, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     return this.GetAttributeAsInteger(attributeName, isAttributeRequired, 1, int.MaxValue, attributeNameAliases);
   }
 
@@ -763,7 +763,7 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.RepeatCount, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.RepeatCount, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     return this.GetAttributeAsInteger(attributeName, isAttributeRequired, 1, 1000, attributeNameAliases);
   }
 
@@ -773,7 +773,7 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.QuestId(this), {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.QuestId(this), {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     int? attributeAsInteger = this.GetAttributeAsInteger(attributeName, isAttributeRequired, 0, int.MaxValue, attributeNameAliases);
     if (!attributeAsInteger.HasValue || attributeAsInteger.Value != 0)
       return attributeAsInteger;
@@ -787,7 +787,7 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<double>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.Range, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<double>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.Range, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     return this.GetAttributeAsInteger(attributeName, isAttributeRequired, 1, 10000, attributeNameAliases);
   }
 
@@ -797,7 +797,7 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.SpellId, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.SpellId, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     return this.GetAttributeAsInteger(attributeName, isAttributeRequired, 1, int.MaxValue, attributeNameAliases);
   }
 
@@ -807,8 +807,8 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAs<string>(\"{attributeName}\", {isAttributeRequired}, null, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
-    string key = this.method_7(isAttributeRequired, attributeName, attributeNameAliases);
+    this.LogDeprecatedMethodUsage($"GetAttributeAs<string>(\"{attributeName}\", {isAttributeRequired}, null, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    string key = this.FindAttributeKeyOrAlias(isAttributeRequired, attributeName, attributeNameAliases);
     return key != null ? this.Args[key] : (string) null;
   }
 
@@ -818,7 +818,7 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAs<string>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.StringNonEmpty, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAs<string>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.StringNonEmpty, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     string attributeAsString = this.GetAttributeAsString(attributeName, isAttributeRequired, attributeNameAliases);
     if (attributeAsString == null || !string.IsNullOrEmpty(attributeAsString))
       return attributeAsString;
@@ -834,7 +834,7 @@ label_10:
     string[] allowedValues,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAs<string>(\"{attributeName}\", {isAttributeRequired}, ConstrainTo.SpecificValues<string>(ALLOWED_VALUES), {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAs<string>(\"{attributeName}\", {isAttributeRequired}, ConstrainTo.SpecificValues<string>(ALLOWED_VALUES), {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     string attributeAsString = this.GetAttributeAsString(attributeName, isAttributeRequired, attributeNameAliases);
     if (attributeAsString == null || ((IEnumerable<string>) allowedValues).Contains<string>(attributeAsString))
       return attributeAsString;
@@ -848,7 +848,7 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.Milliseconds, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.Milliseconds, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     return this.GetAttributeAsInteger(attributeName, isAttributeRequired, 0, int.MaxValue, attributeNameAliases);
   }
 
@@ -860,7 +860,7 @@ label_10:
   {
     if (attributeBaseName == null)
       attributeBaseName = "";
-    this.method_17($"GetAttributeAsNullable<WoWPoint>(\"{attributeBaseName}\", {isAttributeRequired}, ConstrainAs.WoWPointNonEmpty, {(attributeBaseNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<WoWPoint>(\"{attributeBaseName}\", {isAttributeRequired}, ConstrainAs.WoWPointNonEmpty, {(attributeBaseNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
     string[] string_2_1 = (string[]) null;
     string[] string_2_2 = (string[]) null;
     string[] string_2_3 = (string[]) null;
@@ -870,9 +870,9 @@ label_10:
       string_2_2 = ((IEnumerable<string>) attributeBaseNameAliases).Select<string, string>((Func<string, string>) (string_1 => string_1 + "Y")).ToArray<string>();
       string_2_3 = ((IEnumerable<string>) attributeBaseNameAliases).Select<string, string>((Func<string, string>) (string_1 => string_1 + "Z")).ToArray<string>();
     }
-    string str1 = this.method_7(false, attributeBaseName + "X", string_2_1);
-    string str2 = this.method_7(false, attributeBaseName + "Y", string_2_2);
-    string str3 = this.method_7(false, attributeBaseName + "Z", string_2_3);
+    string str1 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "X", string_2_1);
+    string str2 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "Y", string_2_2);
+    string str3 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "Z", string_2_3);
     string str4 = str1 ?? str2 ?? str3;
     string str5;
     if (str4 != null)
@@ -894,8 +894,8 @@ label_10:
     bool isAttributeRequired,
     string[] attributeNameAliases)
   {
-    this.method_17($"GetAttributeAsArray<WoWPoint>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.WoWPointNonEmpty, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")}, null)");
-    string str1 = this.method_7(isAttributeRequired, attributeName, attributeNameAliases);
+    this.LogDeprecatedMethodUsage($"GetAttributeAsArray<WoWPoint>(\"{attributeName}\", {isAttributeRequired}, ConstrainAs.WoWPointNonEmpty, {(attributeNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")}, null)");
+    string str1 = this.FindAttributeKeyOrAlias(isAttributeRequired, attributeName, attributeNameAliases);
     if (str1 == null)
       return (WoWPoint[]) null;
     bool flag = false;
@@ -912,9 +912,9 @@ label_10:
       }
       else
       {
-        double? nullable1 = this.method_13(str1, strArray[0], double.MinValue, double.MaxValue);
-        double? nullable2 = this.method_13(str1, strArray[1], double.MinValue, double.MaxValue);
-        double? nullable3 = this.method_13(str1, strArray[2], double.MinValue, double.MaxValue);
+        double? nullable1 = this.ParseDoubleWithRange(str1, strArray[0], double.MinValue, double.MaxValue);
+        double? nullable2 = this.ParseDoubleWithRange(str1, strArray[1], double.MinValue, double.MaxValue);
+        double? nullable3 = this.ParseDoubleWithRange(str1, strArray[2], double.MinValue, double.MaxValue);
         if (nullable1.HasValue && nullable2.HasValue && nullable3.HasValue)
           woWpointList.Add(new WoWPoint(nullable1.Value, nullable2.Value, nullable3.Value));
         else
@@ -926,7 +926,7 @@ label_10:
     return !flag ? woWpointList.ToArray() : (WoWPoint[]) null;
   }
 
-  private bool method_11(string string_1, string string_2)
+  private bool IsKeyMatchingBaseName(string string_1, string string_2)
   {
     if (!string_2.StartsWith(string_1))
       return false;
@@ -934,7 +934,7 @@ label_10:
     return s.Length == 0 || int.TryParse(s, out int _);
   }
 
-  private void method_12(
+  private void ProcessNumberedIntegerAttributes(
     IEnumerable<string> ienumerable_0,
     string string_1,
     int int_0,
@@ -943,8 +943,8 @@ label_10:
   {
     foreach (string string_1_1 in ienumerable_0)
     {
-      string str = this.method_7(false, string_1_1, (string[]) null);
-      int? nullable = this.method_14(str, this.Args[str], int_0, int_1);
+      string str = this.FindAttributeKeyOrAlias(false, string_1_1, (string[]) null);
+      int? nullable = this.ParseIntWithRange(str, this.Args[str], int_0, int_1);
       if (nullable.HasValue)
       {
         if (!string_1_1.StartsWith(string_1))
@@ -968,20 +968,20 @@ label_10:
     string capturedBaseName = baseName;
     CustomForcedBehavior capturedThis = this;
 
-    this.method_17($"GetNumberedAttributesAsArray<int>(\"{capturedBaseName}\", {countRequired}, {(minValue != int.MinValue || maxValue != int.MaxValue ? (object) $"new ConstrainTo.Domain<int>({minValue}, {maxValue})" : (object) "null")}, {(aliasBaseNames == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")}, null)");
+    this.LogDeprecatedMethodUsage($"GetNumberedAttributesAsArray<int>(\"{capturedBaseName}\", {countRequired}, {(minValue != int.MinValue || maxValue != int.MaxValue ? (object) $"new ConstrainTo.Domain<int>({minValue}, {maxValue})" : (object) "null")}, {(aliasBaseNames == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")}, null)");
 
     List<int> list_1 = new List<int>();
 
     // Filter keys matching base name pattern
-    this.method_12(this.Args.Keys.Where<string>(key => capturedThis.method_11(capturedBaseName, key)), capturedBaseName, minValue, maxValue, ref list_1);
+    this.ProcessNumberedIntegerAttributes(this.Args.Keys.Where<string>(key => capturedThis.IsKeyMatchingBaseName(capturedBaseName, key)), capturedBaseName, minValue, maxValue, ref list_1);
 
     if (aliasBaseNames != null)
     {
-      this.method_12(((IEnumerable<string>) aliasBaseNames)
+      this.ProcessNumberedIntegerAttributes(((IEnumerable<string>) aliasBaseNames)
         .SelectMany<string, string, AttributeNamePair<string, string>>(
           (Func<string, IEnumerable<string>>) (alias => (IEnumerable<string>) this.Args.Keys),
           (Func<string, string, AttributeNamePair<string, string>>) ((alias, key) => new AttributeNamePair<string, string>(alias, key)))
-        .Where<AttributeNamePair<string, string>>(pair => this.method_11(pair.aliasBaseName, pair.attributeName))
+        .Where<AttributeNamePair<string, string>>(pair => this.IsKeyMatchingBaseName(pair.aliasBaseName, pair.attributeName))
         .Select<AttributeNamePair<string, string>, string>((Func<AttributeNamePair<string, string>, string>) (pair => pair.attributeName)),
         capturedBaseName, minValue, maxValue, ref list_1);
     }
@@ -1013,7 +1013,7 @@ label_10:
   }
 
   [Obsolete]
-  private double? method_13(string string_1, string string_2, double double_0, double double_1)
+  private double? ParseDoubleWithRange(string string_1, string string_2, double double_0, double double_1)
   {
     bool flag = false;
     double result;
@@ -1031,7 +1031,7 @@ label_10:
   }
 
   [Obsolete]
-  private int? method_14(string string_1, string string_2, int int_0, int int_1)
+  private int? ParseIntWithRange(string string_1, string string_2, int int_0, int int_1)
   {
     bool flag = false;
     int result;
@@ -1089,7 +1089,7 @@ label_10:
     T defaultValue,
     out T returnedValue)
   {
-    this.method_17($"GetAttributeAsNullable<{typeof (T).GetType().Name}>(\"{attributeName}\", {isAttributeRequired}, null, ATTRIBUTE_ALIASES)");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<{typeof (T).GetType().Name}>(\"{attributeName}\", {isAttributeRequired}, null, ATTRIBUTE_ALIASES)");
     Type enumType = typeof (T);
     if (!enumType.IsEnum)
       throw new ArgumentException("Type parameter must be an enum.");
@@ -1120,7 +1120,7 @@ label_8:
   [Obsolete("Use OnStart_HandleAttributeProblem(), instead")]
   public bool CheckForUnrecognizedAttributes(Dictionary<string, object> allowedAttributes)
   {
-    this.method_17("OnStart_HandleAttributeProblem()");
+    this.LogDeprecatedMethodUsage("OnStart_HandleAttributeProblem()");
     bool flag = false;
     foreach (KeyValuePair<string, string> keyValuePair in this.Args)
     {
@@ -1140,10 +1140,10 @@ label_8:
     string defaultValueAsString,
     out bool returnedValue)
   {
-    this.method_17($"GetAttributeAsNullable<bool>(\"{attributeName}\", {isAttributeRequired}, null, ATTRIBUTE_ALIASES)");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<bool>(\"{attributeName}\", {isAttributeRequired}, null, ATTRIBUTE_ALIASES)");
     returnedValue = false;
     string string_3;
-    if (!this.method_15(attributeName, isAttributeRequired, defaultValueAsString, out string_3))
+    if (!this.TryGetAttributeOrDefault(attributeName, isAttributeRequired, defaultValueAsString, out string_3))
       return false;
     bool result;
     if (!bool.TryParse(string_3, out result))
@@ -1164,10 +1164,10 @@ label_8:
     float maxValueAllowed,
     out float returnedValue)
   {
-    this.method_17($"GetAttributeAsNullable<double>(\"{attributeName}\", {isAttributeRequired}, {((double) minValueAllowed != -3.4028234663852886E+38 || (double) maxValueAllowed != 3.4028234663852886E+38 ? (object) $"new ConstrainTo.Domain<double>({minValueAllowed}, {maxValueAllowed})" : (object) "null")}, ATTRIBUTE_ALIASES)");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<double>(\"{attributeName}\", {isAttributeRequired}, {((double) minValueAllowed != -3.4028234663852886E+38 || (double) maxValueAllowed != 3.4028234663852886E+38 ? (object) $"new ConstrainTo.Domain<double>({minValueAllowed}, {maxValueAllowed})" : (object) "null")}, ATTRIBUTE_ALIASES)");
     returnedValue = 0.0f;
     string string_3;
-    if (!this.method_15(attributeName, isAttributeRequired, defaultValueAsString, out string_3))
+    if (!this.TryGetAttributeOrDefault(attributeName, isAttributeRequired, defaultValueAsString, out string_3))
       return false;
     float result;
     if (!float.TryParse(string_3, out result))
@@ -1193,10 +1193,10 @@ label_8:
     int maxValueAllowed,
     out int returnedValue)
   {
-    this.method_17($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, {(minValueAllowed != int.MinValue || maxValueAllowed != int.MaxValue ? (object) $"new ConstrainTo.Domain<int>({minValueAllowed}, {maxValueAllowed})" : (object) "null")}, ATTRIBUTE_ALIASES)");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<int>(\"{attributeName}\", {isAttributeRequired}, {(minValueAllowed != int.MinValue || maxValueAllowed != int.MaxValue ? (object) $"new ConstrainTo.Domain<int>({minValueAllowed}, {maxValueAllowed})" : (object) "null")}, ATTRIBUTE_ALIASES)");
     returnedValue = 0;
     string string_3;
-    if (!this.method_15(attributeName, isAttributeRequired, defaultValueAsString, out string_3))
+    if (!this.TryGetAttributeOrDefault(attributeName, isAttributeRequired, defaultValueAsString, out string_3))
       return false;
     int result;
     if (!int.TryParse(string_3, out result))
@@ -1220,10 +1220,10 @@ label_8:
     string defaultValueAsString,
     out string returnedValue)
   {
-    this.method_17($"GetAttributeAs<string>(\"{attributeName}\", {isAttributeRequired}, null, ATTRIBUTE_ALIASES)");
+    this.LogDeprecatedMethodUsage($"GetAttributeAs<string>(\"{attributeName}\", {isAttributeRequired}, null, ATTRIBUTE_ALIASES)");
     returnedValue = (string) null;
     string string_3;
-    if (!this.method_15(attributeName, isAttributeRequired, defaultValueAsString, out string_3))
+    if (!this.TryGetAttributeOrDefault(attributeName, isAttributeRequired, defaultValueAsString, out string_3))
       return false;
     returnedValue = string_3;
     return true;
@@ -1237,7 +1237,7 @@ label_8:
     Dictionary<string, object> allowedValues,
     out string returnedValue)
   {
-    this.method_17($"GetAttributeAs<string>(\"{attributeName}\", {isAttributeRequired}, {(allowedValues == null ? (object) "null" : (object) "new ConstrainTo.SpecificValues<string>(ALLOWED_VALUES)")}, ATTRIBUTE_ALIASES)");
+    this.LogDeprecatedMethodUsage($"GetAttributeAs<string>(\"{attributeName}\", {isAttributeRequired}, {(allowedValues == null ? (object) "null" : (object) "new ConstrainTo.SpecificValues<string>(ALLOWED_VALUES)")}, ATTRIBUTE_ALIASES)");
     if (this.GetAttributeAsString(attributeName, isAttributeRequired, defaultValue, out returnedValue) && allowedValues.ContainsKey(returnedValue))
       return true;
     string validValues = string.Join(", ", allowedValues.Keys.ToArray<string>());
@@ -1266,7 +1266,7 @@ label_8:
     string str = attributeNameX;
     if (str.EndsWith("X"))
       str = str.Substring(str.Length - 1);
-    this.method_17($"GetAttributeAsNullable<WoWPoint>(\"{str}\", {isAttributeRequired}, ConstrainAs.WoWPointNonEmpty, ATTRIBUTE_ALIASES))");
+    this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<WoWPoint>(\"{str}\", {isAttributeRequired}, ConstrainAs.WoWPointNonEmpty, ATTRIBUTE_ALIASES))");
     returnedValue = new WoWPoint(defaultValue.X, defaultValue.Y, defaultValue.Z);
     string string_3_1 = (string) null;
     string string_3_2 = (string) null;
@@ -1274,7 +1274,7 @@ label_8:
     if (this.Args.ContainsKey(attributeNameX) || this.Args.ContainsKey(attributeNameY) || this.Args.ContainsKey(attributeNameZ))
       isAttributeRequired = true;
     bool flag;
-    if (!(flag = this.method_15(attributeNameX, isAttributeRequired, defaultValue.X.ToString(), out string_3_1) & this.method_15(attributeNameY, isAttributeRequired, defaultValue.Y.ToString(), out string_3_2) & this.method_15(attributeNameZ, isAttributeRequired, defaultValue.Z.ToString(), out string_3_3)))
+    if (!(flag = this.TryGetAttributeOrDefault(attributeNameX, isAttributeRequired, defaultValue.X.ToString(), out string_3_1) & this.TryGetAttributeOrDefault(attributeNameY, isAttributeRequired, defaultValue.Y.ToString(), out string_3_2) & this.TryGetAttributeOrDefault(attributeNameZ, isAttributeRequired, defaultValue.Z.ToString(), out string_3_3)))
       return false;
     float result1;
     if (!float.TryParse(string_3_1, out result1))
@@ -1300,7 +1300,7 @@ label_8:
     return true;
   }
 
-  private bool method_15(string string_1, bool bool_1, string string_2, out string string_3)
+  private bool TryGetAttributeOrDefault(string string_1, bool bool_1, string string_2, out string string_3)
   {
     bool flag = this.Args.TryGetValue(string_1, out string_3);
     if (bool_1 && !flag)
@@ -1313,7 +1313,7 @@ label_8:
     return true;
   }
 
-  private bool method_16(string string_1, bool bool_1)
+  private bool ValidateRequiredAttribute(string string_1, bool bool_1)
   {
     bool flag = true;
     if (bool_1 && !this.Args.ContainsKey(string_1))
@@ -1324,7 +1324,7 @@ label_8:
     return flag;
   }
 
-  private void method_17(string string_1)
+  private void LogDeprecatedMethodUsage(string string_1)
   {
     string name = new StackTrace().GetFrame(1).GetMethod().Name;
     string format = "This method '{0}' is deprecated.\nPlease update your behavior to use one of the replacement methods provided by the CustomForcedBehavior class.";
@@ -1519,3 +1519,5 @@ label_8:
     NotInLog,
   }
 }
+
+
