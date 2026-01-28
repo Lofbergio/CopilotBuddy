@@ -131,13 +131,18 @@ namespace Styx
             public static uint method_0(int index)
             {
                 // For WotLK 3.3.5a, most offsets are direct struct member offsets
-                // PetSpells uses index 5057 - this is the LocalPlayer struct offset to pet spells array
                 switch (index)
                 {
                     case 5057: return 0x0BD0; // Pet spells array offset in LocalPlayer struct
+                    case 5005: return 0x00ACFDF4; // COMPLETED_QUEST_LIST_HEAD (11337204U from HB 3.3.5a)
                     default: return 0; // Unknown offset
                 }
             }
+
+            /// <summary>
+            /// Alias for method_0 - used by cleaner code
+            /// </summary>
+            public static uint GetOffsetByIndex(int index) => method_0(index);
         }
     }
 }
