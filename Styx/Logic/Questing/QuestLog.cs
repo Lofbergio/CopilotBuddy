@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Runtime.InteropServices;
 using GreenMagic;
 using Styx.WoWInternals;
 
@@ -9,11 +10,16 @@ namespace Styx.Logic.Questing
 {
 	/// <summary>
 	/// Provides access to the player's quest log.
+	/// Matches HB 4.3.4 API while using Lua for completed quests (more reliable than memory reads).
 	/// </summary>
 	public class QuestLog
 	{
-		private static readonly List<uint> _completedQuests = new List<uint>();
-		private static DateTime _lastCompletedQuestsQuery = DateTime.MinValue;
+		// WoW 3.3.5a Quest Log Offsets
+		private const int OFFSET_COMPLETED_QUEST_LIST = 5005;  // Completed quest linked list head
+
+		private static readonly List<uint> _completedQuestIds = new List<uint>();
+		private static DateTime _completedQuestCacheTime = DateTime.MinValue;
+		private static readonly TimeSpan CompletedQuestCacheDuration = TimeSpan.FromMinutes(1);
 
 		/// <summary>
 		/// Number of quests in the log.
@@ -184,44 +190,113 @@ namespace Styx.Logic.Questing
 		/// <summary>
 		/// Gets a read-only collection of quest IDs that have been completed.
 		/// Uses Lua QueryQuestsCompleted() which triggers QUEST_QUERY_COMPLETE event.
+		/// Then reads the completed quest linked list from memory.
 		/// Results are cached for 1 minute.
 		/// </summary>
 		public ReadOnlyCollection<uint> GetCompletedQuests()
 		{
-			DateTime now = DateTime.Now;
-			if (now.Subtract(_lastCompletedQuestsQuery).TotalMinutes > 1.0 || _completedQuests.Count == 0)
+			if (ShouldRefreshCompletedQuestCache())
 			{
-				// Query completed quests via Lua
-				_completedQuests.Clear();
-				
-				// In 3.3.5, we can use GetQuestsCompleted() or check via Lua
-				// For simplicity, just read completed quest flags from memory
-				// WoW 3.3.5: Completed quests stored as bitfield at specific address
-				// Address for completed quests in 3.3.5: 0xC24338 (12729144)
-				uint completedQuestsBase = 12729144U;
-				for (uint i = 0; i < 1250; i++) // Max quest ID check range
+				if (!TryRefreshCompletedQuestCache())
+					return _completedQuestIds.AsReadOnly();
+			}
+			return _completedQuestIds.AsReadOnly();
+		}
+
+		/// <summary>
+		/// Checks if the completed quest cache should be refreshed.
+		/// </summary>
+		private static bool ShouldRefreshCompletedQuestCache()
+		{
+			return _completedQuestIds.Count == 0 || DateTime.Now - _completedQuestCacheTime > CompletedQuestCacheDuration;
+		}
+
+		/// <summary>
+		/// Refreshes the completed quest cache using Lua QueryQuestsCompleted().
+		/// Waits for QUEST_QUERY_COMPLETE event, then reads memory.
+		/// </summary>
+		private static bool TryRefreshCompletedQuestCache()
+		{
+			try
+			{
+				using (LuaEventWait questQueryWait = new LuaEventWait("QUEST_QUERY_COMPLETE"))
 				{
-					uint byteOffset = i / 8;
-					byte bitOffset = (byte)(i % 8);
-					byte questByte = ObjectManager.Wow.Read<byte>(completedQuestsBase + byteOffset);
-					if ((questByte & (1 << bitOffset)) != 0)
+					Lua.DoString("QueryQuestsCompleted()");
+					if (!questQueryWait.Wait(5000))
 					{
-						_completedQuests.Add(i);
+						Styx.Helpers.Logging.Write("[QuestLog] Timeout waiting for QUEST_QUERY_COMPLETE event");
+						return false;
 					}
 				}
-				
-				_lastCompletedQuestsQuery = now;
+
+				PopulateCompletedQuestCacheFromMemory();
+				return true;
 			}
-			return _completedQuests.AsReadOnly();
+			catch (Exception ex)
+			{
+				Styx.Helpers.Logging.WriteException(ex);
+				return false;
+			}
+		}
+
+		/// <summary>
+		/// Reads completed quest IDs from the WoW memory linked list.
+		/// Structure: CompletedQuestNode { padding, next_ptr, quest_id }
+		/// </summary>
+		private static void PopulateCompletedQuestCacheFromMemory()
+		{
+			Memory wow = ObjectManager.Wow;
+			if (wow == null)
+				return;
+
+			uint completedQuestListHead = StyxWoW.Offsets.GetOffsetByIndex(OFFSET_COMPLETED_QUEST_LIST);
+			if (completedQuestListHead == 0)
+			{
+				Styx.Helpers.Logging.Write("[QuestLog] COMPLETED_QUEST_LIST offset is 0");
+				return;
+			}
+
+			// Read the head pointer of the linked list
+			uint nodeAddress = wow.Read<uint>(completedQuestListHead);
+
+			_completedQuestIds.Clear();
+
+			// Traverse the linked list
+			while (nodeAddress != 0 && (nodeAddress & 1U) == 0U)
+			{
+				var node = wow.Read<CompletedQuestNode>(nodeAddress);
+				if (node.QuestId != 0)
+					_completedQuestIds.Add(node.QuestId);
+				nodeAddress = node.Next;
+			}
+
+			_completedQuestCacheTime = DateTime.Now;
+			Styx.Helpers.Logging.Write("[QuestLog] GetCompletedQuests() found {0} completed quests", _completedQuestIds.Count);
 		}
 
 		/// <summary>
 		/// Adds a quest ID to the completed quests cache.
 		/// </summary>
-		internal void AddCompletedQuest(uint questId)
+		public void AddCompletedQuest(uint questId)
 		{
-			if (!_completedQuests.Contains(questId))
-				_completedQuests.Add(questId);
+			if (questId != 0 && !_completedQuestIds.Contains(questId))
+				_completedQuestIds.Add(questId);
+		}
+
+		/// <summary>
+		/// Adds a quest ID to the completed quests cache (HB 3.3.5a alias).
+		/// </summary>
+		public void AddCompletedQuestId(uint questId) => AddCompletedQuest(questId);
+
+		/// <summary>
+		/// Completed quest linked list node structure (WoW 3.3.5a).
+		/// </summary>
+		[StructLayout(LayoutKind.Sequential, Pack = 1)]
+		private struct CompletedQuestNode
+		{
+			private readonly uint _padding;
+			public readonly uint Next;
+			public readonly uint QuestId;
 		}
 	}
 }
