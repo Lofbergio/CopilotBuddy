@@ -6,7 +6,7 @@ namespace Styx.Logic.Combat
 {
     public struct SpellEntry
     {
-        private const int int_0 = 3;
+        private const int MaxEffects = 3;
 
         public uint Id;
         public uint Category;
