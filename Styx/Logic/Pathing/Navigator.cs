@@ -271,16 +271,66 @@ namespace Styx.Logic.Pathing
 					nextPoint = _currentPath[_currentPathIndex];
 				}
 
-				// HB: Push waypoint ahead by PathPrecision in movement direction
+				// =========== STAIR HANDLING IMPROVEMENT ===========
+				// When approaching stairs/ramps, click at the entry/exit point (top or bottom)
+				// instead of clicking at the center of the stair waypoint.
+				// This prevents the character from walking into railings or getting stuck.
+				const float StairZThreshold = 2.5f; // Min Z difference to consider as stair/ramp
+				
+				WoWPoint clickPoint = nextPoint;
+				
+				// Check if current segment has significant height change (stair/ramp)
+				float segmentZDiff = Math.Abs(nextPoint.Z - me.Location.Z);
+				float segment2DDist = (float)Math.Sqrt(me.Location.Distance2DSqr(nextPoint));
+				
+				// If there's a significant height change relative to horizontal distance = steep stair
+				if (segmentZDiff > StairZThreshold && segment2DDist > 0.1f)
+				{
+					bool goingUp = nextPoint.Z > me.Location.Z;
+					
+					if (goingUp)
+					{
+						// Going UP stairs: click at the TOP of the stairs (the waypoint itself)
+						// Don't push ahead, use exact waypoint which is at the top
+						clickPoint = nextPoint;
+						
+						// If there's a next waypoint that's roughly at the same level as the top,
+						// we can look ahead to that for smoother movement
+						if (_currentPathIndex + 1 < _currentPath.Count)
+						{
+							WoWPoint afterStair = _currentPath[_currentPathIndex + 1];
+							float zDiffNext = Math.Abs(afterStair.Z - nextPoint.Z);
+							// If next point is at similar height (plateau at top of stairs)
+							if (zDiffNext < 1.0f)
+							{
+								// Click towards the plateau, not center of stairs
+								clickPoint = nextPoint;
+							}
+						}
+					}
+					else
+					{
+						// Going DOWN stairs: click at the BOTTOM of the stairs (the waypoint)
+						// The waypoint is already at the bottom, just use it
+						clickPoint = nextPoint;
+					}
+					
+					// For stairs, don't push the waypoint ahead - click exactly where the stair ends
+					WoWMovement.ClickToMove(clickPoint);
+					return MoveResult.Moved;
+				}
+				// =========== END STAIR HANDLING ===========
+
+				// HB: Push waypoint ahead by PathPrecision in movement direction (for flat terrain)
 				WoWPoint direction = nextPoint - me.Location;
 				float length = (float)Math.Sqrt(direction.X * direction.X + direction.Y * direction.Y + direction.Z * direction.Z);
 				if (length > 0.01f)
 				{
 					direction = new WoWPoint(direction.X / length, direction.Y / length, direction.Z / length);
-					nextPoint = nextPoint + direction * PathPrecision;
+					clickPoint = nextPoint + direction * PathPrecision;
 				}
 
-				WoWMovement.ClickToMove(nextPoint);
+				WoWMovement.ClickToMove(clickPoint);
 				
 				return MoveResult.Moved;
 			}
@@ -357,10 +407,11 @@ namespace Styx.Logic.Pathing
 				var start = new Vector3(path[i].X, path[i].Y, path[i].Z);
 				var end = new Vector3(path[i + 1].X, path[i + 1].Y, path[i + 1].Z);
 
-				if (TripperNavigator.Raycast(mapId, start, end, out _, out float hitDistance))
+				var status = TripperNavigator.Raycast(mapId, start, end, out float hitT, out _);
+				if (status.Succeeded)
 				{
-					// Hit something before reaching next waypoint
-					if (hitDistance < 0.99f)
+					// Hit something before reaching next waypoint (hitT < 1.0 means hit)
+					if (hitT < 0.99f)
 						return false;
 				}
 			}
@@ -514,9 +565,13 @@ namespace Styx.Logic.Pathing
 			var startVec = new Vector3(start.X, start.Y, start.Z);
 			var endVec = new Vector3(end.X, end.Y, end.Z);
 
-			if (TripperNavigator.Raycast(mapId, startVec, endVec, out Vector3 hit, out _))
+			var status = TripperNavigator.Raycast(mapId, startVec, endVec, out float hitT, out _);
+			if (status.Succeeded && hitT < 1.0f)
 			{
-				hitPosition = new WoWPoint(hit.X, hit.Y, hit.Z);
+				// Calculate hit position along the ray
+				var direction = endVec - startVec;
+				var hitVec = startVec + direction * hitT;
+				hitPosition = new WoWPoint(hitVec.X, hitVec.Y, hitVec.Z);
 				return true;
 			}
 
