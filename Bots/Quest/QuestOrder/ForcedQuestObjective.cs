@@ -51,22 +51,22 @@ public class ForcedQuestObjective : ForcedBehavior
         return string.Format("[ForcedQuestObjective Objective: {0}]", (object)this.Objective);
     }
 
-    private static string GetGoalText(QuestObjective questObjective_1)
+    private static string GetGoalText(QuestObjective objective)
     {
-        switch (questObjective_1)
+        switch (objective)
         {
             case CollectItemObjective _:
-                CollectItemObjective collectItemObjective = (CollectItemObjective)questObjective_1;
+                CollectItemObjective collectItemObjective = (CollectItemObjective)objective;
                 Styx.WoWInternals.WoWObjects.ItemInfo itemInfo = Styx.WoWInternals.WoWObjects.ItemInfo.FromId((uint)collectItemObjective.Objective.ID);
                 return itemInfo != null ? string.Format("Goal: Collect {0} x {1}", (object)itemInfo.Name, (object)collectItemObjective.Objective.Count) : string.Format("Goal: Collect {0} of item with ID {1}", (object)collectItemObjective.Objective.Count, (object)collectItemObjective.Objective.ID);
             case GrindObjective _:
-                GrindObjective grindObjective = (GrindObjective)questObjective_1;
+                GrindObjective grindObjective = (GrindObjective)objective;
                 WoWCache.InfoBlock infoBlockById1 = StyxWoW.Cache[CacheDb.Creature].GetInfoBlockById((uint)grindObjective.Objective.ID);
                 if (infoBlockById1 == null)
                     return string.Format("Goal: Kill mob with ID {0} {1} times", (object)grindObjective.Objective.ID, (object)grindObjective.Objective.Count);
                 return string.Format("Goal: Kill {0} x {1}", (object)ObjectManager.Wow.Read<string>(infoBlockById1.Creature.NamePtrs[0]), (object)grindObjective.Objective.Count);
             case UseGameObjectObjective _:
-                UseGameObjectObjective gameObjectObjective = (UseGameObjectObjective)questObjective_1;
+                UseGameObjectObjective gameObjectObjective = (UseGameObjectObjective)objective;
                 WoWCache.InfoBlock infoBlockById2 = StyxWoW.Cache[CacheDb.GameObject].GetInfoBlockById((uint)gameObjectObjective.Objective.ID);
                 if (infoBlockById2 == null)
                     return string.Format("Goal: Use object with ID {0} {1} times", (object)gameObjectObjective.Objective.ID, (object)gameObjectObjective.Objective.Count);

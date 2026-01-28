@@ -17,33 +17,33 @@ namespace Bots.Quest.QuestOrder;
 
 public class ForcedCodeBehavior : ForcedBehavior
 {
-    private readonly CustomForcedBehavior customForcedBehavior_0;
+    private readonly CustomForcedBehavior customBehavior;
 
     public ForcedCodeBehavior(CodeNode codeNode)
     {
         if (codeNode == null)
             throw new ArgumentNullException(nameof(codeNode));
-        this.customForcedBehavior_0 = ForcedCodeBehavior.smethod_0(codeNode.AssemblyGetter(), codeNode.Arguments);
-        if (this.customForcedBehavior_0 == null)
+        this.customBehavior = ForcedCodeBehavior.CreateCustomBehaviorInstance(codeNode.AssemblyGetter(), codeNode.Arguments);
+        if (this.customBehavior == null)
             throw new Exception("Unable to create instance of UserDefinedObjective");
-        this.customForcedBehavior_0.Element = codeNode.Element;
+        this.customBehavior.Element = codeNode.Element;
     }
 
-    private static CustomForcedBehavior smethod_0(
-        Assembly assembly_0,
-        Dictionary<string, string> dictionary_0)
+    private static CustomForcedBehavior CreateCustomBehaviorInstance(
+        Assembly assembly,
+        Dictionary<string, string> arguments)
     {
-        if (dictionary_0 == null)
+        if (arguments == null)
         {
-            dictionary_0 = new Dictionary<string, string>();
+            arguments = new Dictionary<string, string>();
         }
-        return ((IEnumerable<Type>)assembly_0.GetTypes())
-            .Where<Type>((Func<Type, bool>)(type_0 => type_0.IsSubclassOf(typeof(CustomForcedBehavior))))
-            .Select<Type, CustomForcedBehavior>((Func<Type, CustomForcedBehavior>)(type_0 =>
+        return ((IEnumerable<Type>)assembly.GetTypes())
+            .Where<Type>((Func<Type, bool>)(behaviorType => behaviorType.IsSubclassOf(typeof(CustomForcedBehavior))))
+            .Select<Type, CustomForcedBehavior>((Func<Type, CustomForcedBehavior>)(behaviorType =>
             {
                 try
                 {
-                    return (CustomForcedBehavior)Activator.CreateInstance(type_0, new object[] { dictionary_0 });
+                    return (CustomForcedBehavior)Activator.CreateInstance(behaviorType, new object[] { arguments });
                 }
                 catch
                 {
@@ -53,13 +53,13 @@ public class ForcedCodeBehavior : ForcedBehavior
             .FirstOrDefault<CustomForcedBehavior>();
     }
 
-    protected override Composite CreateBehavior() => this.customForcedBehavior_0.Branch;
+    protected override Composite CreateBehavior() => this.customBehavior.Branch;
 
-    public override bool IsDone => this.customForcedBehavior_0.IsDone;
+    public override bool IsDone => this.customBehavior.IsDone;
 
-    public override void OnStart() => this.customForcedBehavior_0.OnStart();
+    public override void OnStart() => this.customBehavior.OnStart();
 
-    public override void OnTick() => this.customForcedBehavior_0.OnTick();
+    public override void OnTick() => this.customBehavior.OnTick();
 
-    public override void Dispose() => this.customForcedBehavior_0.Dispose();
+    public override void Dispose() => this.customBehavior.Dispose();
 }

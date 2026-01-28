@@ -27,9 +27,9 @@ namespace Bots.Quest.QuestOrder;
 
 public class ForcedQuestTurnIn : ForcedBehavior
 {
-    private readonly Frame frame_0 = new Frame("QuestTitleButton1");
-    private static readonly Frame frame_1 = new Frame("QuestFrameCompleteButton");
-    private int int_0;
+    private readonly Frame QuestTitleButton = new Frame("QuestTitleButton1");
+    private static readonly Frame QuestFrameCompleteButton = new Frame("QuestFrameCompleteButton");
+    private int completeQuestAttempts;
 
     public ForcedQuestTurnIn(uint questId, string questName, uint npcId, WoWPoint location)
     {
@@ -51,9 +51,9 @@ public class ForcedQuestTurnIn : ForcedBehavior
 
     // Dispose removed - we should NEVER abandon a quest we're trying to turn in!
     
-    public override void OnStart() => TreeRoot.GoalText = this.method_0();
+    public override void OnStart() => TreeRoot.GoalText = this.GetGoalText();
 
-    private string method_0()
+    private string GetGoalText()
     {
         Styx.Logic.Questing.Quest quest = Styx.Logic.Questing.Quest.FromId(this.QuestId);
         if (quest != null)
@@ -69,108 +69,108 @@ public class ForcedQuestTurnIn : ForcedBehavior
             PoiType.Harvest,
             PoiType.Skin,
             PoiType.Loot
-        }, (Composite)new PrioritySelector((ContextChangeHandler)(object_0 => (object)null), new Composite[3]
+        }, (Composite)new PrioritySelector((ContextChangeHandler)(context => (object)null), new Composite[3]
         {
-            (Composite)new Decorator(new CanRunDecoratorDelegate(this.method_1), (Composite)new ActionSetPoi(true, (RetrieveBotPoiDelegate)(object_0 => new BotPoi(PoiType.QuestTurnIn)
+            (Composite)new Decorator(new CanRunDecoratorDelegate(this.ShouldSetPoi), (Composite)new ActionSetPoi(true, (RetrieveBotPoiDelegate)(context => new BotPoi(PoiType.QuestTurnIn)
             {
                 Entry = this.NpcId,
                 Location = this.Location
             }))),
-            (Composite)new Decorator((CanRunDecoratorDelegate)(object_0 => !(BotPoi.Current.AsObject != (WoWObject)null) ? (double)ForcedQuestTurnIn.Me.Location.DistanceSqr(BotPoi.Current.Location) > 16.0 : !BotPoi.Current.AsObject.WithinInteractRange), (Composite)new ActionMoveToPoi()),
-            (Composite)new Decorator((CanRunDecoratorDelegate)(object_0 => BotPoi.Current.AsObject != (WoWObject)null && BotPoi.Current.AsObject.WithinInteractRange), (Composite)new Sequence((ContextChangeHandler)(object_0 => (object)BotPoi.Current.AsObject), new Composite[9]
+            (Composite)new Decorator((CanRunDecoratorDelegate)(context => !(BotPoi.Current.AsObject != (WoWObject)null) ? (double)ForcedQuestTurnIn.Me.Location.DistanceSqr(BotPoi.Current.Location) > 16.0 : !BotPoi.Current.AsObject.WithinInteractRange), (Composite)new ActionMoveToPoi()),
+            (Composite)new Decorator((CanRunDecoratorDelegate)(context => BotPoi.Current.AsObject != (WoWObject)null && BotPoi.Current.AsObject.WithinInteractRange), (Composite)new Sequence((ContextChangeHandler)(context => (object)BotPoi.Current.AsObject), new Composite[9]
             {
                 // 1. Stop moving
                 (Composite)new ActionMoveStop(),
                 // 2. Close any open frames first (HB 4.3.4 - ActionDelegate)
-                (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_2(object_0))),
+                (Composite)new TreeSharp.Action((ActionDelegate)(context => this.CloseFrames(context))),
                 // 3. Target the NPC (ActionDelegate car retourne RunStatus)
-                (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_3(object_0))),
+                (Composite)new TreeSharp.Action((ActionDelegate)(context => this.TargetNpc(context))),
                 // 4. Interact with NPC (HB 4.3.4 - ActionDelegate)
-                (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_4(object_0))),
+                (Composite)new TreeSharp.Action((ActionDelegate)(context => this.InteractWithNpc(context))),
                 // 5. Wait for frame to open
                 (Composite)new ActionSleep(250),
                 // 6. Select quest from list while GossipFrame or QuestTitleButton1 visible
-                (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.method_5), (Composite)new Sequence(new Composite[2]
+                (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.IsGossipOrQuestListVisible), (Composite)new Sequence(new Composite[2]
                 {
                     (Composite)new ActionSelectQuest((int)this.QuestId),
                     (Composite)new ActionSleep(500)
                 })),
                 // 7. Complete quest when QuestFrame is visible
-                (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.method_6), (Composite)new Sequence(new Composite[4]
+                (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.IsQuestFrameVisible), (Composite)new Sequence(new Composite[4]
                 {
                     // Click Continue if objectives shown
-                    (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.method_7), (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_8(object_0)))),
+                    (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.IsCompleteButtonVisible), (Composite)new TreeSharp.Action((ActionDelegate)(context => this.ClickContinue(context)))),
                     // Select reward if there are choices
-                    (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.method_9), (Composite)new Sequence(new Composite[3]
+                    (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.HasRewardChoice), (Composite)new Sequence(new Composite[3]
                     {
                         (Composite)new ActionSleep(750),
                         (Composite)new ActionSelectReward(),
                         (Composite)new ActionSleep(350)
                     })),
                     // Complete the quest (HB 4.3.4 - ActionDelegate)
-                    (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_10(object_0))),
+                    (Composite)new TreeSharp.Action((ActionDelegate)(context => this.CompleteQuest(context))),
                     // Close frames after completion (HB 4.3.4 - ActionDelegate)
-                    (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_2(object_0)))
+                    (Composite)new TreeSharp.Action((ActionDelegate)(context => this.CloseFrames(context)))
                 })),
                 // 8. Clear target (HB 4.3.4 - ActionDelegate)
-                (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => ForcedQuestTurnIn.smethod_0(object_0))),
+                (Composite)new TreeSharp.Action((ActionDelegate)(context => ForcedQuestTurnIn.ClearTarget(context))),
                 // 9. Clear POI
                 (Composite)new ActionClearPoi("Quest Completed #2")
             }))
         }));
     }
 
-    private bool method_1(object object_0)
+    private bool ShouldSetPoi(object context)
     {
         BotPoi current = BotPoi.Current;
         return current.Type != PoiType.QuestTurnIn || (int)current.Entry != (int)this.NpcId;
     }
 
-    private RunStatus method_2(object object_0)
+    private RunStatus CloseFrames(object context)
     {
         bool gossipVis = GossipFrame.Instance.IsVisible;
         bool questVis = QuestFrame.Instance.IsVisible;
-        Logging.Write("[method_2] GossipFrame: {0}, QuestFrame: {1}", gossipVis, questVis);
+        Logging.Write("[CloseFrames] GossipFrame: {0}, QuestFrame: {1}", gossipVis, questVis);
         
         if (!gossipVis && !questVis)
         {
-            Logging.Write("[method_2] No frames open, returning Success");
+            Logging.Write("[CloseFrames] No frames open, returning Success");
             return RunStatus.Success;
         }
-        Logging.Write("[method_2] Closing frames...");
+        Logging.Write("[CloseFrames] Closing frames...");
         GossipFrame.Instance.Close();
         QuestFrame.Instance.Close();
         Thread.Sleep(300);
         return RunStatus.Running;
     }
 
-    private RunStatus method_3(object object_0)
+    private RunStatus TargetNpc(object context)
     {
         // HB 4.3.4: Target the NPC if it's a unit
-        WoWUnit woWunit = object_0 as WoWUnit;
+        WoWUnit woWunit = context as WoWUnit;
         if ((WoWObject)woWunit != (WoWObject)null)
             woWunit.Target();
         return RunStatus.Success;
     }
 
-    private RunStatus method_4(object object_0)
+    private RunStatus InteractWithNpc(object context)
     {
         bool gossipVis = GossipFrame.Instance.IsVisible;
         bool questVis = QuestFrame.Instance.IsVisible;
-        Logging.Write("[method_4] GossipFrame: {0}, QuestFrame: {1}", gossipVis, questVis);
+        Logging.Write("[InteractWithNpc] GossipFrame: {0}, QuestFrame: {1}", gossipVis, questVis);
         
         if (gossipVis || questVis)
         {
-            Logging.Write("[method_4] Frame already open, returning Success");
+            Logging.Write("[InteractWithNpc] Frame already open, returning Success");
             return RunStatus.Success;
         }
-        WoWObject woWobject = (WoWObject)object_0;
+        WoWObject woWobject = (WoWObject)context;
         if (!woWobject.WithinInteractRange)
         {
-            Logging.Write("[method_4] Not in range, returning Failure");
+            Logging.Write("[InteractWithNpc] Not in range, returning Failure");
             return RunStatus.Failure;
         }
-        Logging.Write("[method_4] Interacting...");
+        Logging.Write("[InteractWithNpc] Interacting...");
         woWobject.Interact();
         Thread.Sleep(300);
         return RunStatus.Running;
@@ -178,93 +178,93 @@ public class ForcedQuestTurnIn : ForcedBehavior
 
     private static LocalPlayer Me => ObjectManager.Me;
 
-    private bool method_5(object object_0)
+    private bool IsGossipOrQuestListVisible(object context)
     {
         // HB 4.3.4: Return true while GossipFrame visible OR QuestTitleButton1 visible
         bool gossipVis = GossipFrame.Instance.IsVisible;
-        bool titleBtnVis = this.frame_0.IsVisible;
+        bool titleBtnVis = this.QuestTitleButton.IsVisible;
         bool result = gossipVis || titleBtnVis;
-        Logging.Write("[method_5] GossipFrame: {0}, QuestTitleButton1: {1} => {2}", gossipVis, titleBtnVis, result);
+        Logging.Write("[IsGossipOrQuestListVisible] GossipFrame: {0}, QuestTitleButton1: {1} => {2}", gossipVis, titleBtnVis, result);
         return result;
     }
 
-    private bool method_6(object object_0)
+    private bool IsQuestFrameVisible(object context)
     {
         // HB 4.3.4: Only enter completion sequence when QuestFrame is visible
         bool result = QuestFrame.Instance.IsVisible;
-        Logging.Write("[method_6] QuestFrame.IsVisible: {0}", result);
+        Logging.Write("[IsQuestFrameVisible] QuestFrame.IsVisible: {0}", result);
         return result;
     }
 
-    private bool method_7(object object_0)
+    private bool IsCompleteButtonVisible(object context)
     {
-        bool result = ForcedQuestTurnIn.frame_1.IsVisible;
-        Logging.Write("[method_7] QuestFrameCompleteButton.IsVisible: {0}", result);
+        bool result = ForcedQuestTurnIn.QuestFrameCompleteButton.IsVisible;
+        Logging.Write("[IsCompleteButtonVisible] QuestFrameCompleteButton.IsVisible: {0}", result);
         return result;
     }
 
-    private RunStatus method_8(object object_0)
+    private RunStatus ClickContinue(object context)
     {
-        Logging.Write("[method_8] Clicking Continue button");
+        Logging.Write("[ClickContinue] Clicking Continue button");
         QuestFrame.Instance.ClickContinue();
         Thread.Sleep(1000);
-        Logging.Write("[method_8] After ClickContinue - QuestFrame.IsVisible: {0}", QuestFrame.Instance.IsVisible);
+        Logging.Write("[ClickContinue] After ClickContinue - QuestFrame.IsVisible: {0}", QuestFrame.Instance.IsVisible);
         return RunStatus.Success;
     }
 
-    private bool method_9(object object_0)
+    private bool HasRewardChoice(object context)
     {
         uint shownId = QuestFrame.Instance.CurrentShownQuestId;
         Styx.Logic.Questing.Quest quest = Styx.Logic.Questing.Quest.FromId(shownId);
-        Logging.Write("[method_9] CurrentShownQuestId: {0}, Quest found: {1}", shownId, quest != null);
+        Logging.Write("[HasRewardChoice] CurrentShownQuestId: {0}, Quest found: {1}", shownId, quest != null);
         
         if (quest == null)
         {
             int luaChoices = Lua.GetReturnVal<int>("return GetNumQuestChoices()", 0U);
-            Logging.Write("[method_9] No quest cache, Lua GetNumQuestChoices: {0}", luaChoices);
+            Logging.Write("[HasRewardChoice] No quest cache, Lua GetNumQuestChoices: {0}", luaChoices);
             return luaChoices >= 1;
         }
         for (uint index = 0; (long)index < (long)quest.InternalInfo.RewardChoiceItem.Length; ++index)
         {
             if (quest.InternalInfo.RewardChoiceItem[(IntPtr)index] != 0)
             {
-                Logging.Write("[method_9] Found reward choice at index {0}", index);
+                Logging.Write("[HasRewardChoice] Found reward choice at index {0}", index);
                 return true;
             }
         }
         int luaChoices2 = Lua.GetReturnVal<int>("return GetNumQuestChoices()", 0U);
-        Logging.Write("[method_9] No cache rewards, Lua GetNumQuestChoices: {0}", luaChoices2);
+        Logging.Write("[HasRewardChoice] No cache rewards, Lua GetNumQuestChoices: {0}", luaChoices2);
         return luaChoices2 >= 1;
     }
 
-    private RunStatus method_10(object object_0)
+    private RunStatus CompleteQuest(object context)
     {
         bool qfVisible = QuestFrame.Instance.IsVisible;
         uint shownId = QuestFrame.Instance.CurrentShownQuestId;
-        Logging.Write("[method_10] QuestFrame.IsVisible: {0}, CurrentShownQuestId: {1}, Expected: {2}", 
+        Logging.Write("[CompleteQuest] QuestFrame.IsVisible: {0}, CurrentShownQuestId: {1}, Expected: {2}", 
             qfVisible, shownId, this.QuestId);
         
         if (qfVisible && (shownId == this.QuestId || shownId == 0))
         {
-            if (this.int_0++ == 5)
+            if (this.completeQuestAttempts++ == 5)
             {
-                Logging.Write("[method_10] Tried 5 times, closing QuestFrame");
+                Logging.Write("[CompleteQuest] Tried 5 times, closing QuestFrame");
                 QuestFrame.Instance.Close();
-                this.int_0 = 0;
+                this.completeQuestAttempts = 0;
                 return RunStatus.Failure;
             }
-            Logging.Write("[method_10] CompleteQuest attempt {0}/5", this.int_0);
+            Logging.Write("[CompleteQuest] CompleteQuest attempt {0}/5", this.completeQuestAttempts);
             QuestFrame.Instance.CompleteQuest();
             Thread.Sleep(500);
-            Logging.Write("[method_10] After CompleteQuest - QuestFrame.IsVisible: {0}", QuestFrame.Instance.IsVisible);
+            Logging.Write("[CompleteQuest] After CompleteQuest - QuestFrame.IsVisible: {0}", QuestFrame.Instance.IsVisible);
             return RunStatus.Running;
         }
-        Logging.Write("[method_10] Conditions not met, returning Success");
-        this.int_0 = 0;
+        Logging.Write("[CompleteQuest] Conditions not met, returning Success");
+        this.completeQuestAttempts = 0;
         return RunStatus.Success;
     }
 
-    private static RunStatus smethod_0(object object_0)
+    private static RunStatus ClearTarget(object context)
     {
         if (!ForcedQuestTurnIn.Me.GotTarget)
             return RunStatus.Success;

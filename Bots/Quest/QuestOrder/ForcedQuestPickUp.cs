@@ -29,9 +29,9 @@ namespace Bots.Quest.QuestOrder;
 
 public class ForcedQuestPickUp : ForcedBehavior
 {
-    private static readonly Frame frame_0 = new Frame("QuestTitleButton1");
-    private static readonly Frame frame_1 = new Frame("QuestFrameCompleteQuestButton");
-    private int int_0 = -1;
+    private static readonly Frame QuestTitleButton = new Frame("QuestTitleButton1");
+    private static readonly Frame QuestFrameCompleteQuestButton = new Frame("QuestFrameCompleteQuestButton");
+    private int lastShownQuestId = -1;
 
     public ForcedQuestPickUp(
         uint questId,
@@ -51,11 +51,26 @@ public class ForcedQuestPickUp : ForcedBehavior
     {
         get
         {
-            if (ObjectManager.Me.QuestLog.GetCompletedQuests().Contains(this.QuestId))
-                return true;
-            if (ObjectManager.Me.QuestLog.GetQuestById(this.QuestId) != null)
-                return true;
-            return ObjectManager.Me.QuestLog.ContainsQuest(this.QuestId);
+            // PickUp is done when:
+            // 1) Quest is in completed quests cache (already turned in)
+            // 2) Quest is in the quest log (just accepted, ready for objectives)
+            try
+            {
+                // If quest is in completed cache, skip pickup
+                if (ObjectManager.Me.QuestLog.GetCompletedQuests().Contains(this.QuestId))
+                    return true;
+
+                // If quest is in log, the PickUp behavior is done
+                // This is the key: we just need the quest IN the log, not completed
+                if (ObjectManager.Me.QuestLog.ContainsQuest(this.QuestId))
+                    return true;
+
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 
@@ -77,10 +92,10 @@ public class ForcedQuestPickUp : ForcedBehavior
             Logging.Write(Color.Red, "CopilotBuddy stopped!");
             TreeRoot.Stop();
         }
-        TreeRoot.GoalText = this.method_0();
+        TreeRoot.GoalText = this.GetGoalText();
     }
 
-    private string method_0()
+    private string GetGoalText()
     {
         Styx.Logic.Questing.Quest quest = Styx.Logic.Questing.Quest.FromId(this.QuestId);
         QuestObjectType? giverType = this.GiverType;
@@ -114,58 +129,58 @@ public class ForcedQuestPickUp : ForcedBehavior
             PoiType.Loot
         }, (Composite)new PrioritySelector(new Composite[4]
         {
-            (Composite)new Decorator(new CanRunDecoratorDelegate(this.method_1), (Composite)new ActionSetPoi(true, (RetrieveBotPoiDelegate)(object_0 => new BotPoi(new PickUpNode(this.GiverLocation, this.GiverId, (string)null, this.GiverType, this.QuestId, this.QuestName))))),
-            (Composite)new Decorator((CanRunDecoratorDelegate)(object_0 =>
+            (Composite)new Decorator(new CanRunDecoratorDelegate(this.ShouldSetPoi), (Composite)new ActionSetPoi(true, (RetrieveBotPoiDelegate)(context => new BotPoi(new PickUpNode(this.GiverLocation, this.GiverId, (string)null, this.GiverType, this.QuestId, this.QuestName))))),
+            (Composite)new Decorator((CanRunDecoratorDelegate)(context =>
             {
                 QuestObjectType? giverType = this.GiverType;
                 return giverType.GetValueOrDefault() == QuestObjectType.Item && giverType.HasValue;
-            }), (Composite)new Sequence((ContextChangeHandler)(object_0 => (object)ObjectManager.GetObjectsOfType<WoWItem>().FirstOrDefault<WoWItem>((Func<WoWItem, bool>)(woWItem_0 => (int)woWItem_0.Entry == (int)this.GiverId))), new Composite[1]
+            }), (Composite)new Sequence((ContextChangeHandler)(context => (object)ObjectManager.GetObjectsOfType<WoWItem>().FirstOrDefault<WoWItem>((Func<WoWItem, bool>)(woWItem_0 => (int)woWItem_0.Entry == (int)this.GiverId))), new Composite[1]
             {
-                (Composite)new DecoratorContinue((CanRunDecoratorDelegate)(object_0 => object_0 != null && object_0 is WoWItem), (Composite)new Sequence(new Composite[3]
+                (Composite)new DecoratorContinue((CanRunDecoratorDelegate)(context => context != null && context is WoWItem), (Composite)new Sequence(new Composite[3]
                 {
-                    (Composite)new TreeSharp.Action((ActionSucceedDelegate)(object_0 => ((WoWItem)object_0).UseContainerItem())),
-                    (Composite)new WaitContinue(5, new CanRunDecoratorDelegate(this.method_5), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(object_0 => QuestFrame.Instance.AcceptQuest()))),
-                    (Composite)new WaitContinue(2, (CanRunDecoratorDelegate)(object_0 => false), (Composite)new ActionAlwaysSucceed())
+                    (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context => ((WoWItem)context).UseContainerItem())),
+                    (Composite)new WaitContinue(5, new CanRunDecoratorDelegate(this.IsQuestFrameVisible), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context => QuestFrame.Instance.AcceptQuest()))),
+                    (Composite)new WaitContinue(2, (CanRunDecoratorDelegate)(context => false), (Composite)new ActionAlwaysSucceed())
                 }))
             })),
-            (Composite)new Decorator((CanRunDecoratorDelegate)(object_0 => !(BotPoi.Current.AsObject != (WoWObject)null) ? (double)ForcedQuestPickUp.Me.Location.DistanceSqr(BotPoi.Current.Location) > 6.25 : !BotPoi.Current.AsObject.WithinInteractRange), (Composite)new ActionMoveToPoi()),
-            (Composite)new Decorator((CanRunDecoratorDelegate)(object_0 => BotPoi.Current.AsObject != (WoWObject)null && BotPoi.Current.AsObject.WithinInteractRange), (Composite)new Sequence((ContextChangeHandler)(object_0 => (object)BotPoi.Current.AsObject), new Composite[10]
+            (Composite)new Decorator((CanRunDecoratorDelegate)(context => !(BotPoi.Current.AsObject != (WoWObject)null) ? (double)ForcedQuestPickUp.Me.Location.DistanceSqr(BotPoi.Current.Location) > 6.25 : !BotPoi.Current.AsObject.WithinInteractRange), (Composite)new ActionMoveToPoi()),
+            (Composite)new Decorator((CanRunDecoratorDelegate)(context => BotPoi.Current.AsObject != (WoWObject)null && BotPoi.Current.AsObject.WithinInteractRange), (Composite)new Sequence((ContextChangeHandler)(context => (object)BotPoi.Current.AsObject), new Composite[10]
             {
                 // HB 4.3.4: 10 elements in sequence
                 (Composite)new ActionMoveStop(),
-                (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_2(object_0))),
-                (Composite)new DecoratorContinue((CanRunDecoratorDelegate)(object_0 => object_0 is WoWUnit), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(object_0 => ((WoWUnit)object_0).Target()))),
-                (Composite)new TreeSharp.Action((ActionSucceedDelegate)(object_0 => ((WoWObject)object_0).Interact())),
+                (Composite)new TreeSharp.Action((ActionDelegate)(context => this.CloseFrames(context))),
+                (Composite)new DecoratorContinue((CanRunDecoratorDelegate)(context => context is WoWUnit), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context => ((WoWUnit)context).Target()))),
+                (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context => ((WoWObject)context).Interact())),
                 (Composite)new ActionSleep(1500),
-                (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.method_3), (Composite)new Sequence(new Composite[2]
+                (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.IsGossipOrQuestListVisible), (Composite)new Sequence(new Composite[2]
                 {
-                    (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_4(object_0))),
+                    (Composite)new TreeSharp.Action((ActionDelegate)(context => this.SelectAvailableQuest(context))),
                     (Composite)new ActionSleep(500)
                 })),
-                (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.method_5), (Composite)new Sequence(new Composite[3]
+                (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.IsQuestFrameVisible), (Composite)new Sequence(new Composite[3]
                 {
-                    (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.method_6), (Composite)new Sequence(new Composite[2]
+                    (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.IsCompleteQuestButtonVisible), (Composite)new Sequence(new Composite[2]
                     {
-                        (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_7(object_0))),
-                        (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_2(object_0)))
+                        (Composite)new TreeSharp.Action((ActionDelegate)(context => this.CompleteQuestBeforeAccept(context))),
+                        (Composite)new TreeSharp.Action((ActionDelegate)(context => this.CloseFrames(context)))
                     })),
-                    (Composite)new TreeSharp.Action((ActionSucceedDelegate)(object_0 => QuestFrame.Instance.AcceptQuest())),
+                    (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context => QuestFrame.Instance.AcceptQuest())),
                     (Composite)new ActionSleep(500)
                 })),
-                (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_8(object_0))),
-                (Composite)new TreeSharp.Action((ActionDelegate)(object_0 => this.method_2(object_0))),
+                (Composite)new TreeSharp.Action((ActionDelegate)(context => this.ClearTarget(context))),
+                (Composite)new TreeSharp.Action((ActionDelegate)(context => this.CloseFrames(context))),
                 (Composite)new ActionClearPoi("Quest Completed")
             }))
         }));
     }
 
-    private bool method_1(object object_0)
+    private bool ShouldSetPoi(object context)
     {
         BotPoi current = BotPoi.Current;
         return current.Type != PoiType.QuestPickUp || (int)current.Entry != (int)this.GiverId;
     }
 
-    private RunStatus method_2(object object_0)
+    private RunStatus CloseFrames(object context)
     {
         if (!GossipFrame.Instance.IsVisible && !QuestFrame.Instance.IsVisible)
             return RunStatus.Success;
@@ -175,74 +190,74 @@ public class ForcedQuestPickUp : ForcedBehavior
         return RunStatus.Running;
     }
 
-    private bool method_3(object object_0)
+    private bool IsGossipOrQuestListVisible(object context)
     {
-        return GossipFrame.Instance.IsVisible || ForcedQuestPickUp.frame_0.IsVisible;
+        return GossipFrame.Instance.IsVisible || ForcedQuestPickUp.QuestTitleButton.IsVisible;
     }
 
-    private RunStatus method_4(object object_0)
+    private RunStatus SelectAvailableQuest(object context)
     {
-        if (!GossipFrame.Instance.IsVisible && !ForcedQuestPickUp.frame_0.IsVisible)
+        if (!GossipFrame.Instance.IsVisible && !ForcedQuestPickUp.QuestTitleButton.IsVisible)
             return RunStatus.Success;
-        List<GossipQuestEntry> availableQuests1 = GossipFrame.Instance.AvailableQuests;
-        List<uint> availableQuests2 = QuestFrame.Instance.AvailableQuests;
-        int index1 = -1;
-        if (availableQuests1.Count > 0)
+        List<GossipQuestEntry> gossipAvailableQuests = GossipFrame.Instance.AvailableQuests;
+        List<uint> questFrameAvailableQuests = QuestFrame.Instance.AvailableQuests;
+        int questIndex = -1;
+        if (gossipAvailableQuests.Count > 0)
         {
-            for (int index2 = 0; index2 < availableQuests1.Count; ++index2)
+            for (int index2 = 0; index2 < gossipAvailableQuests.Count; ++index2)
             {
-                if ((long)availableQuests1[index2].Id == (long)this.QuestId)
+                if ((long)gossipAvailableQuests[index2].Id == (long)this.QuestId)
                 {
-                    index1 = index2;
+                    questIndex = index2;
                     break;
                 }
             }
         }
         else
         {
-            if (availableQuests2.Count <= 0)
+            if (questFrameAvailableQuests.Count <= 0)
                 return RunStatus.Success;
-            for (int index3 = 0; index3 < availableQuests2.Count; ++index3)
+            for (int index3 = 0; index3 < questFrameAvailableQuests.Count; ++index3)
             {
-                if ((int)availableQuests2[index3] == (int)this.QuestId)
+                if ((int)questFrameAvailableQuests[index3] == (int)this.QuestId)
                 {
-                    index1 = index3;
+                    questIndex = index3;
                     break;
                 }
             }
         }
-        if (index1 == -1)
+        if (questIndex == -1)
             return RunStatus.Failure;
-        GossipFrame.Instance.SelectAvailableQuest(index1);
+        GossipFrame.Instance.SelectAvailableQuest(questIndex);
         Thread.Sleep(500);
         return RunStatus.Running;
     }
 
-    private bool method_5(object object_0)
+    private bool IsQuestFrameVisible(object context)
     {
         return QuestFrame.Instance.IsVisible;
     }
 
-    private bool method_6(object object_0)
+    private bool IsCompleteQuestButtonVisible(object context)
     {
-        return ForcedQuestPickUp.frame_1.IsVisible;
+        return ForcedQuestPickUp.QuestFrameCompleteQuestButton.IsVisible;
     }
 
-    private RunStatus method_7(object object_0)
+    private RunStatus CompleteQuestBeforeAccept(object context)
     {
-        if (this.int_0 == -1)
-            this.int_0 = (int)QuestFrame.Instance.CurrentShownQuestId;
-        if (QuestFrame.Instance.IsVisible && (long)this.int_0 == (long)QuestFrame.Instance.CurrentShownQuestId)
+        if (this.lastShownQuestId == -1)
+            this.lastShownQuestId = (int)QuestFrame.Instance.CurrentShownQuestId;
+        if (QuestFrame.Instance.IsVisible && (long)this.lastShownQuestId == (long)QuestFrame.Instance.CurrentShownQuestId)
         {
             QuestFrame.Instance.CompleteQuest();
             Thread.Sleep(500);
             return RunStatus.Running;
         }
-        this.int_0 = -1;
+        this.lastShownQuestId = -1;
         return RunStatus.Success;
     }
 
-    private RunStatus method_8(object object_0)
+    private RunStatus ClearTarget(object context)
     {
         if (!ObjectManager.Me.GotTarget)
             return RunStatus.Success;

@@ -19,7 +19,7 @@ namespace Bots.Quest.QuestOrder;
 
 public class ForcedWhile : ForcedBehavior
 {
-    private Class104 class104_0;
+    private WhileComposite whileComposite;
 
     public ForcedWhile(WhileNode node)
     {
@@ -30,32 +30,32 @@ public class ForcedWhile : ForcedBehavior
 
     protected override Composite CreateBehavior()
     {
-        return (Composite)(this.class104_0 ?? (this.class104_0 = new Class104(this.WhileNode)));
+        return (Composite)(this.whileComposite ?? (this.whileComposite = new WhileComposite(this.WhileNode)));
     }
 
     public override bool IsDone
     {
-        get => (Composite)this.class104_0 != (Composite)null && this.class104_0.IsDone;
+        get => (Composite)this.whileComposite != (Composite)null && this.whileComposite.IsDone;
     }
 
-    private class Class104 : Composite
+    private class WhileComposite : Composite
     {
-        private readonly WhileNode whileNode_0;
-        private ForcedBehaviorExecutor forcedBehaviorExecutor_0;
-        private bool bool_0;
+        private readonly WhileNode whileNode;
+        private ForcedBehaviorExecutor behaviorExecutor;
+        private bool hasInitialized;
 
-        public Class104(WhileNode node) => this.whileNode_0 = node;
+        public WhileComposite(WhileNode node) => this.whileNode = node;
 
         public bool IsDone { get; private set; }
 
         protected override IEnumerable<RunStatus> Execute(object context)
         {
-            if (!this.bool_0)
+            if (!this.hasInitialized)
             {
                 bool flag;
                 try
                 {
-                    flag = this.whileNode_0.Condition();
+                    flag = this.whileNode.Condition();
                 }
                 catch (Exception ex)
                 {
@@ -73,26 +73,26 @@ public class ForcedWhile : ForcedBehavior
                     yield return RunStatus.Success;
                     yield break;
                 }
-                this.bool_0 = true;
-                QuestOrder order = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)this.whileNode_0.Body))
+                this.hasInitialized = true;
+                QuestOrder order = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)this.whileNode.Body))
                 {
                     IgnoreCheckpoints = QuestState.Instance.Order.IgnoreCheckpoints
                 };
                 order.UpdateNodes();
-                this.forcedBehaviorExecutor_0 = new ForcedBehaviorExecutor(order);
+                this.behaviorExecutor = new ForcedBehaviorExecutor(order);
             }
-            if (this.forcedBehaviorExecutor_0.Order.Nodes.Count <= 0)
+            if (this.behaviorExecutor.Order.Nodes.Count <= 0)
             {
-                this.bool_0 = false;
+                this.hasInitialized = false;
                 yield return RunStatus.Success;
             }
             else
             {
-                this.forcedBehaviorExecutor_0.Start(context);
-                while (this.forcedBehaviorExecutor_0.Tick(context) == RunStatus.Running)
+                this.behaviorExecutor.Start(context);
+                while (this.behaviorExecutor.Tick(context) == RunStatus.Running)
                     yield return RunStatus.Running;
-                this.forcedBehaviorExecutor_0.Stop(context);
-                yield return this.forcedBehaviorExecutor_0.LastStatus ?? RunStatus.Failure;
+                this.behaviorExecutor.Stop(context);
+                yield return this.behaviorExecutor.LastStatus ?? RunStatus.Failure;
             }
         }
     }

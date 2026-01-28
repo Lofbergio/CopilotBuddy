@@ -18,8 +18,8 @@ namespace Bots.Quest.QuestOrder;
 
 public class ForcedIf : ForcedBehavior
 {
-    private QuestOrder questOrder_0;
-    private Composite composite_1;
+    private QuestOrder conditionalOrder;
+    private Composite behaviorExecutor;
 
     public ForcedIf(IfNode node)
     {
@@ -30,9 +30,9 @@ public class ForcedIf : ForcedBehavior
 
     protected override Composite CreateBehavior()
     {
-        Composite behavior = this.composite_1;
+        Composite behavior = this.behaviorExecutor;
         if ((object)behavior == null)
-            behavior = this.composite_1 = (Composite)new ForcedBehaviorExecutor(this.questOrder_0);
+            behavior = this.behaviorExecutor = (Composite)new ForcedBehaviorExecutor(this.conditionalOrder);
         return behavior;
     }
 
@@ -42,15 +42,15 @@ public class ForcedIf : ForcedBehavior
         {
             if (this.IfNode.Condition())
             {
-                this.questOrder_0 = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)this.IfNode.Body));
+                this.conditionalOrder = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)this.IfNode.Body));
             }
             else
             {
-                OrderNodeCollection orderNodeCollection_0;
-                if (this.method_0(out orderNodeCollection_0))
-                    this.questOrder_0 = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)orderNodeCollection_0));
+                OrderNodeCollection matchingElseIfBody;
+                if (this.TryGetMatchingElseIf(out matchingElseIfBody))
+                    this.conditionalOrder = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)matchingElseIfBody));
                 else if (this.IfNode.Else != null)
-                    this.questOrder_0 = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)this.IfNode.Else.Body));
+                    this.conditionalOrder = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)this.IfNode.Else.Body));
             }
         }
         catch (Exception ex)
@@ -60,13 +60,13 @@ public class ForcedIf : ForcedBehavior
             Logging.WriteException(ex);
             TreeRoot.Stop();
         }
-        if (this.questOrder_0 == null)
+        if (this.conditionalOrder == null)
             return;
-        this.questOrder_0.IgnoreCheckpoints = QuestState.Instance.Order.IgnoreCheckpoints;
-        this.questOrder_0.UpdateNodes();
+        this.conditionalOrder.IgnoreCheckpoints = QuestState.Instance.Order.IgnoreCheckpoints;
+        this.conditionalOrder.UpdateNodes();
     }
 
-    private bool method_0(out OrderNodeCollection orderNodeCollection_0)
+    private bool TryGetMatchingElseIf(out OrderNodeCollection matchingBody)
     {
         bool flag;
         using (List<ElseIf>.Enumerator enumerator = this.IfNode.ElseIfs.GetEnumerator())
@@ -80,12 +80,12 @@ public class ForcedIf : ForcedBehavior
                     goto label_6;
             }
             while (!current.Condition());
-            orderNodeCollection_0 = current.Body;
+            matchingBody = current.Body;
             flag = true;
             goto label_7;
         }
     label_6:
-        orderNodeCollection_0 = (OrderNodeCollection)null;
+        matchingBody = (OrderNodeCollection)null;
         return false;
     label_7:
         return flag;
@@ -95,7 +95,7 @@ public class ForcedIf : ForcedBehavior
     {
         get
         {
-            return this.questOrder_0 == null || this.questOrder_0.Nodes == null || this.questOrder_0.Nodes.Count <= 0;
+            return this.conditionalOrder == null || this.conditionalOrder.Nodes == null || this.conditionalOrder.Nodes.Count <= 0;
         }
     }
 }

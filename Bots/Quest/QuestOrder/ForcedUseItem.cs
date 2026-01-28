@@ -19,8 +19,8 @@ namespace Bots.Quest.QuestOrder;
 
 public class ForcedUseItem : ForcedBehavior
 {
-    private bool bool_0;
-    private Composite composite_1;
+    private bool isDone;
+    private Composite useItemBehavior;
 
     public ForcedUseItem(
         Func<WoWItem> itemRetriever,
@@ -50,33 +50,33 @@ public class ForcedUseItem : ForcedBehavior
 
     protected override Composite CreateBehavior()
     {
-        Composite behavior = this.composite_1;
+        Composite behavior = this.useItemBehavior;
         if ((object)behavior == null)
-            behavior = this.composite_1 = (Composite)new PrioritySelector((ContextChangeHandler)(object_0 => (object)this.ItemRetriever()), new Composite[2]
+            behavior = this.useItemBehavior = (Composite)new PrioritySelector((ContextChangeHandler)(context => (object)this.ItemRetriever()), new Composite[2]
             {
-                (Composite)new Decorator((CanRunDecoratorDelegate)(object_0 => (double)StyxWoW.Me.Location.Distance(this.Location) > (double)Navigator.PathPrecision), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(object_0 =>
+                (Composite)new Decorator((CanRunDecoratorDelegate)(context => (double)StyxWoW.Me.Location.Distance(this.Location) > (double)Navigator.PathPrecision), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context =>
                 {
                     Mount.StateMount((LocationRetriever)(() => this.Location));
                     int num = (int)Navigator.MoveTo(this.Location);
                 }))),
-                (Composite)new Decorator((CanRunDecoratorDelegate)(object_0 => object_0 != null), (Composite)new Sequence(new Composite[2]
+                (Composite)new Decorator((CanRunDecoratorDelegate)(context => context != null), (Composite)new Sequence(new Composite[2]
                 {
-                    (Composite)new DecoratorContinue((CanRunDecoratorDelegate)(object_0 => StyxWoW.Me.IsMoving), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(object_0 => WoWMovement.MoveStop()))),
-                    (Composite)new WaitContinue(3, (CanRunDecoratorDelegate)(object_0 => !StyxWoW.Me.IsMoving), (Composite)new Sequence(new Composite[3]
+                    (Composite)new DecoratorContinue((CanRunDecoratorDelegate)(context => StyxWoW.Me.IsMoving), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context => WoWMovement.MoveStop()))),
+                    (Composite)new WaitContinue(3, (CanRunDecoratorDelegate)(context => !StyxWoW.Me.IsMoving), (Composite)new Sequence(new Composite[3]
                     {
-                        (Composite)new DecoratorContinue((CanRunDecoratorDelegate)(object_0 => StyxWoW.Me.Mounted), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(object_0 =>
+                        (Composite)new DecoratorContinue((CanRunDecoratorDelegate)(context => StyxWoW.Me.Mounted), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context =>
                         {
                             Mount.Dismount("UseItem");
                             StyxWoW.SleepForLagDuration();
                         }))),
-                        (Composite)new TreeSharp.Action((ActionSucceedDelegate)(object_0 =>
+                        (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context =>
                         {
-                            WoWItem woWitem = (WoWItem)object_0;
+                            WoWItem woWitem = (WoWItem)context;
                             WoWObject woWobject = this.TargetRetriever();
                             woWitem.Use(woWobject != (WoWObject)null ? woWobject.Guid : 0UL, this.ForceUse);
                             StyxWoW.SleepForLagDuration();
                         })),
-                        (Composite)new WaitContinue(30, (CanRunDecoratorDelegate)(object_0 => !StyxWoW.Me.IsCasting), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(object_0 => this.bool_0 = true)))
+                        (Composite)new WaitContinue(30, (CanRunDecoratorDelegate)(context => !StyxWoW.Me.IsCasting), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context => this.isDone = true)))
                     }))
                 }))
             });
@@ -88,7 +88,7 @@ public class ForcedUseItem : ForcedBehavior
         get
         {
             PlayerQuest questById = StyxWoW.Me.QuestLog.GetQuestById(this.QuestId);
-            if (this.bool_0)
+            if (this.isDone)
                 return true;
             return questById != null && questById.IsCompleted;
         }
@@ -100,7 +100,7 @@ public class ForcedUseItem : ForcedBehavior
         if (questById != null)
             TreeRoot.GoalText = string.Format("Using item for {0}", (object)questById.Name);
         else
-            this.bool_0 = true;
+            this.isDone = true;
     }
 
     public override string ToString()

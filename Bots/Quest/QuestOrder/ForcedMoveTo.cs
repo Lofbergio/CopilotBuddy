@@ -19,7 +19,7 @@ namespace Bots.Quest.QuestOrder;
 
 public class ForcedMoveTo : ForcedBehavior
 {
-    private bool bool_0;
+    private bool hasReachedLocation;
 
     public ForcedMoveTo(WoWPoint location, uint questId)
         : this(location, (string)null, 1.5f, questId)
@@ -44,10 +44,10 @@ public class ForcedMoveTo : ForcedBehavior
 
     protected override Composite CreateBehavior()
     {
-        return (Composite)new Action((ActionSucceedDelegate)(object_0 =>
+        return (Composite)new Action((ActionSucceedDelegate)(context =>
         {
             if ((double)ObjectManager.Me.Location.DistanceSqr(this.Location) <= (double)this.Precision * (double)this.Precision)
-                this.bool_0 = true;
+                this.hasReachedLocation = true;
             if (Mount.ShouldMount(this.Location))
                 Mount.StateMount((LocationRetriever)(() => this.Location));
             int num = (int)Navigator.MoveTo(this.Location);
@@ -59,9 +59,9 @@ public class ForcedMoveTo : ForcedBehavior
         get
         {
             if (this.QuestId == 0U)
-                return this.bool_0;
+                return this.hasReachedLocation;
             PlayerQuest questById = StyxWoW.Me.QuestLog.GetQuestById(this.QuestId);
-            if (this.bool_0)
+            if (this.hasReachedLocation)
                 return true;
             return questById != null && questById.IsCompleted;
         }
