@@ -31,6 +31,7 @@ namespace Styx.WoWInternals.World
             HitTestLiquid2 = 131072,           // 0x20000
             HitTestMovableObjects = 1048576,   // 0x100000
             HitTestLOS = 1048593,              // 0x100011 = HitTestMovableObjects | HitTestWMO | HitTestBoundingModels
+            HitTestSpellLoS = 16,              // 0x10 - Same as HitTestWMO for spell LoS checks
             HitTestGroundAndStructures = 1048849, // 0x100111 = HitTestMovableObjects | HitTestGround | HitTestWMO | HitTestBoundingModels
         }
         
@@ -69,47 +70,99 @@ namespace Styx.WoWInternals.World
 
         /// <summary>
         /// Vérifie si deux points sont en ligne de vue (line of sight).
+        /// Uses native WoW CGWorldFrame::Intersect with HitTestLOS flag.
+        /// Ported from HB 4.3.4.
         /// </summary>
         public static bool IsInLineOfSight(WoWPoint from, WoWPoint to)
         {
-            // Ajuste la hauteur pour la tête du personnage
-            from = new WoWPoint(from.X, from.Y, from.Z + 1.132f);
-            to = new WoWPoint(to.X, to.Y, to.Z + 1.132f);
-            
-            return !TraceLine(from, to, TraceLineHitFlags.All);
+            return !TraceLine(from, to, CGWorldFrameHitFlags.HitTestLOS);
         }
 
         /// <summary>
         /// Vérifie si deux points sont en ligne de vue pour les sorts.
-        /// Similaire à IsInLineOfSight mais avec des flags différents pour les sorts.
+        /// Uses native WoW CGWorldFrame::Intersect with HitTestSpellLoS flag.
         /// Ported from HB 4.3.4.
         /// </summary>
         public static bool IsInLineOfSpellSight(WoWPoint from, WoWPoint to)
         {
-            // Pour les sorts, on utilise les mêmes flags que IsInLineOfSight
-            // La différence dans HB 4.3.4 est HitTestSpellLoS vs HitTestLOS
-            // mais dans notre implémentation navmesh, c'est équivalent
-            return IsInLineOfSight(from, to);
+            return !TraceLine(from, to, CGWorldFrameHitFlags.HitTestSpellLoS);
         }
 
         /// <summary>
         /// Trace une ligne entre deux points pour détecter les collisions.
+        /// Uses native WoW CGWorldFrame::Intersect function.
+        /// Ported from HB 4.3.4.
         /// </summary>
+        public static bool TraceLine(WoWPoint from, WoWPoint to, CGWorldFrameHitFlags flags)
+        {
+            return TraceLine(from, to, 1f, flags, out _);
+        }
+
         public static bool TraceLine(WoWPoint from, WoWPoint to, TraceLineHitFlags flags)
         {
             return TraceLine(from, to, flags, out _);
         }
 
-        public static bool TraceLine(WoWPoint from, WoWPoint to, CGWorldFrameHitFlags flags)
+        public static bool TraceLine(WoWPoint from, WoWPoint to, CGWorldFrameHitFlags flags, out WoWPoint hitPoint)
         {
-            return TraceLine(from, to, MapFlags(flags), out _);
+            return TraceLine(from, to, 1f, flags, out hitPoint);
+        }
+
+        /// <summary>
+        /// Native WoW TraceLine using CGWorldFrame::Intersect.
+        /// Ported from HB 3.3.5a - uses offset 0x7A3B70 (8010608).
+        /// </summary>
+        private static bool TraceLine(WoWPoint from, WoWPoint to, float distance, CGWorldFrameHitFlags flags, out WoWPoint hitPoint)
+        {
+            hitPoint = WoWPoint.Zero;
+            
+            GreenMagic.ExecutorRand? executor = ObjectManager.Executor;
+            if (executor == null)
+                return true; // Assume hit if no executor
+            
+            lock (executor.AssemblyLock)
+            {
+                using (var memory = new Styx.Helpers.AllocatedMemory(40))
+                {
+                    memory.AllocateOfChunk("From", 12);
+                    memory.AllocateOfChunk("To", 12);
+                    memory.AllocateOfChunk("Distance", 4);
+                    memory.AllocateOfChunk("IntersectionPoint", 12);
+                    
+                    memory.Write("From", from);
+                    memory.Write("To", to);
+                    memory.Write("Distance", distance);
+                    
+                    try
+                    {
+                        executor.Clear();
+                        executor.AddLine("push 0");
+                        executor.AddLine("push {0}", (uint)flags);
+                        executor.AddLine("push {0}", memory["Distance"]);
+                        executor.AddLine("push {0}", memory["IntersectionPoint"]);
+                        executor.AddLine("push {0}", memory["To"]);
+                        executor.AddLine("push {0}", memory["From"]);
+                        executor.AddLine("call {0}", 8010608U);  // HB 3.3.5a offset: 0x7A3B70
+                        executor.AddLine("add esp, 0x18");
+                        executor.AddLine("retn");
+                        executor.Execute();
+                        
+                        hitPoint = memory.Read<WoWPoint>("IntersectionPoint");
+                        byte result = executor.Memory.Read<byte>(executor.ReturnPointer);
+                        return result != 0;
+                    }
+                    catch (Exception ex)
+                    {
+                        Styx.Helpers.Logging.WriteDebug("Exception in TraceLine: {0}", ex.Message);
+                        return true; // Assume hit on error
+                    }
+                }
+            }
         }
 
         /// <summary>
         /// Trace une ligne entre deux points et retourne le point de collision.
-        /// Utilise Tripper.Navigation.Raycast pour le navmesh.
-        /// Note: Ce n'est pas identique au TraceLine WoW natif (terrain/WMO), 
-        /// mais utilise le navmesh pour détecter les obstacles de navigation.
+        /// Uses navmesh raycast for legacy TraceLineHitFlags.
         /// </summary>
         public static bool TraceLine(WoWPoint from, WoWPoint to, TraceLineHitFlags flags, out WoWPoint hitPoint)
         {
@@ -124,11 +177,6 @@ namespace Styx.WoWInternals.World
             
             // Pas de collision détectée pour autres flags
             return false;
-        }
-
-        public static bool TraceLine(WoWPoint from, WoWPoint to, CGWorldFrameHitFlags flags, out WoWPoint hitPoint)
-        {
-            return TraceLine(from, to, MapFlags(flags), out hitPoint);
         }
 
         /// <summary>
