@@ -26,7 +26,7 @@ namespace Styx.Logic.Pathing
         private long _unstickAttemptCount = 1;
 
         private bool _triedDismount;
-        private bool _triedJump;
+        private int _jumpAttempts;
         private bool _triedStrafeForwardLeft;
         private bool _triedStrafeForwardRight;
         private bool _triedStrafeLeft;
@@ -110,17 +110,17 @@ namespace Styx.Logic.Pathing
                 }
                 _triedDismount = true;
             }
-            else if (!_triedJump)
+            else if (_jumpAttempts < 3)
             {
-                // HB pattern: Jump WHILE moving forward (don't stop movement)
+                // Permettre jusqu'à 3 tentatives de saut
                 WoWPoint forward = location.RayCast(rotation, JumpRaycastDistance).Add(0f, 0f, 2f);
                 WoWPoint start = location.Add(0f, 0f, 2f);
                 if (GameWorld.IsInLineOfSight(start, forward))
                 {
-                    Logging.WriteDebug("[STUCK] Trying jump while moving forward.");
+                    Logging.WriteDebug("[STUCK] Jump attempt {0}/3 while moving forward.", _jumpAttempts + 1);
                     PerformJump();
                 }
-                _triedJump = true;
+                _jumpAttempts++;
             }
             else if (!_triedStrafeForwardLeft)
             {
@@ -199,7 +199,7 @@ namespace Styx.Logic.Pathing
         private void ResetUnstickAttempts()
         {
             _triedDismount = false;
-            _triedJump = false;
+            _jumpAttempts = 0;
             _triedStrafeForwardLeft = false;
             _triedStrafeForwardRight = false;
             _triedStrafeLeft = false;
