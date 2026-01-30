@@ -241,15 +241,14 @@ public class ForcedBehaviorExecutor : Composite
 
     private static ForcedQuestTurnIn CreateQuestTurnIn(TurnInNode turnInNode)
     {
-        // Check if quest is in log using ContainsQuest (more reliable than GetQuestById which can fail on cache miss)
-        if (!ObjectManager.Me.QuestLog.ContainsQuest(turnInNode.QuestId))
+        PlayerQuest questById = ObjectManager.Me.QuestLog.GetQuestById(turnInNode.QuestId);
+        if (questById == null)
         {
-            Logging.Write("Can not turn in quest {0} (ID: {1}) because it's not in the quest log.", (object)Utilities.GetObjectString((object)turnInNode.QuestName, "(null)"), (object)turnInNode.QuestId);
+            Logging.Write("Can not turn in quest {0} (ID: {1}) because I don't have it in my quest log! (Or do I: {2})", (object)Utilities.GetObjectString((object)turnInNode.QuestName, "(null)"), (object)turnInNode.QuestId, (object)ObjectManager.Me.QuestLog.ContainsQuest(turnInNode.QuestId));
             return (ForcedQuestTurnIn)null;
         }
         
         // Try to get quest object for completion info (may be null if not in cache)
-        PlayerQuest questById = ObjectManager.Me.QuestLog.GetQuestById(turnInNode.QuestId);
         if (ProfileManager.CurrentProfile != (Profile)null)
         {
             QuestInfo quest = ProfileManager.CurrentProfile.FindQuest(turnInNode.QuestId);
@@ -293,38 +292,55 @@ public class ForcedBehaviorExecutor : Composite
 
     private static Bots.Quest.Objectives.QuestObjective CreateQuestObjective(ObjectiveNode objectiveNode)
     {
-        // Check if quest is in log using ContainsQuest
+        // Check if quest is in log
         if (!ObjectManager.Me.QuestLog.ContainsQuest(objectiveNode.QuestId))
         {
             Logging.Write("Could not find quest with ID {0} in quest log.", (object)objectiveNode.QuestId);
             return (Bots.Quest.Objectives.QuestObjective)null;
         }
         
-        // Try to get quest object (may be null if not in cache)
+        // Get PlayerQuest from quest log
         PlayerQuest questById = ObjectManager.Me.QuestLog.GetQuestById(objectiveNode.QuestId);
         if (questById == null)
         {
-            Logging.Write("Quest {0} is in log but not in cache - skipping objective creation.", (object)objectiveNode.QuestId);
+            Logging.Write("Quest {0} is in log but GetQuestById returned null.", (object)objectiveNode.QuestId);
             return (Bots.Quest.Objectives.QuestObjective)null;
         }
-        WoWQuestCompletionInfo completionInfo = questById.GetCompletionInfo();
+        
+        // Get objectives from cache
         List<Styx.Logic.Questing.Quest.QuestObjective> objectives = questById.GetObjectives();
         Styx.Logic.Questing.Quest.QuestObjective? nullable = new Styx.Logic.Questing.Quest.QuestObjective?();
         int objectiveIndex = 0;
-        for (int index = 0; index < objectives.Count; ++index)
+        
+        // Try to find objective by Index first (if specified in XML), then by ID
+        if (objectiveNode.ObjectiveIndex >= 0 && objectiveNode.ObjectiveIndex < objectives.Count)
         {
-            if ((long)objectives[index].ID == (long)objectiveNode.ObjectiveId)
+            // Direct index lookup (fastest and most reliable in WotLK)
+            nullable = new Styx.Logic.Questing.Quest.QuestObjective?(objectives[objectiveNode.ObjectiveIndex]);
+            objectiveIndex = objectiveNode.ObjectiveIndex;
+        }
+        else
+        {
+            // Fallback: search by ID (mob/item/object ID from XML)
+            for (int index = 0; index < objectives.Count; ++index)
             {
-                nullable = new Styx.Logic.Questing.Quest.QuestObjective?(objectives[index]);
-                objectiveIndex = index;
-                break;
+                if ((long)objectives[index].ID == (long)objectiveNode.ObjectiveId)
+                {
+                    nullable = new Styx.Logic.Questing.Quest.QuestObjective?(objectives[index]);
+                    objectiveIndex = index;
+                    break;
+                }
             }
         }
+        
         if (!nullable.HasValue)
         {
-            Logging.Write("Could not find objective with ID {0} in quest {1}.", (object)objectiveNode.ObjectiveId, (object)questById.Name);
+            Logging.Write("Could not find objective with ID {0} or Index {1} in quest {2}.", 
+                (object)objectiveNode.ObjectiveId, (object)objectiveNode.ObjectiveIndex, (object)questById.Name);
             return (Bots.Quest.Objectives.QuestObjective)null;
         }
+        
+        WoWQuestCompletionInfo completionInfo = questById.GetCompletionInfo();
         List<WoWQuestStep> list = ((IEnumerable<WoWQuestStep>)completionInfo.Steps.Steps).Where<WoWQuestStep>((Func<WoWQuestStep, bool>)(s => s.PoiObjectiveIndex == objectiveIndex)).ToList<WoWQuestStep>();
         return QuestManager.CreateQuestObjective(nullable.Value, questById, list, (List<Bots.Quest.Objectives.QuestObjective>)null);
     }
