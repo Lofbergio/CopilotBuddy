@@ -210,5 +210,10 @@ namespace Styx.Offsets
 
 		/// <summary>VMT index for GetName.</summary>
 		public const uint VMT_GetName = 0xD4;
+
+		// ==================== World Intersection ====================
+		/// <summary>Function: CGWorldFrame::Intersect - Native WoW line of sight check.</summary>
+		/// <remarks>Used for TraceLine/InLineOfSpellSight checks through walls/terrain.</remarks>
+		public const uint CGWorldFrame_Intersect = 0x0077F310;
 	}
 }
