@@ -326,6 +326,7 @@ namespace Tripper.Navigation
                         StraightPathFlags[] flags = new StraightPathFlags[pathLength];
                         AreaType[] polyTypes = new AreaType[pathLength];
                         AbilityFlags[] abilityFlags = new AbilityFlags[pathLength];
+                        PolygonReference[] polygons = new PolygonReference[pathLength];
 
                         unsafe
                         {
@@ -365,6 +366,16 @@ namespace Tripper.Navigation
                                     abilityFlags[i] = (AbilityFlags)abilityPtr[i];
                                 }
                             }
+
+                            // PolyRefs (polygon references for each point)
+                            if (nativeResult.PolyRefs != IntPtr.Zero)
+                            {
+                                ulong* polyRefsPtr = (ulong*)nativeResult.PolyRefs.ToPointer();
+                                for (int i = 0; i < pathLength; i++)
+                                {
+                                    polygons[i] = new PolygonReference(polyRefsPtr[i]);
+                                }
+                            }
                         }
 
                         // Apply path post-processing (like HB's MoveAwayFromEdges)
@@ -374,7 +385,7 @@ namespace Tripper.Navigation
                             {
                                 if (PathPostProcessing == PathPostProcessing.MoveAwayFromEdges)
                                 {
-                                    PathPostProcessor.MoveAwayFromEdges(mapId, ref points, ref flags, EdgeDistance);
+                                    PathPostProcessor.MoveAwayFromEdges(mapId, ref points, ref flags, ref polygons, EdgeDistance);
                                 }
                                 else if (PathPostProcessing == PathPostProcessing.Randomize)
                                 {
@@ -395,7 +406,7 @@ namespace Tripper.Navigation
                             Status = status,
                             Points = points,
                             Flags = flags,
-                            Polygons = new PolygonReference[pathLength], // Not returned by C++ yet
+                            Polygons = polygons,
                             AbilityFlags = abilityFlags,
                             PolyTypes = polyTypes,
                             StartPoly = PolygonReference.Invalid,
