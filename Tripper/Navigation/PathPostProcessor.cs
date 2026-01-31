@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Numerics;
 
 namespace Tripper.Navigation
@@ -23,6 +24,20 @@ namespace Tripper.Navigation
         /// </summary>
         private const int MaxRecursionDepth = 5;
 
+        private static readonly string LogPath = Path.Combine(
+            Path.GetDirectoryName(typeof(PathPostProcessor).Assembly.Location) ?? ".",
+            "PathPostProcessor.log");
+
+        private static void Log(string line)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[PathPostProcessor] {line}");
+                File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss.fff} {line}\n");
+            }
+            catch { }
+        }
+
         /// <summary>
         /// Post-processes a path by moving waypoints away from edges.
         /// </summary>
@@ -36,15 +51,39 @@ namespace Tripper.Navigation
             ref StraightPathFlags[] flags,
             float edgeDistance = DefaultEdgeDistance)
         {
+            // Call overload with null polygons for backward compatibility
+            PolygonReference[] polygons = null;
+            MoveAwayFromEdges(mapId, ref points, ref flags, ref polygons, edgeDistance);
+        }
+
+        /// <summary>
+        /// Post-processes a path by moving waypoints away from edges.
+        /// Uses polygon references for more accurate wall distance queries.
+        /// </summary>
+        /// <param name="mapId">Map ID for navmesh queries.</param>
+        /// <param name="points">Path points to process (modified in place).</param>
+        /// <param name="flags">Path flags for each point.</param>
+        /// <param name="polygons">Polygon references for each point (can be null).</param>
+        /// <param name="edgeDistance">Distance threshold for edge detection.</param>
+        public static void MoveAwayFromEdges(
+            uint mapId,
+            ref Vector3[] points,
+            ref StraightPathFlags[] flags,
+            ref PolygonReference[] polygons,
+            float edgeDistance = DefaultEdgeDistance)
+        {
             if (points == null || points.Length < 2)
                 return;
+
+            Log($"MoveAwayFromEdges called: {points.Length} points, edgeDistance={edgeDistance}, hasPolygons={polygons != null}");
 
             // Convert to lists for easier manipulation
             var pointsList = new List<Vector3>(points);
             var flagsList = new List<StraightPathFlags>(flags);
+            var polyList = polygons != null ? new List<PolygonReference>(polygons) : null;
 
             // Pass 1: Move intermediate waypoints away from edges
-            MoveWaypointsFromEdges(mapId, pointsList, flagsList, edgeDistance);
+            MoveWaypointsFromEdges(mapId, pointsList, flagsList, polyList, edgeDistance);
 
             // Pass 2: Fix any segments that became unwalkable
             FixPathWalkability(mapId, pointsList, flagsList, edgeDistance, 0);
@@ -52,6 +91,10 @@ namespace Tripper.Navigation
             // Convert back to arrays
             points = pointsList.ToArray();
             flags = flagsList.ToArray();
+            if (polyList != null)
+                polygons = polyList.ToArray();
+
+            Log($"MoveAwayFromEdges done: {points.Length} points after processing");
         }
 
         /// <summary>
@@ -94,6 +137,7 @@ namespace Tripper.Navigation
             uint mapId,
             List<Vector3> points,
             List<StraightPathFlags> flags,
+            List<PolygonReference> polygons,
             float edgeDistance)
         {
             // Skip first and last points (start/end positions should not be moved)
@@ -106,7 +150,9 @@ namespace Tripper.Navigation
                     continue;
 
                 Vector3 point = points[i];
-                if (TryMoveAwayFromEdge(mapId, ref point, edgeDistance))
+                ulong polyRef = (polygons != null && i < polygons.Count) ? polygons[i].Id : 0;
+                
+                if (TryMoveAwayFromEdge(mapId, ref point, polyRef, edgeDistance))
                 {
                     points[i] = point;
                 }
@@ -118,15 +164,32 @@ namespace Tripper.Navigation
         /// Based on HB's method_2 (TryMoveAwayFromEdge).
         /// </summary>
         /// <returns>True if point was successfully moved.</returns>
-        private static bool TryMoveAwayFromEdge(uint mapId, ref Vector3 point, float edgeDistance)
+        private static bool TryMoveAwayFromEdge(uint mapId, ref Vector3 point, ulong polyRef, float edgeDistance)
         {
             // Find distance to nearest wall
             NativeMethods.XYZ hitPoint;
-            float distance = NativeMethods.FindDistanceToWall(
-                mapId,
-                new NativeMethods.XYZ(point),
-                edgeDistance,
-                out hitPoint);
+            float distance;
+            
+            // Use polygon-specific query if we have a valid polyRef
+            if (polyRef != 0)
+            {
+                distance = NativeMethods.FindDistanceToWallFromPoly(
+                    mapId,
+                    polyRef,
+                    new NativeMethods.XYZ(point),
+                    edgeDistance,
+                    out hitPoint);
+                Log($"FindDistanceToWallFromPoly({point}, polyRef=0x{polyRef:X}) = {distance}");
+            }
+            else
+            {
+                distance = NativeMethods.FindDistanceToWall(
+                    mapId,
+                    new NativeMethods.XYZ(point),
+                    edgeDistance,
+                    out hitPoint);
+                Log($"FindDistanceToWall({point}) = {distance}");
+            }
 
             // If we're far enough from walls, nothing to do
             if (distance >= edgeDistance || distance < 0.01f)
@@ -216,7 +279,7 @@ namespace Tripper.Navigation
                 if (distance < offset && distance >= 0.01f)
                 {
                     // Near wall, move away from it
-                    if (TryMoveAwayFromEdge(mapId, ref point, offset))
+                    if (TryMoveAwayFromEdge(mapId, ref point, 0, offset))
                     {
                         moved = true;
                     }
