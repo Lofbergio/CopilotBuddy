@@ -85,13 +85,14 @@ namespace Styx.Logic.Profiles.Quest
 						}
 						else if (text == "hotspots" || text == "spots" || text == "locations")
 						{
+							var hotspots = HotspotCollection.FromXElement(childElement, "hotspot", "spot", "location");
 							if (killMobObjectiveInfo.OverridedHotspots == null)
 							{
-								killMobObjectiveInfo.OverridedHotspots = HotspotCollection.FromXElement(childElement, "hotspot", "spot", "location");
+								killMobObjectiveInfo.OverridedHotspots = hotspots;
 							}
 							else
 							{
-								killMobObjectiveInfo.OverridedHotspots.AddRange(HotspotCollection.FromXElement(childElement, "hotspot", "spot", "location"));
+								killMobObjectiveInfo.OverridedHotspots.AddRange(hotspots);
 							}
 						}
 					}
@@ -100,11 +101,6 @@ namespace Styx.Logic.Profiles.Quest
 				{
 					Logging.WriteDebug(ex.Message);
 				}
-			}
-
-			if (killMobObjectiveInfo.OverridedHotspots == null)
-			{
-				killMobObjectiveInfo.OverridedHotspots = HotspotCollection.FromXElement(element, "Hotspot");
 			}
 
 			return killMobObjectiveInfo;
