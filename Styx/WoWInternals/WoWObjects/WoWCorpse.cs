@@ -16,16 +16,17 @@ namespace Styx.WoWInternals.WoWObjects
         
         #region Descriptor Offsets - CORPSE_FIELD
         
-        // CorpseFields pour 3.3.5a (offset depuis descriptors)
-        private const int CORPSE_FIELD_OWNER = 0x0;           // 8 bytes (ulong) - Owner GUID
-        private const int CORPSE_FIELD_PARTY = 0x8;           // 8 bytes (ulong) - Party GUID
-        private const int CORPSE_FIELD_DISPLAY_ID = 0x10;     // 4 bytes
-        private const int CORPSE_FIELD_ITEM = 0x14;           // Array de 19 x 4 bytes (equipment display)
-        private const int CORPSE_FIELD_BYTES_1 = 0x60;        // 4 bytes (race, gender, skin, face)
-        private const int CORPSE_FIELD_BYTES_2 = 0x64;        // 4 bytes (hair style, hair color, facial, flags)
-        private const int CORPSE_FIELD_GUILD = 0x68;          // 4 bytes - Guild ID
-        private const int CORPSE_FIELD_FLAGS = 0x6C;          // 4 bytes
-        private const int CORPSE_FIELD_DYNAMIC_FLAGS = 0x70;  // 4 bytes
+        // CorpseFields pour 3.3.5a (Offsets.txt: indices × 4 + 0x18 OBJECT_FIELD_COUNT)
+        // Source: Offsets.txt ligne 5013-5022
+        private const int CORPSE_FIELD_OWNER = 0x18;          // 0x6 × 4 = 0x18 (24) - Owner GUID (8 bytes ulong)
+        private const int CORPSE_FIELD_PARTY = 0x20;          // 0x8 × 4 = 0x20 (32) - Party GUID (8 bytes ulong)
+        private const int CORPSE_FIELD_DISPLAY_ID = 0x28;     // 0xA × 4 = 0x28 (40) - Display ID (4 bytes)
+        private const int CORPSE_FIELD_ITEM = 0x2C;           // 0xB × 4 = 0x2C (44) - Equipment array (19 × 4 bytes)
+        private const int CORPSE_FIELD_BYTES_1 = 0x78;        // 0x1E × 4 = 0x78 (120) - Race, Gender, Skin, Face
+        private const int CORPSE_FIELD_BYTES_2 = 0x7C;        // 0x1F × 4 = 0x7C (124) - Hair style, hair color, facial, flags
+        private const int CORPSE_FIELD_GUILD = 0x80;          // 0x20 × 4 = 0x80 (128) - Guild ID
+        private const int CORPSE_FIELD_FLAGS = 0x84;          // 0x21 × 4 = 0x84 (132) - Corpse flags
+        private const int CORPSE_FIELD_DYNAMIC_FLAGS = 0x88;  // 0x22 × 4 = 0x88 (136) - Dynamic flags
         
         #endregion
         
@@ -80,8 +81,11 @@ namespace Styx.WoWInternals.WoWObjects
         
         #region Display Properties
         public uint DisplayId => GetDescriptorField<uint>(CORPSE_FIELD_DISPLAY_ID);
+        
         private uint Bytes1 => GetDescriptorField<uint>(CORPSE_FIELD_BYTES_1);
-        private uint Bytes2 => GetDescriptorField<uint>(CORPSE_FIELD_BYTES_2);
+        
+        public byte[] Bytes2 => BitConverter.GetBytes(GetDescriptorField<uint>(CORPSE_FIELD_BYTES_2));
+        
         public WoWRace Race
         {
             get
@@ -157,6 +161,7 @@ namespace Styx.WoWInternals.WoWObjects
                 return (Flags & CorpseFlags.Lootable) != 0;
             }
         }
+        
         public bool IsBones
         {
             get
@@ -164,6 +169,8 @@ namespace Styx.WoWInternals.WoWObjects
                 return (Flags & CorpseFlags.Bones) != 0;
             }
         }
+        
+        public bool IsOnlyBones => (Flags & CorpseFlags.Bones) != 0;
         
         #endregion
         
