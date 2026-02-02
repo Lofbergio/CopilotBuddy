@@ -228,6 +228,7 @@ namespace Styx.WoWInternals
 
 		public static void Face(WoWUnit target)
 		{
+			if (target == null) return;
 			Face(target.Location);
 		}
 
