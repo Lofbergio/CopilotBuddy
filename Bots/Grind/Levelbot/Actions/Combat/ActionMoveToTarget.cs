@@ -49,12 +49,36 @@ namespace Levelbot.Actions.Combat
             }
 
             // Check if in range and line of sight
-            if (target.Location.Distance(ObjectManager.Me?.Location ?? WoWPoint.Zero) <= Targeting.PullDistance 
-                && target.InLineOfSight)
+            LocalPlayer? me = ObjectManager.Me;
+            if (me == null) return RunStatus.Failure;
+
+            float distance = target.Location.Distance(me.Location);
+            float meleeRange = me.MeleeReach + target.MeleeReach + 1.33f;
+            
+            // HB 3.3.5a: Stop at appropriate range based on class
+            // Melee: stop at melee range + 0.5 yards buffer
+            // Ranged: stop at 20 yards (safe range for all base spells)
+            float optimalRange = me.IsMelee ? meleeRange + 0.5f : 20f;
+            
+            // Stop movement FIRST if we're close enough (prevents overshoot)
+            if (me.IsMoving && distance <= optimalRange + 2f)
+            {
+                WoWMovement.MoveStop();
+            }
+            
+            if (distance <= optimalRange && target.InLineOfSight)
             {
                 _moveStartTime = 0;
                 Navigator.Clear();
                 return RunStatus.Success;
+            }
+            
+            // Too close for ranged - back up
+            if (!me.IsMelee && distance < meleeRange + 5f && target.InLineOfSight)
+            {
+                _moveStartTime = 0;
+                Navigator.Clear();
+                return RunStatus.Success; // Let combat routine handle backing up
             }
 
             // Generate path and check if reachable
