@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
 using Styx.Helpers;
@@ -64,21 +65,21 @@ namespace Styx.Logic.Profiles
 							string text = xattribute.Name.ToString().ToUpper();
 							if (text == "X")
 							{
-								if (float.TryParse(xattribute.Value, out float val))
+								if (float.TryParse(xattribute.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float val))
 								{
 									x = val;
 								}
 							}
 							else if (text == "Y")
 							{
-								if (float.TryParse(xattribute.Value, out float val))
+								if (float.TryParse(xattribute.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float val))
 								{
 									y = val;
 								}
 							}
 							else if (text == "Z")
 							{
-								if (float.TryParse(xattribute.Value, out float val))
+								if (float.TryParse(xattribute.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float val))
 								{
 									z = val;
 								}
