@@ -906,7 +906,7 @@ namespace Bots.Grind
                 new Decorator(
                     ctx => NeedToSell(),
                     new ActionSetPoi(ctx => new BotPoi(
-                        ProfileManager.CurrentProfile.VendorManager.GetClosestVendor(Vendor.VendorType.Repair), 
+                        ProfileManager.CurrentProfile.VendorManager.GetClosestVendor(Vendor.VendorType.Sell), 
                         PoiType.Sell))
                 ),
                 // Check if need to repair
@@ -942,6 +942,9 @@ namespace Bots.Grind
 
         private static bool NeedToSell()
         {
+            // Respecter le setting FindVendorsAutomatically (CharacterSettings car lié à l'UI)
+            if (!CharacterSettings.Instance.FindVendorsAutomatically && !Vendors.ForceSell)
+                return false;
             if (ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Sell) == null)
                 return false;
             return Vendors.ForceSell || StyxWoW.Me.FreeNormalBagSlots <= ProfileManager.CurrentProfile.MinFreeBagSlots;
@@ -949,6 +952,7 @@ namespace Bots.Grind
 
         private static bool NeedToTrain()
         {
+            // Utiliser CharacterSettings.Instance.TrainNewSkills (lié à l'UI)
             if ((!CharacterSettings.Instance.TrainNewSkills && !Vendors.ForceTrainer) ||
                 ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Train) == null)
                 return false;
@@ -957,6 +961,9 @@ namespace Bots.Grind
 
         private static bool NeedToRepair()
         {
+            // Respecter le setting FindVendorsAutomatically (CharacterSettings car lié à l'UI)
+            if (!CharacterSettings.Instance.FindVendorsAutomatically && !Vendors.ForceRepair)
+                return false;
             if (Vendors.RepairDisabled ||
                 ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Repair) == null)
                 return false;
@@ -995,6 +1002,10 @@ namespace Bots.Grind
 
             if (Vendors.ForceBuy)
                 return true;
+
+            // Respecter le setting FindVendorsAutomatically (CharacterSettings car lié à l'UI)
+            if (!CharacterSettings.Instance.FindVendorsAutomatically)
+                return false;
 
             if (ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Food) == null)
                 return false;
