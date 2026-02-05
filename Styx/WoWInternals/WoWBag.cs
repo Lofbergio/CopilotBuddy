@@ -235,15 +235,15 @@ namespace Styx.WoWInternals
                 try
                 {
                     ulong[] itemGuids = ItemGuids;
-                    uint num = 0U;
+                    uint usedSlotCount = 0U;
                     for (int i = 0; i < itemGuids.Length; i++)
                     {
                         if (itemGuids[i] != 0UL)
                         {
-                            num += 1U;
+                            usedSlotCount += 1U;
                         }
                     }
-                    return num;
+                    return usedSlotCount;
                 }
                 catch (Exception ex)
                 {
