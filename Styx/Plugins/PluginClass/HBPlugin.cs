@@ -4,6 +4,14 @@ namespace Styx.Plugins.PluginClass
 {
 	public abstract class HBPlugin
 	{
+		public virtual void Initialize()
+		{
+		}
+
+		public virtual void Dispose()
+		{
+		}
+
 		public abstract void Pulse();
 
 		public virtual void OnButtonPress()
