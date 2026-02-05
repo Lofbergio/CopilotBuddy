@@ -451,55 +451,55 @@ label_7:
     return (questCompleteRequirement != CustomForcedBehavior.QuestCompleteRequirement.Complete || flag) && (questCompleteRequirement != CustomForcedBehavior.QuestCompleteRequirement.NotComplete || !flag);
   }
 
-  private int CountAttributeAliasesFound(string string_1_1, string[] string_2)
+  private int CountAttributeAliasesFound(string attributeName, string[] aliases)
   {
     int num = 0;
-    if (!string.IsNullOrEmpty(string_1_1))
-      num += this.Args.ContainsKey(string_1_1) ? 1 : 0;
-    if (string_2 != null)
-      num += ((IEnumerable<string>) string_2).Where<string>((Func<string, bool>) (string_1_2 => this.Args.ContainsKey(string_1_2))).Count<string>();
+    if (!string.IsNullOrEmpty(attributeName))
+      num += this.Args.ContainsKey(attributeName) ? 1 : 0;
+    if (aliases != null)
+      num += ((IEnumerable<string>) aliases).Where<string>((Func<string, bool>) (alias => this.Args.ContainsKey(alias))).Count<string>();
     return num;
   }
 
-  private string FindAttributeKeyOrAlias(bool bool_1, string string_1_1, string[] string_2)
+  private string FindAttributeKeyOrAlias(bool isRequired, string attributeName, string[] aliases)
   {
-    this.MarkAttributeAsProcessed(string_1_1, string_2);
-    if (this.CountAttributeAliasesFound(string_1_1, string_2) > 1)
+    this.MarkAttributeAsProcessed(attributeName, aliases);
+    if (this.CountAttributeAliasesFound(attributeName, aliases) > 1)
     {
       List<string> stringList = new List<string>();
-      stringList.Add(string_1_1);
-      stringList.AddRange((IEnumerable<string>) string_2);
+      stringList.Add(attributeName);
+      stringList.AddRange((IEnumerable<string>) aliases);
       stringList.Sort();
-      this.LogMessage("error", "The attributes [{0}] are aliases for each other, and thus mutually exclusive.\nPlease specify the attribute by its preferred name '{1}'.", (object) $"'{string.Join("', '", stringList.ToArray())}'", (object) string_1_1);
+      this.LogMessage("error", "The attributes [{0}] are aliases for each other, and thus mutually exclusive.\nPlease specify the attribute by its preferred name '{1}'.", (object) $"'{string.Join("', '", stringList.ToArray())}'", (object) attributeName);
       this.IsAttributeProblem = true;
       return (string) null;
     }
-    if (!string.IsNullOrEmpty(string_1_1) && this.Args.ContainsKey(string_1_1))
-      return string_1_1;
-    if (string_2 != null)
+    if (!string.IsNullOrEmpty(attributeName) && this.Args.ContainsKey(attributeName))
+      return attributeName;
+    if (aliases != null)
     {
-      string str = ((IEnumerable<string>) string_2).Where<string>((Func<string, bool>) (string_1_2 => !string.IsNullOrEmpty(string_1_2) && this.Args.ContainsKey(string_1_2))).FirstOrDefault<string>();
+      string str = ((IEnumerable<string>) aliases).Where<string>((Func<string, bool>) (alias => !string.IsNullOrEmpty(alias) && this.Args.ContainsKey(alias))).FirstOrDefault<string>();
       if (!string.IsNullOrEmpty(str))
       {
-        this.LogMessage("warning", "Found attribute via its alias name '{0}'.\nPlease update the profile to use its primary name '{1}', instead.", (object) str, (object) string_1_1);
+        this.LogMessage("warning", "Found attribute via its alias name '{0}'.\nPlease update the profile to use its primary name '{1}', instead.", (object) str, (object) attributeName);
         return str;
       }
     }
-    if (bool_1)
+    if (isRequired)
     {
-      this.LogMessage("error", "Attribute '{0}' is required, but was not provided.", (object) string_1_1);
+      this.LogMessage("error", "Attribute '{0}' is required, but was not provided.", (object) attributeName);
       this.IsAttributeProblem = true;
     }
     return (string) null;
   }
 
-  private void MarkAttributeAsProcessed(string string_1, string[] string_2)
+  private void MarkAttributeAsProcessed(string attributeName, string[] aliases)
   {
-    if (!string.IsNullOrEmpty(string_1) && !this._processedAttributes.Contains(string_1))
-      this._processedAttributes.Add(string_1);
-    if (string_2 == null)
+    if (!string.IsNullOrEmpty(attributeName) && !this._processedAttributes.Contains(attributeName))
+      this._processedAttributes.Add(attributeName);
+    if (aliases == null)
       return;
-    foreach (string str in string_2)
+    foreach (string str in aliases)
     {
       if (!this._processedAttributes.Contains(str))
         this._processedAttributes.Add(str);
@@ -508,7 +508,7 @@ label_7:
 
   private void WarnUnusedAttributes()
   {
-    foreach (object obj in (IEnumerable<string>) this.Args.Keys.Where<string>((Func<string, bool>) (string_1 => !this._processedAttributes.Contains(string_1))).OrderBy<string, string>((Func<string, string>) (string_1 => string_1)))
+    foreach (object obj in (IEnumerable<string>) this.Args.Keys.Where<string>((Func<string, bool>) (key => !this._processedAttributes.Contains(key))).OrderBy<string, string>((Func<string, string>) (key => key)))
       this.LogMessage("warning", "Attribute '{0}' is not recognized by this behavior--ignoring it.", obj);
   }
 
@@ -558,9 +558,9 @@ label_7:
   {
   }
 
-  private string ExtractVersionFromSubversionTag(string string_1)
+  private string ExtractVersionFromSubversionTag(string subversionTag)
   {
-    return CustomForcedBehavior.VariableSubstitutionRegex.Replace(string_1, "$1").Trim();
+    return CustomForcedBehavior.VariableSubstitutionRegex.Replace(subversionTag, "$1").Trim();
   }
 
   [Obsolete("Use GetAttributeAsNullable<boolean>(attributeName, isAttributeRequired, null, attributeNameAliases), instead")]
@@ -629,9 +629,9 @@ label_7:
     bool flag = false;
     string str2 = this.Args[str1];
     char[] separator = new char[2]{ ' ', ',' };
-    foreach (string string_2 in str2.Split(separator, StringSplitOptions.RemoveEmptyEntries))
+    foreach (string segment in str2.Split(separator, StringSplitOptions.RemoveEmptyEntries))
     {
-      double? nullable = this.ParseDoubleWithRange(str1, string_2, minValue, maxValue);
+      double? nullable = this.ParseDoubleWithRange(str1, segment, minValue, maxValue);
       if (nullable.HasValue)
         doubleList.Add(nullable.Value);
       else
@@ -726,9 +726,9 @@ label_10:
     List<int> intList = new List<int>();
     string str2 = this.Args[str1];
     char[] separator = new char[2]{ ' ', ',' };
-    foreach (string string_2 in str2.Split(separator, StringSplitOptions.RemoveEmptyEntries))
+    foreach (string segment in str2.Split(separator, StringSplitOptions.RemoveEmptyEntries))
     {
-      int? nullable = this.ParseIntWithRange(str1, string_2, minValue, maxValue);
+      int? nullable = this.ParseIntWithRange(str1, segment, minValue, maxValue);
       if (nullable.HasValue)
         intList.Add(nullable.Value);
       else
@@ -861,18 +861,18 @@ label_10:
     if (attributeBaseName == null)
       attributeBaseName = "";
     this.LogDeprecatedMethodUsage($"GetAttributeAsNullable<WoWPoint>(\"{attributeBaseName}\", {isAttributeRequired}, ConstrainAs.WoWPointNonEmpty, {(attributeBaseNameAliases == null ? (object) "null" : (object) "ATTRIBUTE_ALIASES")})");
-    string[] string_2_1 = (string[]) null;
-    string[] string_2_2 = (string[]) null;
-    string[] string_2_3 = (string[]) null;
+    string[] xAliases = (string[]) null;
+    string[] yAliases = (string[]) null;
+    string[] zAliases = (string[]) null;
     if (attributeBaseNameAliases != null)
     {
-      string_2_1 = ((IEnumerable<string>) attributeBaseNameAliases).Select<string, string>((Func<string, string>) (string_1 => string_1 + "X")).ToArray<string>();
-      string_2_2 = ((IEnumerable<string>) attributeBaseNameAliases).Select<string, string>((Func<string, string>) (string_1 => string_1 + "Y")).ToArray<string>();
-      string_2_3 = ((IEnumerable<string>) attributeBaseNameAliases).Select<string, string>((Func<string, string>) (string_1 => string_1 + "Z")).ToArray<string>();
+      xAliases = ((IEnumerable<string>) attributeBaseNameAliases).Select<string, string>((Func<string, string>) (alias => alias + "X")).ToArray<string>();
+      yAliases = ((IEnumerable<string>) attributeBaseNameAliases).Select<string, string>((Func<string, string>) (alias => alias + "Y")).ToArray<string>();
+      zAliases = ((IEnumerable<string>) attributeBaseNameAliases).Select<string, string>((Func<string, string>) (alias => alias + "Z")).ToArray<string>();
     }
-    string str1 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "X", string_2_1);
-    string str2 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "Y", string_2_2);
-    string str3 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "Z", string_2_3);
+    string str1 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "X", xAliases);
+    string str2 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "Y", yAliases);
+    string str3 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "Z", zAliases);
     string str4 = str1 ?? str2 ?? str3;
     string str5;
     if (str4 != null)
