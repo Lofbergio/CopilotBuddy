@@ -101,7 +101,7 @@ namespace Styx.Patchables
         
 // Movement - FROM 335offsetsall.txt
 		CGPlayer_C__ClickToMove = 7509504,          // 0x727400
-		CGPlayer_C__ClickToMoveStop = 7519904,      // 0x72B3A0
+		CGPlayer_C__ClickToMoveStop = 7517088,      // 0x72B3A0
         
         // Collision
         TraceLine = 8010608,                        // 0x7A3770
