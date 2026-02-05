@@ -261,20 +261,43 @@ namespace Styx.Logic.Combat
 			if (spell.Cooldown)
 				return false;
 
-			// Step 5: Check movement restrictions (cast time spells can't be cast while moving)
+			// Step 5: Check if spell is already queued (for "on next swing" abilities like Heroic Strike, Cleave)
+			// IsCurrentSpell returns true if the spell is already active/queued
+			if (IsCurrentSpell(spellName))
+				return false;
+
+			// Step 6: Check movement restrictions (cast time spells can't be cast while moving)
 			if (checkMovement && spell.CastTime > 0 && me.IsMoving)
 				return false;
 
-			// Step 6: Check if spell is usable (mana/power check via WoW's IsUsableSpell)
+			// Step 7: Check if spell is usable (mana/power check via WoW's IsUsableSpell)
 			// This is the most reliable check as it uses the game's own validation
 			if (!spell.CanCast)
 				return false;
 
-			// Step 7: Target validation (if target required)
+			// Step 8: Target validation (if target required)
 			if (target != null && !target.IsValid)
 				return false;
 
 			return true;
+		}
+
+		/// <summary>
+		/// Checks if a spell is currently active or queued (for "on next swing" abilities).
+		/// Uses WoW's Lua IsCurrentSpell API.
+		/// </summary>
+		private static bool IsCurrentSpell(string spellName)
+		{
+			try
+			{
+				// IsCurrentSpell returns 1 if the spell is currently active/queued (e.g., Heroic Strike waiting for next swing)
+				var result = Lua.GetReturnVal<int>($"return IsCurrentSpell(\"{spellName}\") and 1 or 0", 0);
+				return result == 1;
+			}
+			catch
+			{
+				return false;
+			}
 		}
 
 		public static bool CanCast(WoWSpell spell, WoWUnit target, bool checkRange = true, bool checkMovement = false)
