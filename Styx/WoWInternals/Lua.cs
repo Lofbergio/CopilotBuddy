@@ -81,7 +81,7 @@ namespace Styx.WoWInternals
                 {
                     allocatedMemory.WriteBytes(0, list.ToArray());
                     uint address = allocatedMemory.Address;
-                    uint num2 = (uint)(allocatedMemory.Address + bytes.Length + 1);
+                    uint fileNameOffset = (uint)(allocatedMemory.Address + bytes.Length + 1);
 
                     if (_returnBuffer == null)
                         _returnBuffer = new AllocatedMemory(4000);
@@ -102,7 +102,7 @@ namespace Styx.WoWInternals
                         executor.AddLine("push ebx");       // save ebx on stack
 
                         // 2. luaL_loadbuffer
-                        executor.AddLine("push {0}", num2);
+                        executor.AddLine("push {0}", fileNameOffset);
                         executor.AddLine("push {0}", lua.Length);
                         executor.AddLine("push {0}", address);
                         executor.AddLine("push {0}", fullState);
@@ -178,27 +178,27 @@ namespace Styx.WoWInternals
                     }
 
                     // Read result from executor
-                    int num3 = executor.Memory.Read<int>(executor.ReturnPointer);
-                    if (num3 == 0)
+                    int luaStatus = executor.Memory.Read<int>(executor.ReturnPointer);
+                    if (luaStatus == 0)
                     {
                         // Success - read return values
-                        int num4 = _returnBuffer.Read<int>(0);
-                        var results = new List<string>(num4);
-                        for (int i = 0; i < num4; i++)
+                        int resultCount = _returnBuffer.Read<int>(0);
+                        var results = new List<string>(resultCount);
+                        for (int i = 0; i < resultCount; i++)
                         {
                             uint strPtr = _returnBuffer.Read<uint>((i + 1) * 4);
                             results.Add(executor.Memory.ReadString(strPtr));
                         }
                         return results;
                     }
-                    else if (num3 < 0)
+                    else if (luaStatus < 0)
                     {
                         // No return values
                         return new List<string>();
                     }
                     else
                     {
-                        Logging.WriteDebug("Lua failed! Status: {0}", num3);
+                        Logging.WriteDebug("Lua failed! Status: {0}", luaStatus);
                         return new List<string>();
                     }
                 }
