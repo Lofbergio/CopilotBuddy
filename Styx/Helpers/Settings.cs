@@ -9,7 +9,7 @@ namespace Styx.Helpers
 {
 	public abstract class Settings
 	{
-		private readonly string _settingsPath;
+		private string _settingsPath;
 
 		protected Settings(string settingsPath)
 		{
@@ -22,6 +22,29 @@ namespace Styx.Helpers
 			else
 			{
 				LoadFromXML(XElement.Load(_settingsPath));
+			}
+		}
+
+		/// <summary>
+		/// Gets the current settings file path.
+		/// </summary>
+		public string SettingsPath => _settingsPath;
+
+		/// <summary>
+		/// Reinitializes settings with a new path. Used after game attachment when character name is known.
+		/// Pattern from HB 4.3.4.
+		/// </summary>
+		protected void Reinitialize(string newPath)
+		{
+			_settingsPath = newPath;
+			InitializeDefaultValues();
+			if (File.Exists(_settingsPath))
+			{
+				LoadFromXML(XElement.Load(_settingsPath));
+			}
+			else
+			{
+				SaveToFile(_settingsPath);
 			}
 		}
 
