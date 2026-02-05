@@ -75,7 +75,7 @@ namespace GreenMagic.Internals
             select p;
             foreach (XElement xelement in enumerable)
             {
-                uint num = 0U;
+                uint searchStartOffset = 0U;
                 string value = xelement.Attribute("desc").Value;
                 string value2 = xelement.Attribute("mask").Value;
                 byte[] bytesFromPattern = PatternManager.GetBytesFromPattern(xelement.Attribute("pattern").Value);
@@ -85,13 +85,13 @@ namespace GreenMagic.Internals
                 }
                 if (xelement.Attribute("start") != null)
                 {
-                    num = this[xelement.Attribute("start").Value] - start + 1U;
-                    if ((ulong)num > (ulong)((long)data.Length))
+                    searchStartOffset = this[xelement.Attribute("start").Value] - start + 1U;
+                    if ((ulong)searchStartOffset > (ulong)((long)data.Length))
                     {
                         continue;
                     }
                 }
-                uint patternAddress = PatternManager.Find(data, value2, bytesFromPattern, num);
+                uint patternAddress = PatternManager.Find(data, value2, bytesFromPattern, searchStartOffset);
                 if (patternAddress == 0U)
                 {
                     throw new Exception("FindPattern failed... figure it out ****tard!");
@@ -147,14 +147,14 @@ namespace GreenMagic.Internals
 
         private static uint Find(byte[] data, string mask, byte[] byteMask, uint start)
         {
-            uint num = start;
-            while ((ulong)num < (ulong)((long)data.Length))
+            uint currentOffset = start;
+            while ((ulong)currentOffset < (ulong)((long)data.Length))
             {
-                if (PatternManager.DataCompare(data, (int)num, byteMask, mask))
+                if (PatternManager.DataCompare(data, (int)currentOffset, byteMask, mask))
                 {
-                    return num;
+                    return currentOffset;
                 }
-                num += 1U;
+                currentOffset += 1U;
             }
             return 0U;
         }
