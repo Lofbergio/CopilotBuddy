@@ -91,8 +91,8 @@ namespace GreenMagic.Internals
                         continue;
                     }
                 }
-                uint num2 = PatternManager.Find(data, value2, bytesFromPattern, num);
-                if (num2 == 0U)
+                uint patternAddress = PatternManager.Find(data, value2, bytesFromPattern, num);
+                if (patternAddress == 0U)
                 {
                     throw new Exception("FindPattern failed... figure it out ****tard!");
                 }
@@ -103,28 +103,28 @@ namespace GreenMagic.Internals
                     {
                         if (localName == "Lea")
                         {
-                            num2 = BitConverter.ToUInt32(data, (int)num2);
+                            patternAddress = BitConverter.ToUInt32(data, (int)patternAddress);
                             start = 0U;
                         }
                         else if (localName == "Rel")
                         {
-                            int num3 = int.Parse(xelement2.Attribute("size").Value, NumberStyles.HexNumber);
-                            int num4 = int.Parse(xelement2.Attribute("offset").Value, NumberStyles.HexNumber);
-                            num2 = (uint)((ulong)(BitConverter.ToUInt32(data, (int)num2) + num2) + (ulong)num3 - (ulong)num4);
+                            int instructionSize = int.Parse(xelement2.Attribute("size").Value, NumberStyles.HexNumber);
+                            int relativeOffset = int.Parse(xelement2.Attribute("offset").Value, NumberStyles.HexNumber);
+                            patternAddress = (uint)((ulong)(BitConverter.ToUInt32(data, (int)patternAddress) + patternAddress) + (ulong)instructionSize - (ulong)relativeOffset);
                         }
                         else if (localName == "Add")
                         {
-                            num2 += uint.Parse(xelement2.Attribute("value").Value, NumberStyles.HexNumber);
+                            patternAddress += uint.Parse(xelement2.Attribute("value").Value, NumberStyles.HexNumber);
                         }
                         else if (localName == "Sub")
                         {
-                            num2 -= uint.Parse(xelement2.Attribute("value").Value, NumberStyles.HexNumber);
+                            patternAddress -= uint.Parse(xelement2.Attribute("value").Value, NumberStyles.HexNumber);
                         }
                     }
                 }
                 if (!this._patterns.ContainsKey(value))
                 {
-                    this._patterns.Add(value, num2 + start);
+                    this._patterns.Add(value, patternAddress + start);
                 }
             }
         }

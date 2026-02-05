@@ -1569,10 +1569,10 @@ namespace Styx.WoWInternals.WoWObjects
                     {
                         num + 32U
                     };
-                    int num2 = wow.Read<int>(array2);
-                    if (num2 != 0)
+                    int spellId = wow.Read<int>(array2);
+                    if (spellId != 0)
                     {
-                        return WoWSpell.FromId(num2);
+                        return WoWSpell.FromId(spellId);
                     }
                     uint[] array3 = new uint[]
                     {

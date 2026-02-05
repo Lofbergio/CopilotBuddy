@@ -7,26 +7,26 @@ namespace Styx.WoWInternals
 {
     public static class WoWChat
     {
-        private static ChatMessageHandler chatMessageHandler_0;
-        private static ChatMessageHandler chatMessageHandler_1;
-        private static ChatMessageHandler chatMessageHandler_2;
-        private static ChatMessageHandler chatMessageHandler_3;
-        private static ChatMessageHandler chatMessageHandler_4;
-        private static ChatMessageHandler chatMessageHandler_5;
-        private static ChatMessageHandler chatMessageHandler_6;
-        private static ChatMessageHandler chatMessageHandler_7;
-        private static ChatMessageHandler chatMessageHandler_8;
-        private static ChatMessageHandler chatMessageHandler_9;
-        private static ChatMessageHandler chatMessageHandler_10;
-        private static ChatMessageHandler chatMessageHandler_11;
-        private static ChatMessageHandler chatMessageHandler_12;
-        private static ChatMessageHandler chatMessageHandler_13;
-        private static uint uint_0;
-        private static bool bool_0;
+        private static ChatMessageHandler _onChatMessage;
+        private static ChatMessageHandler _onSayMessage;
+        private static ChatMessageHandler _onPartyMessage;
+        private static ChatMessageHandler _onRaidMessage;
+        private static ChatMessageHandler _onRaidLeaderMessage;
+        private static ChatMessageHandler _onGuildMessage;
+        private static ChatMessageHandler _onOfficerMessage;
+        private static ChatMessageHandler _onYellMessage;
+        private static ChatMessageHandler _onChannelMessage;
+        private static ChatMessageHandler _onWhisperFromMessage;
+        private static ChatMessageHandler _onWhisperToMessage;
+        private static ChatMessageHandler _onEmoteMessage;
+        private static ChatMessageHandler _onBattlegroundMessage;
+        private static ChatMessageHandler _onBattlegroundLeaderMessage;
+        private static uint _lastReadPosition;
+        private static bool _isFirstRead;
 
         static WoWChat()
         {
-            WoWChat.bool_0 = true;
+            WoWChat._isFirstRead = true;
         }
 
         public static void SendChatMessage(string content, ChatType chatType, string channel)
@@ -94,25 +94,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_0;
+                ChatMessageHandler chatMessageHandler = WoWChat._onChatMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_0, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onChatMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_0;
+                ChatMessageHandler chatMessageHandler = WoWChat._onChatMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_0, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onChatMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -122,25 +122,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_1;
+                ChatMessageHandler chatMessageHandler = WoWChat._onSayMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_1, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onSayMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_1;
+                ChatMessageHandler chatMessageHandler = WoWChat._onSayMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_1, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onSayMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -150,25 +150,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_2;
+                ChatMessageHandler chatMessageHandler = WoWChat._onPartyMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_2, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onPartyMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_2;
+                ChatMessageHandler chatMessageHandler = WoWChat._onPartyMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_2, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onPartyMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -178,25 +178,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_3;
+                ChatMessageHandler chatMessageHandler = WoWChat._onRaidMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_3, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onRaidMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_3;
+                ChatMessageHandler chatMessageHandler = WoWChat._onRaidMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_3, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onRaidMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -206,25 +206,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_4;
+                ChatMessageHandler chatMessageHandler = WoWChat._onRaidLeaderMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_4, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onRaidLeaderMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_4;
+                ChatMessageHandler chatMessageHandler = WoWChat._onRaidLeaderMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_4, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onRaidLeaderMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -234,25 +234,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_5;
+                ChatMessageHandler chatMessageHandler = WoWChat._onGuildMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_5, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onGuildMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_5;
+                ChatMessageHandler chatMessageHandler = WoWChat._onGuildMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_5, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onGuildMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -262,25 +262,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_6;
+                ChatMessageHandler chatMessageHandler = WoWChat._onOfficerMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_6, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onOfficerMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_6;
+                ChatMessageHandler chatMessageHandler = WoWChat._onOfficerMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_6, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onOfficerMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -290,25 +290,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_7;
+                ChatMessageHandler chatMessageHandler = WoWChat._onYellMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_7, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onYellMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_7;
+                ChatMessageHandler chatMessageHandler = WoWChat._onYellMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_7, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onYellMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -318,25 +318,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_8;
+                ChatMessageHandler chatMessageHandler = WoWChat._onChannelMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_8, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onChannelMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_8;
+                ChatMessageHandler chatMessageHandler = WoWChat._onChannelMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_8, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onChannelMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -346,25 +346,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_9;
+                ChatMessageHandler chatMessageHandler = WoWChat._onWhisperFromMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_9, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onWhisperFromMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_9;
+                ChatMessageHandler chatMessageHandler = WoWChat._onWhisperFromMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_9, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onWhisperFromMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -374,25 +374,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_10;
+                ChatMessageHandler chatMessageHandler = WoWChat._onWhisperToMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_10, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onWhisperToMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_10;
+                ChatMessageHandler chatMessageHandler = WoWChat._onWhisperToMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_10, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onWhisperToMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -402,25 +402,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_11;
+                ChatMessageHandler chatMessageHandler = WoWChat._onEmoteMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_11, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onEmoteMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_11;
+                ChatMessageHandler chatMessageHandler = WoWChat._onEmoteMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_11, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onEmoteMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -430,25 +430,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_12;
+                ChatMessageHandler chatMessageHandler = WoWChat._onBattlegroundMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_12, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onBattlegroundMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_12;
+                ChatMessageHandler chatMessageHandler = WoWChat._onBattlegroundMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_12, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onBattlegroundMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -458,25 +458,25 @@ namespace Styx.WoWInternals
         {
             add
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_13;
+                ChatMessageHandler chatMessageHandler = WoWChat._onBattlegroundLeaderMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Combine(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_13, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onBattlegroundLeaderMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
             remove
             {
-                ChatMessageHandler chatMessageHandler = WoWChat.chatMessageHandler_13;
+                ChatMessageHandler chatMessageHandler = WoWChat._onBattlegroundLeaderMessage;
                 ChatMessageHandler chatMessageHandler2;
                 do
                 {
                     chatMessageHandler2 = chatMessageHandler;
                     ChatMessageHandler chatMessageHandler3 = (ChatMessageHandler)Delegate.Remove(chatMessageHandler2, value);
-                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat.chatMessageHandler_13, chatMessageHandler3, chatMessageHandler2);
+                    chatMessageHandler = Interlocked.CompareExchange<ChatMessageHandler>(ref WoWChat._onBattlegroundLeaderMessage, chatMessageHandler3, chatMessageHandler2);
                 }
                 while (chatMessageHandler != chatMessageHandler2);
             }
@@ -484,89 +484,89 @@ namespace Styx.WoWInternals
 
         private static void RaiseChatEvent(ChatMessageEventArgs e)
         {
-            if (WoWChat.chatMessageHandler_0 != null)
+            if (WoWChat._onChatMessage != null)
             {
-                WoWChat.chatMessageHandler_0(e);
+                WoWChat._onChatMessage(e);
             }
             ChatType chatType = e.Message.ChatType;
             switch (chatType)
             {
                 case ChatType.Say:
-                    if (WoWChat.chatMessageHandler_1 != null)
+                    if (WoWChat._onSayMessage != null)
                     {
-                        WoWChat.chatMessageHandler_1(e);
+                        WoWChat._onSayMessage(e);
                     }
                     break;
                 case ChatType.Party:
-                    if (WoWChat.chatMessageHandler_2 != null)
+                    if (WoWChat._onPartyMessage != null)
                     {
-                        WoWChat.chatMessageHandler_2(e);
+                        WoWChat._onPartyMessage(e);
                     }
                     break;
                 case ChatType.Raid:
-                    if (WoWChat.chatMessageHandler_3 != null)
+                    if (WoWChat._onRaidMessage != null)
                     {
-                        WoWChat.chatMessageHandler_3(e);
+                        WoWChat._onRaidMessage(e);
                     }
                     break;
                 case ChatType.Guild:
-                    if (WoWChat.chatMessageHandler_5 != null)
+                    if (WoWChat._onGuildMessage != null)
                     {
-                        WoWChat.chatMessageHandler_5(e);
+                        WoWChat._onGuildMessage(e);
                     }
                     break;
                 case ChatType.Officer:
-                    if (WoWChat.chatMessageHandler_6 != null)
+                    if (WoWChat._onOfficerMessage != null)
                     {
-                        WoWChat.chatMessageHandler_6(e);
+                        WoWChat._onOfficerMessage(e);
                     }
                     break;
                 case ChatType.Yell:
-                    if (WoWChat.chatMessageHandler_7 != null)
+                    if (WoWChat._onYellMessage != null)
                     {
-                        WoWChat.chatMessageHandler_7(e);
+                        WoWChat._onYellMessage(e);
                     }
                     break;
                 case ChatType.WhisperInform:
-                    if (WoWChat.chatMessageHandler_9 != null)
+                    if (WoWChat._onWhisperFromMessage != null)
                     {
-                        WoWChat.chatMessageHandler_9(e);
+                        WoWChat._onWhisperFromMessage(e);
                     }
                     break;
                 case ChatType.WhisperTo:
-                    if (WoWChat.chatMessageHandler_10 != null)
+                    if (WoWChat._onWhisperToMessage != null)
                     {
-                        WoWChat.chatMessageHandler_10(e);
+                        WoWChat._onWhisperToMessage(e);
                     }
                     break;
                 case ChatType.Emote:
-                    if (WoWChat.chatMessageHandler_11 != null)
+                    if (WoWChat._onEmoteMessage != null)
                     {
-                        WoWChat.chatMessageHandler_11(e);
+                        WoWChat._onEmoteMessage(e);
                     }
                     break;
                 case ChatType.Channel:
-                    if (WoWChat.chatMessageHandler_8 != null)
+                    if (WoWChat._onChannelMessage != null)
                     {
-                        WoWChat.chatMessageHandler_8(e);
+                        WoWChat._onChannelMessage(e);
                     }
                     break;
                 case ChatType.RaidLeader:
-                    if (WoWChat.chatMessageHandler_4 != null)
+                    if (WoWChat._onRaidLeaderMessage != null)
                     {
-                        WoWChat.chatMessageHandler_4(e);
+                        WoWChat._onRaidLeaderMessage(e);
                     }
                     break;
                 case ChatType.Battleground:
-                    if (WoWChat.chatMessageHandler_12 != null)
+                    if (WoWChat._onBattlegroundMessage != null)
                     {
-                        WoWChat.chatMessageHandler_12(e);
+                        WoWChat._onBattlegroundMessage(e);
                     }
                     break;
                 case ChatType.BattlegroundLeader:
-                    if (WoWChat.chatMessageHandler_13 != null)
+                    if (WoWChat._onBattlegroundLeaderMessage != null)
                     {
-                        WoWChat.chatMessageHandler_13(e);
+                        WoWChat._onBattlegroundLeaderMessage(e);
                     }
                     break;
             }
@@ -592,24 +592,24 @@ namespace Styx.WoWInternals
 
         internal static void Update()
         {
-            if (WoWChat.bool_0)
+            if (WoWChat._isFirstRead)
             {
-                WoWChat.uint_0 = WoWChat.Position;
-                WoWChat.bool_0 = false;
+                WoWChat._lastReadPosition = WoWChat.Position;
+                WoWChat._isFirstRead = false;
             }
             else
             {
                 uint position = WoWChat.Position;
-                if (position != WoWChat.uint_0)
+                if (position != WoWChat._lastReadPosition)
                 {
                     uint num;
-                    if (position > WoWChat.uint_0)
+                    if (position > WoWChat._lastReadPosition)
                     {
-                        num = position - WoWChat.uint_0;
+                        num = position - WoWChat._lastReadPosition;
                     }
                     else
                     {
-                        int num2 = (int)(WoWChat.uint_0 - 60U);
+                        int num2 = (int)(WoWChat._lastReadPosition - 60U);
                         num2 += (int)position;
                         num2 = Math.Abs(num2);
                         num = (uint)num2;
@@ -619,7 +619,7 @@ namespace Styx.WoWInternals
                         WoWChatMessage woWChatMessage = new WoWChatMessage(WoWChat.GetChatMessagePtr(num3));
                         WoWChat.RaiseChatEvent(new ChatMessageEventArgs(woWChatMessage));
                     }
-                    WoWChat.uint_0 = position;
+                    WoWChat._lastReadPosition = position;
                 }
             }
         }

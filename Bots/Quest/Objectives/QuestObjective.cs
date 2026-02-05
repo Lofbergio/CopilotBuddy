@@ -86,15 +86,15 @@ public abstract class QuestObjective : IDisposable, IEquatable<QuestObjective>
             return new WoWQuestStep();
         WoWPoint location = ObjectManager.Me.Location;
         WoWQuestStep closestQuestStep = this.QuestSteps[0];
-        float num1 = location.Distance2DSqr(new WoWPoint((float)closestQuestStep.StepPosition.X, (float)closestQuestStep.StepPosition.Y, 0.0f));
+        float closestDistanceSqr = location.Distance2DSqr(new WoWPoint((float)closestQuestStep.StepPosition.X, (float)closestQuestStep.StepPosition.Y, 0.0f));
         for (int index = 1; index < this.QuestSteps.Count; ++index)
         {
             WoWQuestStep questStep = this.QuestSteps[index];
-            float num2 = location.Distance2DSqr(new WoWPoint((float)questStep.StepPosition.X, (float)questStep.StepPosition.Y, 0.0f));
-            if ((double)num2 < (double)num1)
+            float currentDistanceSqr = location.Distance2DSqr(new WoWPoint((float)questStep.StepPosition.X, (float)questStep.StepPosition.Y, 0.0f));
+            if ((double)currentDistanceSqr < (double)closestDistanceSqr)
             {
                 closestQuestStep = questStep;
-                num1 = num2;
+                closestDistanceSqr = currentDistanceSqr;
             }
         }
         return closestQuestStep;

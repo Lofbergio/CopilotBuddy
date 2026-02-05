@@ -15,7 +15,7 @@ namespace Styx.WoWInternals.WoWObjects
 
 		public int ChangePerMillisecond;
 
-		private uint uint_0; // Paused field
+		private uint _paused;
 
 		public uint SpellID;
 
@@ -44,7 +44,7 @@ namespace Styx.WoWInternals.WoWObjects
 				this.InitialValue,
 				this.MaxValue,
 				this.ChangePerMillisecond,
-				this.uint_0,
+				this._paused,
 				this.StartTime,
 				this.SpellID);
 		}

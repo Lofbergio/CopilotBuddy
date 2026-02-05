@@ -197,14 +197,14 @@ public class GrindObjective : QuestObjective
         }
         WoWPoint location1 = ObjectManager.Me.Location;
         WoWPoint objectiveLocation = list[0].Location;
-        float num1 = objectiveLocation.DistanceSqr(location1);
+        float closestDistanceSqr = objectiveLocation.DistanceSqr(location1);
         for (int index = 1; index < list.Count; ++index)
         {
             WoWPoint location2 = list[index].Location;
-            float num2 = location2.DistanceSqr(location1);
-            if ((double)num2 < (double)num1)
+            float currentDistanceSqr = location2.DistanceSqr(location1);
+            if ((double)currentDistanceSqr < (double)closestDistanceSqr)
             {
-                num1 = num2;
+                closestDistanceSqr = currentDistanceSqr;
                 objectiveLocation = location2;
             }
         }

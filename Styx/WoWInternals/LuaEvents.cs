@@ -11,39 +11,39 @@ namespace Styx.WoWInternals
 {
     public class LuaEvents
     {
-        private static readonly Random random_0;
-        private static readonly char[] char_0;
-        private readonly Dictionary<string, LuaEventHandlerDelegate> dictionary_0 = new Dictionary<string, LuaEventHandlerDelegate>();
-        private readonly Dictionary<string, string> dictionary_1 = new Dictionary<string, string>();
-        private readonly WaitTimer waitTimer_0;
-        private string string_0;
-        private string string_1;
-        private string string_2;
-        private int int_0;
-        private static bool bool_0;
-        private static Func<object, string> func_0;
+        private static readonly Random _random;
+        private static readonly char[] _validChars;
+        private readonly Dictionary<string, LuaEventHandlerDelegate> _eventHandlers = new Dictionary<string, LuaEventHandlerDelegate>();
+        private readonly Dictionary<string, string> _eventFilters = new Dictionary<string, string>();
+        private readonly WaitTimer _refreshTimer;
+        private string _eventTableName;
+        private string _frameName;
+        private string _filterTableName;
+        private int _registeredEventCount;
+        private static bool _initialized;
+        private static Func<object, string> _toStringFunc;
 
         internal LuaEvents()
         {
-            this.waitTimer_0 = WaitTimer.ThirtySeconds;
-            this.waitTimer_0.Reset();
+            this._refreshTimer = WaitTimer.ThirtySeconds;
+            this._refreshTimer.Reset();
         }
 
         static LuaEvents()
         {
-            LuaEvents.random_0 = new Random();
-            LuaEvents.char_0 = "ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvxyz".ToCharArray();
+            LuaEvents._random = new Random();
+            LuaEvents._validChars = "ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvxyz".ToCharArray();
         }
 
         ~LuaEvents()
         {
             try
             {
-                if (ObjectManager.WoWProcess != null && !ObjectManager.WoWProcess.HasExited && ObjectManager.IsInGame && this.string_1 != null)
+                if (ObjectManager.WoWProcess != null && !ObjectManager.WoWProcess.HasExited && ObjectManager.IsInGame && this._frameName != null)
                 {
                     // WoW 3.3.5a: Clean up frame and event table (no filter table)
                     Lua.DoString(string.Format("if {0} then {0}:UnregisterAllEvents(); {0}:SetScript('OnEvent', nil); {0} = nil; end if {1} then {1} = nil; end", 
-                        this.string_1, this.string_0));
+                        this._frameName, this._eventTableName));
                 }
             }
             catch
@@ -53,38 +53,38 @@ namespace Styx.WoWInternals
 
         public void AttachEvent(string eventName, LuaEventHandlerDelegate handler)
         {
-            if (!this.dictionary_0.ContainsKey(eventName))
+            if (!this._eventHandlers.ContainsKey(eventName))
             {
-                this.dictionary_0[eventName] = null;
+                this._eventHandlers[eventName] = null;
             }
             Dictionary<string, LuaEventHandlerDelegate> dictionary;
-            (dictionary = this.dictionary_0)[eventName] = (LuaEventHandlerDelegate)Delegate.Combine(dictionary[eventName], handler);
+            (dictionary = this._eventHandlers)[eventName] = (LuaEventHandlerDelegate)Delegate.Combine(dictionary[eventName], handler);
         }
 
         public void DetachEvent(string eventName, LuaEventHandlerDelegate handler)
         {
-            if (this.dictionary_0.ContainsKey(eventName))
+            if (this._eventHandlers.ContainsKey(eventName))
             {
                 Dictionary<string, LuaEventHandlerDelegate> dictionary;
-                (dictionary = this.dictionary_0)[eventName] = (LuaEventHandlerDelegate)Delegate.Remove(dictionary[eventName], handler);
+                (dictionary = this._eventHandlers)[eventName] = (LuaEventHandlerDelegate)Delegate.Remove(dictionary[eventName], handler);
             }
         }
 
         public bool AddFilter(string eventName, string filterCode)
         {
-            if (this.dictionary_1.ContainsKey(eventName))
+            if (this._eventFilters.ContainsKey(eventName))
                 return false;
             
             // WoW 3.3.5a doesn't support Lua event filters, so we implement filtering in C#
             // Store the filter code to apply it after receiving events from WoW
-            this.dictionary_1.Add(eventName, filterCode);
+            this._eventFilters.Add(eventName, filterCode);
             return true;
         }
 
         public void RemoveFilter(string eventName)
         {
             // WoW 3.3.5a: Filters are C#-side only, just remove from dictionary
-            this.dictionary_1.Remove(eventName);
+            this._eventFilters.Remove(eventName);
         }
 
         internal void ProcessEvents()
@@ -96,9 +96,9 @@ namespace Styx.WoWInternals
 
             // Check if our event table variable exists
             LuaTValue eventTableValue = null;
-            if (this.string_0 != null)
+            if (this._eventTableName != null)
             {
-                eventTableValue = globals.GetField(this.string_0);
+                eventTableValue = globals.GetField(this._eventTableName);
             }
 
             if (eventTableValue == null || eventTableValue.Type != LuaType.Table)
@@ -109,11 +109,11 @@ namespace Styx.WoWInternals
             }
 
             // Periodic cleanup to prevent memory growth
-            if (this.waitTimer_0.IsFinished)
+            if (this._refreshTimer.IsFinished)
             {
-                this.waitTimer_0.Reset();
-                Lua.DoString(string.Format("local dumpedTo = {0}; local eventCount = #{1}; if eventCount > dumpedTo then local eventCopy = {{}}; for i=dumpedTo + 1,eventCount do tinsert(eventCopy, {1}[i]); end; wipe({1}); for i=1,#eventCopy do tinsert({1}, eventCopy[i]); end; else wipe({1}); end;", this.int_0, this.string_0));
-                this.int_0 = 0;
+                this._refreshTimer.Reset();
+                Lua.DoString(string.Format("local dumpedTo = {0}; local eventCount = #{1}; if eventCount > dumpedTo then local eventCopy = {{}}; for i=dumpedTo + 1,eventCount do tinsert(eventCopy, {1}[i]); end; wipe({1}); for i=1,#eventCopy do tinsert({1}, eventCopy[i]); end; else wipe({1}); end;", this._registeredEventCount, this._eventTableName));
+                this._registeredEventCount = 0;
                 return;
             }
 
@@ -130,7 +130,7 @@ namespace Styx.WoWInternals
                 }
 
                 int count = eventTable.Count;
-                int numEvents = (count - this.int_0) / 3;
+                int numEvents = (count - this._registeredEventCount) / 3;
 
                 if (numEvents > 1500)
                 {
@@ -142,7 +142,7 @@ namespace Styx.WoWInternals
                     return;
 
                 // Read all event data at once for efficiency
-                LuaTValue[] values = eventTable.GetValues(this.int_0, numEvents * 3);
+                LuaTValue[] values = eventTable.GetValues(this._registeredEventCount, numEvents * 3);
 
                 for (int i = 0; i < values.Length / 3; i++)
                 {
@@ -181,32 +181,32 @@ namespace Styx.WoWInternals
                     object[] args = ReadArgsFromTable(argsTable, argsCount);
 
                     // Apply C#-side filter if one exists for this event (WoW 3.3.5a compatibility)
-                    if (this.dictionary_1.ContainsKey(eventName))
+                    if (this._eventFilters.ContainsKey(eventName))
                     {
                         if (!ApplyFilter(eventName, args))
                         {
                             // Filter blocked this event, skip it
-                            this.int_0 += 3;
+                            this._registeredEventCount += 3;
                             continue;
                         }
                     }
 
                     // Invoke handler if registered
                     LuaEventHandlerDelegate handler;
-                    if (this.dictionary_0.TryGetValue(eventName, out handler) && handler != null)
+                    if (this._eventHandlers.TryGetValue(eventName, out handler) && handler != null)
                     {
                         InvokeDelegate(handler, this, new LuaEventArgs(eventName, fireTimeStamp, args));
                     }
 
-                    this.int_0 += 3;
+                    this._registeredEventCount += 3;
 
                     if (LuaEvents.PrintAllEvents)
                     {
-                        if (LuaEvents.func_0 == null)
+                        if (LuaEvents._toStringFunc == null)
                         {
-                            LuaEvents.func_0 = new Func<object, string>(ObjectToString);
+                            LuaEvents._toStringFunc = new Func<object, string>(ObjectToString);
                         }
-                        Logging.WriteDebug(string.Format("[EVENT] {0}: Args: {1}", eventName, string.Join(", ", args.Select(LuaEvents.func_0).ToArray())));
+                        Logging.WriteDebug(string.Format("[EVENT] {0}: Args: {1}", eventName, string.Join(", ", args.Select(LuaEvents._toStringFunc).ToArray())));
                     }
                 }
             }
@@ -252,8 +252,8 @@ namespace Styx.WoWInternals
 
         public static bool PrintAllEvents
         {
-            get { return LuaEvents.bool_0; }
-            set { LuaEvents.bool_0 = value; }
+            get { return LuaEvents._initialized; }
+            set { LuaEvents._initialized = value; }
         }
 
         private static void InvokeDelegate(Delegate d, params object[] args)
@@ -275,9 +275,9 @@ namespace Styx.WoWInternals
 
         private void Initialize()
         {
-            this.string_1 = GenerateRandomString(9, 15); // Frame name (WoW 3.3.5a: no filter table needed)
-            this.string_0 = GenerateRandomString(9, 15); // Event table
-            this.int_0 = 0;
+            this._frameName = GenerateRandomString(9, 15); // Frame name (WoW 3.3.5a: no filter table needed)
+            this._eventTableName = GenerateRandomString(9, 15); // Event table
+            this._registeredEventCount = 0;
             
             // WoW 3.3.5a: Simple initialization without Lua-side filtering
             // Filters are applied in C# after receiving events
@@ -286,17 +286,17 @@ namespace Styx.WoWInternals
                 "{1}:SetScript('OnEvent', function(self, event, ...) " +
                 "tinsert({0}, event); tinsert({0}, GetTime()*1000); tinsert({0}, {{ ... }}); " +
                 "end); {1}:RegisterAllEvents();", 
-                this.string_0, this.string_1);
+                this._eventTableName, this._frameName);
             Lua.DoString(text);
         }
 
         private static string GenerateRandomString(int minLength, int maxLength)
         {
-            int num = LuaEvents.random_0.Next(minLength, maxLength + 1);
+            int num = LuaEvents._random.Next(minLength, maxLength + 1);
             StringBuilder stringBuilder = new StringBuilder(num);
             for (int i = 0; i < num; i++)
             {
-                stringBuilder.Append(LuaEvents.char_0[LuaEvents.random_0.Next(0, LuaEvents.char_0.Length)]);
+                stringBuilder.Append(LuaEvents._validChars[LuaEvents._random.Next(0, LuaEvents._validChars.Length)]);
             }
             return stringBuilder.ToString();
         }
@@ -312,7 +312,7 @@ namespace Styx.WoWInternals
         /// </summary>
         private bool ApplyFilter(string eventName, object[] args)
         {
-            string filterCode = this.dictionary_1[eventName];
+            string filterCode = this._eventFilters[eventName];
             
             // For COMBAT_LOG_EVENT_UNFILTERED, args[2] is the event type
             // Filter: "return args[2] == 'SPELL_CAST_SUCCESS' or args[2] == 'SPELL_AURA_APPLIED' or ..."

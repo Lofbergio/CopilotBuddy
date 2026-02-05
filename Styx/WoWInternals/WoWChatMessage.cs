@@ -8,37 +8,37 @@ namespace Styx.WoWInternals
 {
     public class WoWChatMessage
     {
-        private readonly uint uint_0;
-        private ChatMessageData chatMessageData_0;
+        private readonly uint _messagePtr;
+        private ChatMessageData _data;
 
         public WoWChatMessage(uint ptr)
         {
-            this.uint_0 = ptr;
-            if (this.uint_0 != 0U)
+            this._messagePtr = ptr;
+            if (this._messagePtr != 0U)
             {
-                this.chatMessageData_0 = ObjectManager.Wow.ReadStruct<ChatMessageData>(ptr);
+                this._data = ObjectManager.Wow.ReadStruct<ChatMessageData>(ptr);
             }
         }
 
         public bool IsValid
         {
-            get { return (this.uint_0 != 0U); }
+            get { return (this._messagePtr != 0U); }
         }
 
         public ulong SenderGuid
         {
-            get { return this.chatMessageData_0.SenderGuid; }
+            get { return this._data.SenderGuid; }
         }
 
         public string Sender
         {
             get
             {
-                if (this.chatMessageData_0.SenderName == null)
+                if (this._data.SenderName == null)
                     return string.Empty;
-                int nullIndex = Array.IndexOf(this.chatMessageData_0.SenderName, (byte)0);
-                if (nullIndex < 0) nullIndex = this.chatMessageData_0.SenderName.Length;
-                return Encoding.UTF8.GetString(this.chatMessageData_0.SenderName, 0, nullIndex);
+                int nullIndex = Array.IndexOf(this._data.SenderName, (byte)0);
+                if (nullIndex < 0) nullIndex = this._data.SenderName.Length;
+                return Encoding.UTF8.GetString(this._data.SenderName, 0, nullIndex);
             }
         }
 
@@ -46,22 +46,22 @@ namespace Styx.WoWInternals
         {
             get
             {
-                if (this.chatMessageData_0.Content == null)
+                if (this._data.Content == null)
                     return string.Empty;
-                int nullIndex = Array.IndexOf(this.chatMessageData_0.Content, (byte)0);
-                if (nullIndex < 0) nullIndex = this.chatMessageData_0.Content.Length;
-                return Encoding.UTF8.GetString(this.chatMessageData_0.Content, 0, nullIndex);
+                int nullIndex = Array.IndexOf(this._data.Content, (byte)0);
+                if (nullIndex < 0) nullIndex = this._data.Content.Length;
+                return Encoding.UTF8.GetString(this._data.Content, 0, nullIndex);
             }
         }
 
         public string Channel
         {
-            get { return this.chatMessageData_0.ChannelId.ToString(); }
+            get { return this._data.ChannelId.ToString(); }
         }
 
         public ChatType ChatType
         {
-            get { return this.chatMessageData_0.ChatType; }
+            get { return this._data.ChatType; }
         }
 
         public string Text
@@ -73,11 +73,11 @@ namespace Styx.WoWInternals
         {
             get
             {
-                if (this.chatMessageData_0.FormattedMessage == null)
+                if (this._data.FormattedMessage == null)
                     return string.Empty;
-                int nullIndex = Array.IndexOf(this.chatMessageData_0.FormattedMessage, (byte)0);
-                if (nullIndex < 0) nullIndex = this.chatMessageData_0.FormattedMessage.Length;
-                return Encoding.UTF8.GetString(this.chatMessageData_0.FormattedMessage, 0, nullIndex);
+                int nullIndex = Array.IndexOf(this._data.FormattedMessage, (byte)0);
+                if (nullIndex < 0) nullIndex = this._data.FormattedMessage.Length;
+                return Encoding.UTF8.GetString(this._data.FormattedMessage, 0, nullIndex);
             }
         }
 
