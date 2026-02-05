@@ -21,6 +21,11 @@ namespace Styx.Plugins
         public static bool IsInitialized { get; private set; }
 
         /// <summary>
+        /// Gets whether plugins are currently being built/compiled.
+        /// </summary>
+        public static bool IsBuildingPlugins { get; private set; }
+
+        /// <summary>
         /// Gets all loaded plugins.
         /// </summary>
         public static List<PluginContainer> Plugins { get; private set; }
@@ -60,8 +65,41 @@ namespace Styx.Plugins
             if (!IsInitialized)
             {
                 RefreshPlugins(defaultEnabled);
+                // Note: Plugin.Initialize() is already called by PluginContainer.Enabled setter
+                // No need to call it again here
                 IsInitialized = true;
             }
+        }
+
+        /// <summary>
+        /// Updates the EnabledPlugins property in CharacterSettings.
+        /// Note: Does NOT save immediately - save is done at app close or bot start/stop (HB 4.3.4 pattern).
+        /// </summary>
+        public static void UpdateEnabledPlugins()
+        {
+            try
+            {
+                var enabledPluginNames = Plugins
+                    .Where(p => p.Enabled)
+                    .Select(p => p.Name)
+                    .ToArray();
+                
+                Helpers.CharacterSettings.Instance.EnabledPlugins = enabledPluginNames;
+                // Note: No Save() here - HB 4.3.4 saves at window close and bot start/stop
+            }
+            catch (Exception ex)
+            {
+                Helpers.Logging.WriteException(ex);
+            }
+        }
+
+        /// <summary>
+        /// Saves the list of enabled plugins to CharacterSettings (legacy compatibility).
+        /// </summary>
+        [Obsolete("Use UpdateEnabledPlugins() instead. Saving is handled globally.")]
+        public static void SaveEnabledPlugins()
+        {
+            UpdateEnabledPlugins();
         }
 
         /// <summary>
@@ -70,47 +108,78 @@ namespace Styx.Plugins
         /// <param name="defaultEnabled">Names of plugins to enable by default.</param>
         public static void RefreshPlugins(params string[] defaultEnabled)
         {
-            Plugins.Clear();
-
-            string pluginsPath = Path.Combine(
-                Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
-                "Plugins");
-
-            if (!Directory.Exists(pluginsPath))
-            {
-                Directory.CreateDirectory(pluginsPath);
+            if (IsBuildingPlugins)
                 return;
-            }
 
-            var files = new List<string>();
-            files.AddRange(Directory.GetFiles(pluginsPath, "*.cs", SearchOption.TopDirectoryOnly));
-            files.AddRange(Directory.GetDirectories(pluginsPath, "*", SearchOption.TopDirectoryOnly));
-
-            for (int i = 0; i < files.Count; i++)
+            try
             {
-                try
+                IsBuildingPlugins = true;
+                Plugins.Clear();
+
+                // Force garbage collection to release old plugin assemblies
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+
+                string pluginsPath = Path.Combine(
+                    Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
+                    "Plugins");
+
+                if (!Directory.Exists(pluginsPath))
                 {
-                    List<HBPlugin> loadedPlugins = CompileAndLoadFrom(files[i]);
-                    foreach (HBPlugin plugin in loadedPlugins)
+                    Directory.CreateDirectory(pluginsPath);
+                    Logging.Write("No plugins found. Place plugins in the Plugins directory.");
+                    return;
+                }
+
+                var files = new List<string>();
+                files.AddRange(Directory.GetFiles(pluginsPath, "*.cs", SearchOption.TopDirectoryOnly));
+                files.AddRange(Directory.GetDirectories(pluginsPath, "*", SearchOption.TopDirectoryOnly));
+
+                if (files.Count == 0)
+                {
+                    Logging.Write("No plugins found. Place plugins in the Plugins directory.");
+                    return;
+                }
+
+                for (int i = 0; i < files.Count; i++)
+                {
+                    try
                     {
-                        bool enableByDefault = defaultEnabled != null && defaultEnabled.Contains(plugin.Name);
-                        var container = new PluginContainer(plugin, enableByDefault);
-                        Plugins.Add(container);
+                        List<HBPlugin> loadedPlugins = CompileAndLoadFrom(files[i]);
+                        foreach (HBPlugin plugin in loadedPlugins)
+                        {
+                            bool enableByDefault = defaultEnabled != null && defaultEnabled.Contains(plugin.Name);
+                            var container = new PluginContainer(plugin, enableByDefault);
+                            Plugins.Add(container);
+                        }
+                    }
+                    catch (CompilerErrorsException ex)
+                    {
+                        Logging.Write("Could not compile plugin: {0}", files[i]);
+                        Logging.Write(ex.ToString());
+                    }
+                    catch (Exception ex)
+                    {
+                        Logging.Write("Error loading plugin: {0}", files[i]);
+                        Logging.WriteException(ex);
                     }
                 }
-                catch (CompilerErrorsException ex)
+
+                Logging.Write("Plugin loading complete. {0} plugins loaded.", Plugins.Count);
+                
+                if (Plugins.Count == 0)
                 {
-                    Logging.Write("Could not compile plugin: {0}", files[i]);
-                    Logging.Write(ex.ToString());
+                    Logging.Write("No plugins found. Place plugins in the Plugins directory.");
                 }
-                catch (Exception ex)
+                else
                 {
-                    Logging.Write("Error loading plugin: {0}", files[i]);
-                    Logging.WriteException(ex);
+                    Logging.Write("Plugins refreshed successfully.");
                 }
             }
-
-            Logging.Write("Plugin loading complete. {0} plugins loaded.", Plugins.Count);
+            finally
+            {
+                IsBuildingPlugins = false;
+            }
         }
 
         /// <summary>
