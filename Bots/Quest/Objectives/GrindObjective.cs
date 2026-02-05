@@ -98,9 +98,9 @@ public class GrindObjective : QuestObjective
         int level = StyxWoW.Me.Level;
         if (this.behaviorTree == (Composite)null)
         {
-            GrindArea area;
+            GrindArea area = null;
             
-            // Priority 1: Profile-defined hotspots (OverridedHotspots)
+            // Priority 1: Profile-defined hotspots (OverridedHotspots from <Quest> tag)
             if (this.killMobInfo != null && this.killMobInfo.OverridedHotspots != null && this.killMobInfo.OverridedHotspots.Count > 0)
             {
                 Logging.WriteDebug("[GrindObjective] Using profile hotspots ({0} points) for mob {1}", 
@@ -112,47 +112,60 @@ public class GrindObjective : QuestObjective
                     TargetMinLevel = this.killMobInfo.TargetMinLevel > 0 ? this.killMobInfo.TargetMinLevel : this.Quest.Level - 5
                 };
             }
-            // Priority 2: Quest area from client DB
+            // Priority 2: Quest area from client DB (only if it actually creates hotspots)
             else if (this.QuestArea != null && this.QuestArea.AreaDefinitions.Count > 0 && 
                      this.QuestArea.AreaDefinitions.Any(a => a.Count > 0))
             {
-                Logging.WriteDebug("[GrindObjective] Using client quest area for quest {0}", this.Quest.Name);
+                Logging.WriteDebug("[GrindObjective] Trying client quest area for quest {0}", this.Quest.Name);
                 this.QuestArea.CreateHotspots();
-                this.QuestArea.TargetMaxLevel = level + 5;
-                this.QuestArea.TargetMinLevel = this.Quest.Level - 5;
-                area = (GrindArea)this.QuestArea;
+                
+                if (this.QuestArea.Hotspots.Count > 0)
+                {
+                    Logging.WriteDebug("[GrindObjective] Client quest area created {0} hotspots", this.QuestArea.Hotspots.Count);
+                    this.QuestArea.TargetMaxLevel = level + 5;
+                    this.QuestArea.TargetMinLevel = this.Quest.Level - 5;
+                    area = (GrindArea)this.QuestArea;
+                }
+                else
+                {
+                    Logging.Write("[GrindObjective] Client quest area created 0 hotspots, trying DB...");
+                }
             }
-            // Priority 3: Auto-generate from CreatureSpawns.db
-            else if (this.killMobInfo != null && CreatureSpawnQueries.IsAvailable)
+            
+            // Priority 3: Auto-generate from CreatureSpawns.db (works without <Quest> tag)
+            if (area == null && CreatureSpawnQueries.IsAvailable)
             {
-                var mobId = (uint)this.killMobInfo.MobID;
+                // Use Objective.ID directly - works even without <Quest> tag in profile
+                var mobId = (uint)this.Objective.ID;
                 var mapId = StyxWoW.Me.MapId;
                 var autoHotspots = CreatureSpawnQueries.GenerateHotspots(mobId, mapId);
                 
                 if (autoHotspots.Count > 0)
                 {
-                    Logging.Write("[GrindObjective] Auto-generated {0} hotspots from spawn database for mob {1}", 
-                        autoHotspots.Count, mobId);
+                    Logging.Write("[GrindObjective] Auto-generated {0} hotspots from DB for mob {1} on map {2}", 
+                        autoHotspots.Count, mobId, mapId);
+                    
+                    int targetMax = (this.killMobInfo != null && this.killMobInfo.TargetMaxLevel > 0) 
+                        ? this.killMobInfo.TargetMaxLevel : level + 5;
+                    int targetMin = (this.killMobInfo != null && this.killMobInfo.TargetMinLevel > 0) 
+                        ? this.killMobInfo.TargetMinLevel : this.Quest.Level - 5;
                         
                     area = new GrindArea(new HotspotManager((IEnumerable<WoWPoint>)autoHotspots))
                     {
-                        TargetMaxLevel = this.killMobInfo.TargetMaxLevel > 0 ? this.killMobInfo.TargetMaxLevel : level + 5,
-                        TargetMinLevel = this.killMobInfo.TargetMinLevel > 0 ? this.killMobInfo.TargetMinLevel : this.Quest.Level - 5
+                        TargetMaxLevel = targetMax,
+                        TargetMinLevel = targetMin
                     };
                 }
                 else
                 {
-                    // Fallback to empty quest area
-                    Logging.Write("[GrindObjective] No hotspots found for mob {0} - using default quest area", mobId);
-                    this.QuestArea.CreateHotspots();
-                    this.QuestArea.TargetMaxLevel = level + 5;
-                    this.QuestArea.TargetMinLevel = this.Quest.Level - 5;
-                    area = (GrindArea)this.QuestArea;
+                    Logging.Write("[GrindObjective] No spawns in DB for mob {0} on map {1}", mobId, mapId);
                 }
             }
-            else
+            
+            // Final fallback: empty quest area
+            if (area == null)
             {
-                // Final fallback
+                Logging.Write("[GrindObjective] No hotspots available - using empty quest area");
                 this.QuestArea.CreateHotspots();
                 this.QuestArea.TargetMaxLevel = level + 5;
                 this.QuestArea.TargetMinLevel = this.Quest.Level - 5;
