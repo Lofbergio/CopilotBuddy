@@ -22,14 +22,14 @@ namespace Styx.Logic.Combat
             public ulong CreatorGuid;    // 0x00 - GUID of the caster
             public uint SpellId;         // 0x08 - Spell ID of the aura
             public byte Flags;           // 0x0C - AuraFlags
-            public byte StackCount;      // 0x0D - Number of stacks
-            public ushort Level;         // 0x0E - Level (2 bytes for padding)
+            public byte Level;           // 0x0D - Level at which aura was applied
+            public ushort StackCount;    // 0x0E - Number of stacks (2 bytes)
             public uint Duration;        // 0x10 - Total duration in ms
             public uint EndTime;         // 0x14 - Performance counter when aura ends
             
             public override string ToString()
             {
-                return $"SpellId={SpellId}, Flags={Flags}, StackCount={StackCount}, Duration={Duration}, EndTime={EndTime}, Creator={CreatorGuid:X16}";
+                return $"CreatorGuid: 0x{CreatorGuid:X16}, SpellId={SpellId}, Flags={Flags}, Level={Level}, Duration={Duration}, StackCount={StackCount}, EndTime={EndTime}";
             }
         }
         
@@ -87,13 +87,14 @@ namespace Styx.Logic.Combat
         /// <summary>
         /// Creates a new WoWAura from individual values.
         /// </summary>
-        public WoWAura(int spellId, ulong creatorGuid, AuraFlags flags, byte stackCount, uint duration, uint endTime)
+        public WoWAura(int spellId, ulong creatorGuid, AuraFlags flags, ushort stackCount, byte level, uint duration, uint endTime)
         {
             _data = new AuraInfo
             {
                 SpellId = (uint)spellId,
                 CreatorGuid = creatorGuid,
                 Flags = (byte)flags,
+                Level = level,
                 StackCount = stackCount,
                 Duration = duration,
                 EndTime = endTime
