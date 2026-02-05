@@ -13,6 +13,7 @@ namespace Styx.Logic.Combat
         /// Creates a new spell effect with the specified parameters.
         /// </summary>
         internal SpellEffect(
+            WoWSpellEffectType effectType,
             WoWApplyAuraType auraType,
             float realPointsPerLevel,
             int basePoints,
@@ -30,6 +31,7 @@ namespace Styx.Logic.Combat
             float pointsPerComboPoint,
             SpellClassMask spellClassMask)
         {
+            EffectType = effectType;
             AuraType = auraType;
             RealPointsPerLevel = realPointsPerLevel;
             BasePoints = basePoints;
@@ -47,6 +49,11 @@ namespace Styx.Logic.Combat
             PointsPerComboPoint = pointsPerComboPoint;
             SpellClassMask = spellClassMask;
         }
+
+        /// <summary>
+        /// The type of effect (Heal, SchoolDamage, ApplyAura, etc.).
+        /// </summary>
+        public WoWSpellEffectType EffectType { get; }
 
         /// <summary>
         /// The type of aura this effect applies (if it's an aura effect).
