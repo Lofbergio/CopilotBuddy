@@ -1317,16 +1317,16 @@ namespace Styx.WoWInternals.WoWObjects
             {
                 try
                 {
-                    uint num = Inventory.Backpack.FreeSlots;
+                    uint totalFreeSlots = Inventory.Backpack.FreeSlots;
                     for (uint i = 0U; i < 4U; i++)
                     {
                         WoWContainer bagAtIndex = GetBagAtIndex(i);
                         if (bagAtIndex != null)
                         {
-                            num += bagAtIndex.FreeSlots;
+                            totalFreeSlots += bagAtIndex.FreeSlots;
                         }
                     }
-                    return num;
+                    return totalFreeSlots;
                 }
                 catch (Exception ex)
                 {
@@ -1366,7 +1366,7 @@ namespace Styx.WoWInternals.WoWObjects
             {
                 try
                 {
-                    uint num = Inventory.Backpack.FreeSlots;
+                    uint totalNormalBagFreeSlots = Inventory.Backpack.FreeSlots;
                     for (uint i = 0U; i < 4U; i++)
                     {
                         WoWContainer bagAtIndex = GetBagAtIndex(i);
@@ -1375,11 +1375,11 @@ namespace Styx.WoWInternals.WoWObjects
                             ItemInfo itemInfo = bagAtIndex.ItemInfo;
                             if (itemInfo != null && itemInfo.BagFamily == 0)
                             {
-                                num += bagAtIndex.FreeSlots;
+                                totalNormalBagFreeSlots += bagAtIndex.FreeSlots;
                             }
                         }
                     }
-                    return num;
+                    return totalNormalBagFreeSlots;
                 }
                 catch (Exception ex)
                 {
@@ -1558,16 +1558,16 @@ namespace Styx.WoWInternals.WoWObjects
                 {
                     11489876U
                 };
-                uint num = wow.Read<uint>(array);
-                if ((num & 1U) == 1U || num == 0U)
+                uint questPointer = wow.Read<uint>(array);
+                if ((questPointer & 1U) == 1U || questPointer == 0U)
                 {
-                    num = 0U;
+                    questPointer = 0U;
                 }
-                while (num != 0U && (num & 1U) == 0U)
+                while (questPointer != 0U && (questPointer & 1U) == 0U)
                 {
                     uint[] array2 = new uint[]
                     {
-                        num + 32U
+                        questPointer + 32U
                     };
                     int spellId = wow.Read<int>(array2);
                     if (spellId != 0)
@@ -1576,9 +1576,9 @@ namespace Styx.WoWInternals.WoWObjects
                     }
                     uint[] array3 = new uint[]
                     {
-                        num + 4U
+                        questPointer + 4U
                     };
-                    num = wow.Read<uint>(array3);
+                    questPointer = wow.Read<uint>(array3);
                 }
                 return null;
             }
@@ -1827,8 +1827,8 @@ namespace Styx.WoWInternals.WoWObjects
                 {
                     12727616U + 8U * index
                 };
-                ulong num = wow2.Read<ulong>(array2);
-                result = num;
+                ulong raidMemberGuid = wow2.Read<ulong>(array2);
+                result = raidMemberGuid;
             }
             catch (Exception ex)
             {
@@ -2105,33 +2105,33 @@ namespace Styx.WoWInternals.WoWObjects
                     throw new Exception("Invalid executor used in CGPlayer_C::CanUseItem");
                 }
 
-                bool flag;
+                bool canUseItem;
                 lock (executor.AssemblyLock)
                 {
                     executor.Clear();
-                    uint num = executor.Memory.AllocateMemory(4);
-                    if (num == 0U)
+                    uint allocatedMemoryAddress = executor.Memory.AllocateMemory(4);
+                    if (allocatedMemoryAddress == 0U)
                     {
                         throw new Exception("Couldn't allocate memory for CGPlayer_C::CanUseItem");
                     }
                     try
                     {
-                        executor.AddLine("push {0}", num);
+                        executor.AddLine("push {0}", allocatedMemoryAddress);
                         executor.AddLine("push {0}", itemCacheEntryBaseAddress);
                         executor.AddLine("mov ecx, {0}", player.BaseAddress);
                         executor.AddLine("call {0}", 7193584U);  // CGPlayer_C::CanUseItem
                         executor.AddLine("retn");
                         executor.Execute();
                         
-                        reason = (GameError)executor.Memory.Read<uint>(new uint[] { num });
-                        flag = Convert.ToBoolean(executor.Memory.Read<uint>(new uint[] { executor.ReturnPointer }));
+                        reason = (GameError)executor.Memory.Read<uint>(new uint[] { allocatedMemoryAddress });
+                        canUseItem = Convert.ToBoolean(executor.Memory.Read<uint>(new uint[] { executor.ReturnPointer }));
                     }
                     finally
                     {
-                        executor.Memory.FreeMemory(num);
+                        executor.Memory.FreeMemory(allocatedMemoryAddress);
                     }
                 }
-                return flag;
+                return canUseItem;
             }
             catch (Exception ex)
             {
