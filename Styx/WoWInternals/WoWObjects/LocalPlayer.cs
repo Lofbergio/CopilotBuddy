@@ -33,7 +33,7 @@ namespace Styx.WoWInternals.WoWObjects
         private const uint AccountNamePtr = 0xB6A400;       // 11971136U
         private const uint CorpsePointPtr = 0xBD1F48;       // 12388952U  
         private const uint ZoneIdPtr = 0xBD1D7C;            // 12388364U
-        private const uint MapIdPtr = 0xBD1DFC;             // 12388492U
+        private const uint MapIdPtr = 0xAB63BC;             // 11232188U - From Offsets.txt: CurrentMapId
         private const uint ContinentNamePtr = 0xCD8F20;     // 13469216U
         private const uint RealmNamePtr = 0xBD1CF4;         // 12388228U (approximate)
         private const uint PlayerNamePtr = 0xBD1E28;        // 12388520U
