@@ -330,24 +330,24 @@ namespace CopilotBuddy.UI
                 {
                     if (!objectives[index].IsEmpty && objectives[index].Type != Quest.QuestObjectiveType.Special)
                     {
-                        string str1, str2, str3;
+                        string objectiveTypeName, idAttributeName, countAttributeName;
                         switch (objectives[index].Type)
                         {
                             case Quest.QuestObjectiveType.CollectIntermediateItem:
                             case Quest.QuestObjectiveType.CollectItem:
-                                str1 = "CollectItem"; str2 = "ItemId"; str3 = "CollectCount";
+                                objectiveTypeName = "CollectItem"; idAttributeName = "ItemId"; countAttributeName = "CollectCount";
                                 break;
                             case Quest.QuestObjectiveType.KillMob:
-                                str1 = "KillMob"; str2 = "MobId"; str3 = "KillCount";
+                                objectiveTypeName = "KillMob"; idAttributeName = "MobId"; countAttributeName = "KillCount";
                                 break;
                             case Quest.QuestObjectiveType.UseGameObject:
-                                str1 = "UseObject"; str2 = "ObjectId"; str3 = "UseCount";
+                                objectiveTypeName = "UseObject"; idAttributeName = "ObjectId"; countAttributeName = "UseCount";
                                 break;
                             default:
                                 continue;
                         }
                         stringBuilder.AppendFormat("\t<Objective Type=\"{0}\" {1}=\"{2}\" {3}=\"{4}\">\n",
-                            str1, str2, objectives[index].ID, str3, objectives[index].Count);
+                            objectiveTypeName, idAttributeName, objectives[index].ID, countAttributeName, objectives[index].Count);
                         if (objectives[index].Type == Quest.QuestObjectiveType.CollectItem)
                             stringBuilder.AppendFormat("\t\t<CollectFrom>\n\t\t</CollectFrom>\n");
                         stringBuilder.AppendFormat("\t\t<Hotspots>\n\t\t</Hotspots>\n\t</Objective>\n");
@@ -403,24 +403,24 @@ namespace CopilotBuddy.UI
             {
                 if (!objectives[index].IsEmpty && objectives[index].Type != Quest.QuestObjectiveType.Special)
                 {
-                    string str1, str2, str3;
+                    string objectiveTypeName, idAttributeName, countAttributeName;
                     switch (objectives[index].Type)
                     {
                         case Quest.QuestObjectiveType.CollectIntermediateItem:
                         case Quest.QuestObjectiveType.CollectItem:
-                            str1 = "CollectItem"; str2 = "ItemId"; str3 = "CollectCount";
+                            objectiveTypeName = "CollectItem"; idAttributeName = "ItemId"; countAttributeName = "CollectCount";
                             break;
                         case Quest.QuestObjectiveType.KillMob:
-                            str1 = "KillMob"; str2 = "MobId"; str3 = "KillCount";
+                            objectiveTypeName = "KillMob"; idAttributeName = "MobId"; countAttributeName = "KillCount";
                             break;
                         case Quest.QuestObjectiveType.UseGameObject:
-                            str1 = "UseObject"; str2 = "ObjectId"; str3 = "UseCount";
+                            objectiveTypeName = "UseObject"; idAttributeName = "ObjectId"; countAttributeName = "UseCount";
                             break;
                         default:
                             continue;
                     }
                     builder.AppendFormat("<Objective QuestName=\"{0}\" QuestId=\"{1}\" Type=\"{2}\" {3}=\"{4}\" {5}=\"{6}\" />\n",
-                        quest.Name, quest.Id, str1, str2, objectives[index].ID, str3, objectives[index].Count);
+                        quest.Name, quest.Id, objectiveTypeName, idAttributeName, objectives[index].ID, countAttributeName, objectives[index].Count);
                 }
             }
 
@@ -477,10 +477,10 @@ namespace CopilotBuddy.UI
                 WoWPoint location = ObjectManager.Me.Location;
                 var last = _lastBlackspotPos.Value;
                 WoWPoint woWpoint = new WoWPoint((last.X + location.X) / 2.0, (last.Y + location.Y) / 2.0, (last.Z + location.Z) / 2.0);
-                float num1 = location.Distance2D(last) / 2f;
-                float num2 = Math.Abs(last.Z - location.Z) / 2f;
-                string heightPart = num2 > 10.0f ? $"Height=\"{(num2 + 3f).ToString(CultureInfo.InvariantCulture)}\" " : string.Empty;
-                Logging.Write($"<Blackspot X=\"{woWpoint.X.ToString(CultureInfo.InvariantCulture)}\" Y=\"{woWpoint.Y.ToString(CultureInfo.InvariantCulture)}\" Z=\"{woWpoint.Z.ToString(CultureInfo.InvariantCulture)}\" Radius=\"{num1.ToString(CultureInfo.InvariantCulture)}\" {heightPart}/>");
+                float horizontalRadius = location.Distance2D(last) / 2f;
+                float halfZDifference = Math.Abs(last.Z - location.Z) / 2f;
+                string heightPart = halfZDifference > 10.0f ? $"Height=\"{(halfZDifference + 3f).ToString(CultureInfo.InvariantCulture)}\" " : string.Empty;
+                Logging.Write($"<Blackspot X=\"{woWpoint.X.ToString(CultureInfo.InvariantCulture)}\" Y=\"{woWpoint.Y.ToString(CultureInfo.InvariantCulture)}\" Z=\"{woWpoint.Z.ToString(CultureInfo.InvariantCulture)}\" Radius=\"{horizontalRadius.ToString(CultureInfo.InvariantCulture)}\" {heightPart}/>");
                 _lastBlackspotPos = null;
             }
         }
