@@ -116,6 +116,8 @@ namespace CommonBehaviors.Actions
 				case PoiType.Buy:
 				case PoiType.Mail:
 				case PoiType.Repair:
+				case PoiType.Train:  // Trainer needs close range like vendors
+				case PoiType.Fly:    // Flight master needs close range
 					precision = 4f;  // Close enough to interact
 					break;
 			}
