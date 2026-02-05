@@ -69,26 +69,26 @@ public abstract class CustomForcedBehavior
     List<T> objList = new List<T>();
     if (str != null && this.Args.ContainsKey(str))
     {
-      foreach (string string_2 in this.Args[str].Split(separatorCharacters, StringSplitOptions.RemoveEmptyEntries))
+      foreach (string segment in this.Args[str].Split(separatorCharacters, StringSplitOptions.RemoveEmptyEntries))
       {
-        T obj;
+        T convertedValue;
         try
         {
-          obj = this.ConvertStringToType<T>(str, string_2);
+          convertedValue = this.ConvertStringToType<T>(str, segment);
         }
         catch (Exception ex)
         {
           flag = true;
           continue;
         }
-        string format = constraints.Check(str, obj);
+        string format = constraints.Check(str, convertedValue);
         if (format != null)
         {
           this.LogMessage("error", format);
           flag = true;
         }
         else
-          objList.Add(obj);
+          objList.Add(convertedValue);
       }
       if (flag)
       {
@@ -123,97 +123,97 @@ public abstract class CustomForcedBehavior
     bool isWoWPoint = typeof(T) == typeof(WoWPoint);
 
     bool flag = false;
-    List<T> list_1 = new List<T>();
+    List<T> resultList = new List<T>();
 
     // Filter keys that match the base name pattern
-    foreach (string string_1 in this.Args.Keys.Where<string>(key => capturedThis.IsKeyMatchingBasePattern(capturedBaseName, key, isWoWPoint)))
-      flag |= this.TryProcessSingleNumberedAttribute<T>(string_1, constraints, list_1);
+    foreach (string matchingKey in this.Args.Keys.Where<string>(key => capturedThis.IsKeyMatchingBasePattern(capturedBaseName, key, isWoWPoint)))
+      flag |= this.TryProcessSingleNumberedAttribute<T>(matchingKey, constraints, resultList);
 
     if (aliasBaseNames != null)
     {
       // Process alias base names
-      foreach (string string_1 in ((IEnumerable<string>) aliasBaseNames)
+      foreach (string matchingKey in ((IEnumerable<string>) aliasBaseNames)
         .SelectMany<string, string, AttributeNamePair<string, string>>(
           (Func<string, IEnumerable<string>>) (alias => (IEnumerable<string>) this.Args.Keys),
           (Func<string, string, AttributeNamePair<string, string>>) ((alias, key) => new AttributeNamePair<string, string>(alias, key)))
         .Where<AttributeNamePair<string, string>>(pair => capturedThis.IsKeyMatchingBasePattern(pair.aliasBaseName, pair.attributeName, isWoWPoint))
         .Select<AttributeNamePair<string, string>, string>((Func<AttributeNamePair<string, string>, string>) (pair => pair.attributeName)))
-        flag |= this.TryProcessSingleNumberedAttribute<T>(string_1, constraints, list_1);
+        flag |= this.TryProcessSingleNumberedAttribute<T>(matchingKey, constraints, resultList);
     }
 
-    if (list_1.Count < countRequired)
+    if (resultList.Count < countRequired)
     {
-      this.LogMessage("error", "The attribute '{0}N' must be provided at least {1} times (saw it '{2}' times).\n(E.g., ButtonText1, ButtonText2, ButtonText3, ...)\nPlease modify the profile to supply {1} attributes with a base name of '{0}'.", (object) capturedBaseName, (object) countRequired, (object) list_1.Count);
+      this.LogMessage("error", "The attribute '{0}N' must be provided at least {1} times (saw it '{2}' times).\n(E.g., ButtonText1, ButtonText2, ButtonText3, ...)\nPlease modify the profile to supply {1} attributes with a base name of '{0}'.", (object) capturedBaseName, (object) countRequired, (object) resultList.Count);
       flag = true;
     }
 
     if (flag)
     {
-      list_1.Clear();
+      resultList.Clear();
       this.IsAttributeProblem = true;
     }
-    return list_1.ToArray();
+    return resultList.ToArray();
   }
 
   private bool TryProcessSingleNumberedAttribute<T>(
-    string string_1,
+    string attributeName,
     CustomForcedBehavior.IConstraintChecker<T> constraintChecker,
-    List<T> list_1)
+    List<T> resultList)
   {
-    string string_1_1 = string_1;
+    string baseAttributeName = attributeName;
     if (typeof (T) == typeof (WoWPoint))
     {
-      if (string_1.EndsWith("X") || string_1.EndsWith("Y") || string_1.EndsWith("Z"))
-        string_1_1 = string_1.Substring(0, string_1.Length - 1);
-      if (!string_1.EndsWith("X") && this.Args.ContainsKey(string_1_1 + "X"))
+      if (attributeName.EndsWith("X") || attributeName.EndsWith("Y") || attributeName.EndsWith("Z"))
+        baseAttributeName = attributeName.Substring(0, attributeName.Length - 1);
+      if (!attributeName.EndsWith("X") && this.Args.ContainsKey(baseAttributeName + "X"))
         return false;
     }
-    object obj = this.GetAttributeValueAsObject<T>(string_1_1, false, constraintChecker, (string[]) null);
+    object obj = this.GetAttributeValueAsObject<T>(baseAttributeName, false, constraintChecker, (string[]) null);
     if (obj == null)
       return true;
-    list_1.Add((T) obj);
+    resultList.Add((T) obj);
     return false;
   }
 
   private object GetAttributeValueAsObject<T>(
-    string string_1,
-    bool bool_1,
+    string attributeName,
+    bool isRequired,
     CustomForcedBehavior.IConstraintChecker<T> constraintChecker,
-    string[] string_2)
+    string[] aliases)
   {
     if (typeof (T) == typeof (WoWPoint))
-      return this.ParseWoWPointArray(string_1, bool_1, string_2);
+      return this.ParseWoWPointArray(attributeName, isRequired, aliases);
     constraintChecker = constraintChecker ?? (CustomForcedBehavior.IConstraintChecker<T>) new CustomForcedBehavior.ConstrainTo.Anything<T>();
-    string str = this.FindAttributeKeyOrAlias(bool_1, string_1, string_2);
+    string str = this.FindAttributeKeyOrAlias(isRequired, attributeName, aliases);
     if (str == null || !this.Args.ContainsKey(str))
       return (object) null;
-    string string_2_1 = this.Args[str];
-    T obj1;
-    object obj2;
+    string attributeValue = this.Args[str];
+    T convertedValue;
+    object result;
     try
     {
-      obj1 = this.ConvertStringToType<T>(str, string_2_1);
+      convertedValue = this.ConvertStringToType<T>(str, attributeValue);
       goto label_7;
     }
     catch (Exception ex)
     {
       this.IsAttributeProblem = true;
-      obj2 = (object) null;
+      result = (object) null;
     }
-    return obj2;
+    return result;
 label_7:
-    string format = constraintChecker.Check(str, obj1);
+    string format = constraintChecker.Check(str, convertedValue);
     if (format == null)
-      return (object) obj1;
+      return (object) convertedValue;
     this.LogMessage("error", format);
     this.IsAttributeProblem = true;
     return (object) null;
   }
 
-  private object ParseWoWPointArray(string string_1, bool bool_1, string[] string_2)
+  private object ParseWoWPointArray(string attributeName, bool isRequired, string[] aliases)
   {
     bool flag = false;
-    string str1 = this.FindAttributeKeyOrAlias(bool_1, string_1, string_2);
+    string str1 = this.FindAttributeKeyOrAlias(isRequired, attributeName, aliases);
     List<WoWPoint> woWpointList = new List<WoWPoint>();
     char[] separator1 = new char[2]{ ' ', ',' };
     char[] separator2 = new char[2]{ '|', ';' };
@@ -271,92 +271,92 @@ label_7:
     return (object) woWpointList.ToArray();
   }
 
-  private object ParseSingleWoWPoint(string string_1_1, bool bool_1, string[] string_2)
+  private object ParseSingleWoWPoint(string attributeBaseName, bool isRequired, string[] aliases)
   {
-    if (string_1_1 == null)
-      string_1_1 = "";
-    string[] string_2_1 = (string[]) null;
-    string[] string_2_2 = (string[]) null;
-    string[] string_2_3 = (string[]) null;
-    if (string_2 != null)
+    if (attributeBaseName == null)
+      attributeBaseName = "";
+    string[] xAliases = (string[]) null;
+    string[] yAliases = (string[]) null;
+    string[] zAliases = (string[]) null;
+    if (aliases != null)
     {
-      string_2_1 = ((IEnumerable<string>) string_2).Select<string, string>((Func<string, string>) (string_1_2 => string_1_2 + "X")).ToArray<string>();
-      string_2_2 = ((IEnumerable<string>) string_2).Select<string, string>((Func<string, string>) (string_1_3 => string_1_3 + "Y")).ToArray<string>();
-      string_2_3 = ((IEnumerable<string>) string_2).Select<string, string>((Func<string, string>) (string_1_4 => string_1_4 + "Z")).ToArray<string>();
+      xAliases = ((IEnumerable<string>) aliases).Select<string, string>((Func<string, string>) (alias => alias + "X")).ToArray<string>();
+      yAliases = ((IEnumerable<string>) aliases).Select<string, string>((Func<string, string>) (alias => alias + "Y")).ToArray<string>();
+      zAliases = ((IEnumerable<string>) aliases).Select<string, string>((Func<string, string>) (alias => alias + "Z")).ToArray<string>();
     }
-    string str1 = this.FindAttributeKeyOrAlias(false, string_1_1 + "X", string_2_1);
-    string str2 = this.FindAttributeKeyOrAlias(false, string_1_1 + "Y", string_2_2);
-    string str3 = this.FindAttributeKeyOrAlias(false, string_1_1 + "Z", string_2_3);
+    string str1 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "X", xAliases);
+    string str2 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "Y", yAliases);
+    string str3 = this.FindAttributeKeyOrAlias(false, attributeBaseName + "Z", zAliases);
     string str4 = str1 ?? str2 ?? str3;
     string str5;
     if (str4 != null)
     {
       str5 = str4.Substring(0, str4.Length - 1);
-      bool_1 = true;
+      isRequired = true;
     }
     else
-      str5 = string_1_1;
-    double? nullable1 = (double?) this.GetAttributeValueAsObject<double>(str5 + "X", bool_1, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
-    double? nullable2 = (double?) this.GetAttributeValueAsObject<double>(str5 + "Y", bool_1, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
-    double? nullable3 = (double?) this.GetAttributeValueAsObject<double>(str5 + "Z", bool_1, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
+      str5 = attributeBaseName;
+    double? nullable1 = (double?) this.GetAttributeValueAsObject<double>(str5 + "X", isRequired, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
+    double? nullable2 = (double?) this.GetAttributeValueAsObject<double>(str5 + "Y", isRequired, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
+    double? nullable3 = (double?) this.GetAttributeValueAsObject<double>(str5 + "Z", isRequired, (CustomForcedBehavior.IConstraintChecker<double>) null, (string[]) null);
     return nullable1.HasValue && nullable2.HasValue && nullable3.HasValue ? (object) new WoWPoint(nullable1.Value, nullable2.Value, nullable3.Value) : (object) null;
   }
 
-  private bool IsKeyMatchingBasePattern(string string_1, string string_2, bool bool_1)
+  private bool IsKeyMatchingBasePattern(string baseName, string key, bool isWoWPoint)
   {
-    if (!string_2.StartsWith(string_1))
+    if (!key.StartsWith(baseName))
       return false;
-    string s = string_2.Substring(string_1.Length);
-    if (bool_1 && (s.EndsWith("X") || s.EndsWith("Y") || s.EndsWith("Z")))
+    string s = key.Substring(baseName.Length);
+    if (isWoWPoint && (s.EndsWith("X") || s.EndsWith("Y") || s.EndsWith("Z")))
       s = s.Substring(0, s.Length - 1);
     return s.Length == 0 || int.TryParse(s, out int _);
   }
 
-  private T ConvertStringToType<T>(string string_1, string string_2)
+  private T ConvertStringToType<T>(string attributeName, string stringValue)
   {
     Type type = typeof (T);
     if (type == typeof (bool))
     {
       int result;
-      if (int.TryParse(string_2, out result))
+      if (int.TryParse(stringValue, out result))
       {
-        string_2 = result != 0 ? "true" : "false";
-        this.LogMessage("warning", "Attribute's '{0}' value was provided as an integer (saw '{1}')--a boolean was expected.\nThe integral value '{1}' was converted to Boolean({2}).\nPlease update the profile to provide '{2}' for this value.", (object) string_1, (object) result, (object) string_2);
+        stringValue = result != 0 ? "true" : "false";
+        this.LogMessage("warning", "Attribute's '{0}' value was provided as an integer (saw '{1}')--a boolean was expected.\nThe integral value '{1}' was converted to Boolean({2}).\nPlease update the profile to provide '{2}' for this value.", (object) attributeName, (object) result, (object) stringValue);
       }
     }
     else if (type.IsEnum)
     {
       bool flag = true;
-      T obj = default (T);
+      T enumValue = default (T);
       try
       {
-        obj = (T) Enum.Parse(type, string_2, true);
+        enumValue = (T) Enum.Parse(type, stringValue, true);
       }
       catch (Exception ex)
       {
         flag = false;
       }
-      if (flag && Enum.IsDefined(type, (object) obj))
+      if (flag && Enum.IsDefined(type, (object) enumValue))
       {
         int result;
-        if (int.TryParse(string_2, out result))
-          this.LogMessage("warning", "The '{0}' attribute's value '{1}' has been implicitly converted to the corresponding enumeration '{2}'.\nPlease use the enumeration name '{2}' instead of a number.", (object) string_1, (object) result, (object) obj.ToString());
-        return obj;
+        if (int.TryParse(stringValue, out result))
+          this.LogMessage("warning", "The '{0}' attribute's value '{1}' has been implicitly converted to the corresponding enumeration '{2}'.\nPlease use the enumeration name '{2}' instead of a number.", (object) attributeName, (object) result, (object) enumValue.ToString());
+        return enumValue;
       }
-      this.LogMessage("error", "The value '{0}' is not a member of the {1} enumeration.", (object) string_2, (object) type.Name);
+      this.LogMessage("error", "The value '{0}' is not a member of the {1} enumeration.", (object) stringValue, (object) type.Name);
       return default (T);
     }
-    T obj1;
+    T convertedValue;
     try
     {
-      obj1 = (T) Convert.ChangeType((object) string_2, type);
+      convertedValue = (T) Convert.ChangeType((object) stringValue, type);
     }
     catch (Exception ex)
     {
-      this.LogMessage("error", "The '{0}' attribute's value (saw '{1}') is malformed. ({2})", (object) string_1, (object) string_2, (object) ex.GetType().Name);
+      this.LogMessage("error", "The '{0}' attribute's value (saw '{1}') is malformed. ({2})", (object) attributeName, (object) stringValue, (object) ex.GetType().Name);
       throw;
     }
-    return obj1;
+    return convertedValue;
   }
 
   public bool IsAttributeProblem
