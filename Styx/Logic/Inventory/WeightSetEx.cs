@@ -18,8 +18,8 @@ namespace Styx.Logic.Inventory;
 
 public class WeightSetEx : IDisposable
 {
-  private static WeightSetEx weightSetEx_0;
-  private static IEnumerable<WeightSetEx> ienumerable_0;
+  private static WeightSetEx _cachedWeightSet;
+  private static IEnumerable<WeightSetEx> _loadedWeightSets;
 
   private WeightSetEx(XElement weightElm)
   {
@@ -92,17 +92,17 @@ public class WeightSetEx : IDisposable
   private static void OnTalentGroupChanged(object sender, LuaEventArgs e)
   {
     Logging.WriteDebug("[WeightSet] Your spec has been changed. Clearing old weight set");
-    WeightSetEx.weightSetEx_0 = (WeightSetEx) null;
+    WeightSetEx._cachedWeightSet = (WeightSetEx) null;
   }
 
   public static WeightSetEx CurrentWeightSet
   {
     get
     {
-      if (WeightSetEx.ienumerable_0 == null)
+      if (WeightSetEx._loadedWeightSets == null)
         WeightSetEx.LoadWeightSets();
-      if (WeightSetEx.weightSetEx_0 != null)
-        return WeightSetEx.weightSetEx_0;
+      if (WeightSetEx._cachedWeightSet != null)
+        return WeightSetEx._cachedWeightSet;
 
       // Capture for closure (replacing Class461)
       WoWClass playerClass = StyxWoW.Me.Class;
@@ -115,22 +115,22 @@ public class WeightSetEx : IDisposable
       int specIndex = talentPoints.IndexOf(talentPoints.Max()) + 1;
 
       // Find weight set matching class and spec
-      WeightSetEx.weightSetEx_0 = WeightSetEx.ienumerable_0.FirstOrDefault<WeightSetEx>(
+      WeightSetEx._cachedWeightSet = WeightSetEx._loadedWeightSets.FirstOrDefault<WeightSetEx>(
         ws => ws.Class == playerClass && ws.Specialization == specIndex);
 
-      if (WeightSetEx.weightSetEx_0 == null)
+      if (WeightSetEx._cachedWeightSet == null)
       {
         // Fall back to class-only match
-        WeightSetEx.weightSetEx_0 = WeightSetEx.ienumerable_0.FirstOrDefault<WeightSetEx>(
+        WeightSetEx._cachedWeightSet = WeightSetEx._loadedWeightSets.FirstOrDefault<WeightSetEx>(
           ws => ws.Class == playerClass);
-        if (WeightSetEx.weightSetEx_0 == null)
+        if (WeightSetEx._cachedWeightSet == null)
           Logging.WriteDebug("[WeightSet] Unable to find a weight set for your class. Please make sure you have all the required files");
       }
 
-      if (WeightSetEx.weightSetEx_0 != null && !string.IsNullOrEmpty(WeightSetEx.weightSetEx_0.Name))
-        Logging.WriteDebug("[WeightSet] Selected weight set: {0}", (object) WeightSetEx.weightSetEx_0.Name);
+      if (WeightSetEx._cachedWeightSet != null && !string.IsNullOrEmpty(WeightSetEx._cachedWeightSet.Name))
+        Logging.WriteDebug("[WeightSet] Selected weight set: {0}", (object) WeightSetEx._cachedWeightSet.Name);
 
-      return WeightSetEx.weightSetEx_0;
+      return WeightSetEx._cachedWeightSet;
     }
   }
 
@@ -155,24 +155,24 @@ public class WeightSetEx : IDisposable
   {
     if ((WoWObject) item == (WoWObject) null || item.ItemInfo == null)
       return 0.0f;
-    float num = this.EvaluateItem(item.ItemInfo, item.ItemStats);
+    float totalScore = this.EvaluateItem(item.ItemInfo, item.ItemStats);
     if (includeEnchants)
     {
-      for (uint index1 = 0; index1 < 3U; ++index1)
+      for (uint enchantIndex = 0; enchantIndex < 3U; ++enchantIndex)
       {
-        WoWItem.WoWItemEnchantment enchantment = item.GetEnchantment(index1);
+        WoWItem.WoWItemEnchantment enchantment = item.GetEnchantment(enchantIndex);
         if (enchantment.IsValid)
         {
-          for (int index2 = 0; index2 < 3; ++index2)
+          for (int statIndex = 0; statIndex < 3; ++statIndex)
           {
-            WoWItem.WoWItemStat stat = enchantment.GetStat(index2);
+            WoWItem.WoWItemStat stat = enchantment.GetStat(statIndex);
             if (stat != null)
-              num += this.GetStatScore(stat.Type.ToString(), (float) stat.Value);
+              totalScore += this.GetStatScore(stat.Type.ToString(), (float) stat.Value);
           }
         }
       }
     }
-    return num;
+    return totalScore;
   }
 
   public float EvaluateItem(WoWItem item) => this.EvaluateItem(item, false);
@@ -181,22 +181,22 @@ public class WeightSetEx : IDisposable
   {
     if (itemStats == null)
       return 0.0f;
-    float num1 = 0.0f;
+    float totalScore = 0.0f;
     foreach (var kvp in itemStats.Stats)
     {
-      num1 += this.GetStatScore(kvp.Key.ToString(), (float) kvp.Value);
+      totalScore += this.GetStatScore(kvp.Key.ToString(), (float) kvp.Value);
     }
     if (itemInfo != null)
     {
-      num1 = num1 + this.GetStatScore(Stat.DPS, itemInfo.DPS) + this.GetStatScore(Stat.MinDamage, itemInfo.MinDamage) + this.GetStatScore(Stat.MaxDamage, itemInfo.MaxDamage) + this.GetStatScore(Stat.Armor, (float) itemInfo.Armor) + this.GetStatScore(Stat.HolyResistance, (float) itemInfo.HolyResistance) + this.GetStatScore(Stat.FrostResistance, (float) itemInfo.FrostResistance) + this.GetStatScore(Stat.FireResistance, (float) itemInfo.FireResistance) + this.GetStatScore(Stat.NatureResistance, (float) itemInfo.NatureResistance) + this.GetStatScore(Stat.ArcaneResistance, (float) itemInfo.ArcaneResistance) + this.GetStatScore(Stat.ShadowResistance, (float) itemInfo.ShadowResistance);
+      totalScore = totalScore + this.GetStatScore(Stat.DPS, itemInfo.DPS) + this.GetStatScore(Stat.MinDamage, itemInfo.MinDamage) + this.GetStatScore(Stat.MaxDamage, itemInfo.MaxDamage) + this.GetStatScore(Stat.Armor, (float) itemInfo.Armor) + this.GetStatScore(Stat.HolyResistance, (float) itemInfo.HolyResistance) + this.GetStatScore(Stat.FrostResistance, (float) itemInfo.FrostResistance) + this.GetStatScore(Stat.FireResistance, (float) itemInfo.FireResistance) + this.GetStatScore(Stat.NatureResistance, (float) itemInfo.NatureResistance) + this.GetStatScore(Stat.ArcaneResistance, (float) itemInfo.ArcaneResistance) + this.GetStatScore(Stat.ShadowResistance, (float) itemInfo.ShadowResistance);
       WeightSetEx currentWeightSet = WeightSetEx.CurrentWeightSet;
       if (currentWeightSet != null)
       {
-        float num2 = 0.0f;
+        float speedBaseline = 0.0f;
         if (currentWeightSet.StatScores.ContainsKey(Stat.SpeedBaseLine))
-          num2 = currentWeightSet.StatScores[Stat.SpeedBaseLine];
+          speedBaseline = currentWeightSet.StatScores[Stat.SpeedBaseLine];
         if (currentWeightSet.StatScores.ContainsKey(Stat.Speed))
-          num1 += this.GetStatScore(Stat.Speed, (float) itemInfo.WeaponSpeed - num2 * 1000f);
+          totalScore += this.GetStatScore(Stat.Speed, (float) itemInfo.WeaponSpeed - speedBaseline * 1000f);
       }
       for (int index = 0; index < itemInfo.InternalInfo.SocketColor.Length; ++index)
       {
@@ -204,13 +204,13 @@ public class WeightSetEx : IDisposable
         if (socketColorFlags != Styx.WoWInternals.WoWCache.WoWCache.SocketColorFlags.None)
         {
           if ((socketColorFlags & Styx.WoWInternals.WoWCache.WoWCache.SocketColorFlags.Meta) != Styx.WoWInternals.WoWCache.WoWCache.SocketColorFlags.None)
-            num1 += this.GetStatScore(Stat.MetaSocket, 1f);
+            totalScore += this.GetStatScore(Stat.MetaSocket, 1f);
           if ((socketColorFlags & Styx.WoWInternals.WoWCache.WoWCache.SocketColorFlags.Red) != Styx.WoWInternals.WoWCache.WoWCache.SocketColorFlags.None)
-            num1 += this.GetStatScore(Stat.RedSocket, 1f);
+            totalScore += this.GetStatScore(Stat.RedSocket, 1f);
           if ((socketColorFlags & Styx.WoWInternals.WoWCache.WoWCache.SocketColorFlags.Yellow) != Styx.WoWInternals.WoWCache.WoWCache.SocketColorFlags.None)
-            num1 += this.GetStatScore(Stat.YellowSocket, 1f);
+            totalScore += this.GetStatScore(Stat.YellowSocket, 1f);
           if ((socketColorFlags & Styx.WoWInternals.WoWCache.WoWCache.SocketColorFlags.Blue) != Styx.WoWInternals.WoWCache.WoWCache.SocketColorFlags.None)
-            num1 += this.GetStatScore(Stat.BlueSocket, 1f);
+            totalScore += this.GetStatScore(Stat.BlueSocket, 1f);
         }
       }
       if (itemInfo.ItemClass == WoWItemClass.Armor)
@@ -219,16 +219,16 @@ public class WeightSetEx : IDisposable
         int wantedArmorClass = (int) this.GetWantedArmorClass();
         if (armorClass == wantedArmorClass)
         {
-          num1 *= 2f;
+          totalScore *= 2f;
         }
         else
         {
           int val1 = wantedArmorClass + 1 - armorClass;
-          num1 /= (float) Math.Max(val1, 1);
+          totalScore /= (float) Math.Max(val1, 1);
         }
       }
     }
-    return num1;
+    return totalScore;
   }
 
   public float GetStatScore(Stat stat, float statPoints)
@@ -306,13 +306,13 @@ public class WeightSetEx : IDisposable
         WeightSetEx weightSetEx = new WeightSetEx(XElement.Load(file));
         weightSetExList.Add(weightSetEx);
       }
-      WeightSetEx.ienumerable_0 = (IEnumerable<WeightSetEx>) weightSetExList;
+      WeightSetEx._loadedWeightSets = (IEnumerable<WeightSetEx>) weightSetExList;
     }
     else
     {
       Logging.WriteDebug("Unable to find Data and/or 'Weight Sets' folder, cannot parse weight set's. ");
       // Initialize to empty collection to prevent null reference exceptions
-      WeightSetEx.ienumerable_0 = Enumerable.Empty<WeightSetEx>();
+      WeightSetEx._loadedWeightSets = Enumerable.Empty<WeightSetEx>();
     }
   }
 
