@@ -55,10 +55,29 @@ namespace Styx.Logic.Combat
 
         /// <summary>
         /// Gets the spell range ID (public for HB 4.3.4 compatibility).
+        /// NOTE: The DBC rangeIndex is not read correctly in WotLK 3.3.5a, so we 
+        /// calculate the appropriate range ID based on MinRange/MaxRange from Lua.
+        /// Range IDs: 1 = Self Only, 2 = Melee (5 yards), other = Ranged
         /// </summary>
         public uint SpellRangeId
         {
-            get { return _spellEntry.rangeIndex; }
+            get 
+            { 
+                // Use Lua-based ranges which are reliable
+                float min = MinRange;
+                float max = MaxRange;
+                
+                // Self-only spells (like buffs)
+                if (max == 0f && min == 0f)
+                    return 1U;
+                
+                // Melee range spells (MaxRange <= 5 yards)
+                if (max > 0f && max <= 5f)
+                    return 2U;
+                
+                // Ranged spells - return a generic ranged ID
+                return 3U;
+            }
         }
 
         public uint ManaCostPercent
