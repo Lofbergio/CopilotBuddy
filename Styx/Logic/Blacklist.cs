@@ -28,9 +28,9 @@ namespace Styx.Logic
                     Blacklist.func_0 = new Func<KeyValuePair<ulong, DateTime>, ulong>(GetKey);
                 }
                 List<ulong> list = source.Select(Blacklist.func_0).ToList<ulong>();
-                foreach (ulong num in list)
+                foreach (ulong expiredGuid in list)
                 {
-                    Blacklist._blacklistedGuids.Remove(num);
+                    Blacklist._blacklistedGuids.Remove(expiredGuid);
                 }
             }
         }
