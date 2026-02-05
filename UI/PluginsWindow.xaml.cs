@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -110,6 +111,30 @@ namespace CopilotBuddy.UI
 		private void BtnClose_Click(object sender, RoutedEventArgs e)
 		{
 			Close();
+		}
+
+		/// <summary>
+		/// Saves enabled plugins to CharacterSettings when window closes.
+		/// Pattern from HB 4.3.4 PluginsWindow.OnClosing()
+		/// </summary>
+		protected override void OnClosing(CancelEventArgs e)
+		{
+			try
+			{
+				// Save enabled plugins list - exactly like HB 4.3.4
+				CharacterSettings.Instance.EnabledPlugins = PluginManager.Plugins
+					.Where(p => p.Enabled)
+					.Select(p => p.Name)
+					.ToArray();
+				CharacterSettings.Instance.Save();
+				Logging.Write("Plugin settings saved.");
+			}
+			catch (Exception ex)
+			{
+				Logging.WriteException(ex);
+			}
+
+			base.OnClosing(e);
 		}
 	}
 }
