@@ -79,6 +79,65 @@ namespace Styx.Logic
 			}
 		}
 
+		private static readonly Random _random = new Random();
+
+		/// <summary>
+		/// Auto-detects and sets mount name if FindMountAutomatically is enabled.
+		/// Ported from HB 4.3.4.
+		/// </summary>
+		public static void AutoDetectMount()
+		{
+			if (!CharacterSettings.Instance.UseMount || !CharacterSettings.Instance.FindMountAutomatically)
+				return;
+
+			if (CharacterSettings.Instance.UseRandomMount)
+			{
+				// Random mount selection
+				var groundMounts = MountHelper.GroundMounts;
+				if (groundMounts != null && groundMounts.Count > 0)
+				{
+					var mount = groundMounts[_random.Next(0, groundMounts.Count)];
+					CharacterSettings.Instance.MountName = mount.CreatureSpellId.ToString();
+					Logging.WriteDebug("[Mount] Auto-detected random ground mount: {0}", mount.Name);
+				}
+
+				var flyingMounts = MountHelper.FlyingMounts;
+				if (flyingMounts != null && flyingMounts.Count > 0)
+				{
+					var mount = flyingMounts[_random.Next(0, flyingMounts.Count)];
+					CharacterSettings.Instance.FlyingMountName = mount.CreatureSpellId.ToString();
+					Logging.WriteDebug("[Mount] Auto-detected random flying mount: {0}", mount.Name);
+				}
+			}
+			else
+			{
+				// Use first available mount if not set
+				string mountName = CharacterSettings.Instance.MountName;
+				if (string.IsNullOrEmpty(mountName) || mountName == "Mount Name Here" || mountName.Contains("Automatically detected"))
+				{
+					var groundMounts = MountHelper.GroundMounts;
+					if (groundMounts != null && groundMounts.Count > 0)
+					{
+						var mount = groundMounts[0];
+						CharacterSettings.Instance.MountName = mount.CreatureSpellId.ToString();
+						Logging.WriteDebug("[Mount] Auto-detected ground mount: {0}", mount.Name);
+					}
+				}
+
+				string flyingMount = CharacterSettings.Instance.FlyingMountName;
+				if (string.IsNullOrEmpty(flyingMount) || flyingMount.Contains("Automatically detected"))
+				{
+					var flyingMounts = MountHelper.FlyingMounts;
+					if (flyingMounts != null && flyingMounts.Count > 0)
+					{
+						var mount = flyingMounts[0];
+						CharacterSettings.Instance.FlyingMountName = mount.CreatureSpellId.ToString();
+						Logging.WriteDebug("[Mount] Auto-detected flying mount: {0}", mount.Name);
+					}
+				}
+			}
+		}
+
 		public static void MountUp()
 		{
 			if (_defaultCanMount == null)
@@ -100,6 +159,9 @@ namespace Styx.Logic
 
 			if (!LevelbotSettings.Instance.UseMount)
 				return;
+
+			// Auto-detect mount if enabled
+			AutoDetectMount();
 
 			if (string.IsNullOrEmpty(LevelbotSettings.Instance.MountName))
 				return;
