@@ -425,7 +425,7 @@ namespace Styx.WoWInternals
                     executor.Memory.Write(varPtr, varBytes);
 
                     executor.Clear();
-                    executor.AddLine("push 0");
+                    executor.AddLine("push -1");
                     executor.AddLine("push {0}", varPtr);
                     executor.AddLine("mov ecx, {0}", lpLocalPlayer);
                     executor.AddLine("call {0}", (uint)GlobalOffsets.FrameScript__GetLocalizedText);
