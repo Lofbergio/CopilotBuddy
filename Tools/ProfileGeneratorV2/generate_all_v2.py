@@ -15,24 +15,15 @@ OUTPUT_BASE = Path(__file__).parent / "output_v2"
 PARSER_SCRIPT = Path(__file__).parent / "zygor_parser_v2.py"
 SPAWNS_JSON = Path(__file__).parent / "gameobject_spawns.json"
 
-# Zygor guide files
+# Zygor guide files - (filename, faction)
+# Toutes les races partagent les mêmes quêtes après les zones de départ
 GUIDES = [
-    # Horde Classic
-    ("ZygorLevelingHordeCLASSIC.lua", "Horde", None),
-    ("ZygorLevelingHordeCLASSIC.lua", "Horde", "Orc"),
-    ("ZygorLevelingHordeCLASSIC.lua", "Horde", "Troll"),
-    ("ZygorLevelingHordeCLASSIC.lua", "Horde", "Tauren"),
-    ("ZygorLevelingHordeCLASSIC.lua", "Horde", "Undead"),
-    # Alliance Classic
-    ("ZygorLevelingAllianceCLASSIC.lua", "Alliance", None),
-    ("ZygorLevelingAllianceCLASSIC.lua", "Alliance", "Human"),
-    ("ZygorLevelingAllianceCLASSIC.lua", "Alliance", "Dwarf"),
-    ("ZygorLevelingAllianceCLASSIC.lua", "Alliance", "NightElf"),
-    ("ZygorLevelingAllianceCLASSIC.lua", "Alliance", "Gnome"),
-    # Horde WotLK
-    ("ZygorLevelingHordeWOTLKTrial.lua", "Horde", None),
-    # Alliance WotLK
-    ("ZygorLevelingAllianceWOTLKTrial.lua", "Alliance", None),
+    # Horde
+    ("ZygorLevelingHordeCLASSIC.lua", "Horde"),
+    ("ZygorLevelingHordeWOTLKTrial.lua", "Horde"),
+    # Alliance
+    ("ZygorLevelingAllianceCLASSIC.lua", "Alliance"),
+    ("ZygorLevelingAllianceWOTLKTrial.lua", "Alliance"),
 ]
 
 def main():
@@ -41,7 +32,7 @@ def main():
     total = 0
     success = 0
     
-    for guide_file, faction, race in GUIDES:
+    for guide_file, faction in GUIDES:
         zygor_path = ZYGOR_BASE / guide_file
         
         if not zygor_path.exists():
@@ -50,8 +41,6 @@ def main():
         
         # Create faction-specific output directory
         faction_dir = OUTPUT_BASE / faction
-        if race:
-            faction_dir = faction_dir / race
         faction_dir.mkdir(parents=True, exist_ok=True)
         
         cmd = [
@@ -62,11 +51,8 @@ def main():
             "--questie", str(QUESTIE_BASE),
         ]
         
-        if race:
-            cmd.extend(["--race", race])
-        
         print(f"\n{'='*60}")
-        print(f"Processing: {guide_file} ({faction}{f'/{race}' if race else ''})")
+        print(f"Processing: {guide_file} ({faction})")
         print(f"{'='*60}")
         
         result = subprocess.run(cmd, capture_output=False)
