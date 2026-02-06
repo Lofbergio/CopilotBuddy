@@ -161,7 +161,6 @@ namespace CopilotBuddy.UI
                         // This must be done AFTER attachment when ObjectManager.Me is available
                         try
                         {
-                            Logging.Write("Initializing Combat Routines...");
                             Styx.Logic.Combat.RoutineManager.Init();
                         }
                         catch (Exception ex)

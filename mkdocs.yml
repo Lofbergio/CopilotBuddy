@@ -88,5 +88,7 @@ nav:
   - WotLK Compatibility:
       - Overview: compatibility/overview.md
       - API Differences: compatibility/api-differences.md
+  - Tools:
+      - Profile Generator: profile-generator.md
   - About:
       - Setup Guide: SETUP.md
