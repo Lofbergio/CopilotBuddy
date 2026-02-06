@@ -510,6 +510,9 @@ class ZygorParser:
             return None
         
         guide_name = name_match.group(1)
+        # Clean up name - remove "Leveling Guides\\" prefix to shorten filenames
+        if guide_name.startswith("Leveling Guides\\"):
+            guide_name = guide_name[16:]  # len("Leveling Guides\\") = 16
         guide = Guide(name=guide_name)
         
         if 'Horde' in guide_name:
