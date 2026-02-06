@@ -31,11 +31,12 @@ public class ForcedQuestTurnIn : ForcedBehavior
     private static readonly Frame QuestFrameCompleteButton = new Frame("QuestFrameCompleteButton");
     private int completeQuestAttempts;
 
-    public ForcedQuestTurnIn(uint questId, string questName, uint npcId, WoWPoint location)
+    public ForcedQuestTurnIn(uint questId, string questName, uint npcId, string npcName, WoWPoint location)
     {
         this.QuestId = questId;
         this.QuestName = questName;
         this.NpcId = npcId;
+        this.NpcName = npcName;
         this.Location = location;
     }
 
@@ -46,6 +47,8 @@ public class ForcedQuestTurnIn : ForcedBehavior
     public string QuestName { get; private set; }
 
     public uint NpcId { get; private set; }
+
+    public string NpcName { get; private set; }
 
     public WoWPoint Location { get; private set; }
 
@@ -73,6 +76,7 @@ public class ForcedQuestTurnIn : ForcedBehavior
         {
             (Composite)new Decorator(new CanRunDecoratorDelegate(this.ShouldSetPoi), (Composite)new ActionSetPoi(true, (RetrieveBotPoiDelegate)(context => new BotPoi(PoiType.QuestTurnIn)
             {
+                Name = this.NpcName,
                 Entry = this.NpcId,
                 Location = this.Location
             }))),

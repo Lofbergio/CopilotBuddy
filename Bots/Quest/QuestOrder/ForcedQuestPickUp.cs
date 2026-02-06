@@ -37,12 +37,14 @@ public class ForcedQuestPickUp : ForcedBehavior
         uint questId,
         string questName,
         uint giverId,
+        string giverName,
         WoWPoint giverLocation,
         QuestObjectType? giverType)
     {
         this.QuestId = questId;
         this.QuestName = questName;
         this.GiverId = giverId;
+        this.GiverName = giverName;
         this.GiverLocation = giverLocation;
         this.GiverType = giverType;
     }
@@ -79,6 +81,8 @@ public class ForcedQuestPickUp : ForcedBehavior
     public string QuestName { get; private set; }
 
     public uint GiverId { get; private set; }
+
+    public string GiverName { get; private set; }
 
     public WoWPoint GiverLocation { get; private set; }
 
@@ -129,7 +133,7 @@ public class ForcedQuestPickUp : ForcedBehavior
             PoiType.Loot
         }, (Composite)new PrioritySelector(new Composite[4]
         {
-            (Composite)new Decorator(new CanRunDecoratorDelegate(this.ShouldSetPoi), (Composite)new ActionSetPoi(true, (RetrieveBotPoiDelegate)(context => new BotPoi(new PickUpNode(this.GiverLocation, this.GiverId, (string)null, this.GiverType, this.QuestId, this.QuestName))))),
+            (Composite)new Decorator(new CanRunDecoratorDelegate(this.ShouldSetPoi), (Composite)new ActionSetPoi(true, (RetrieveBotPoiDelegate)(context => new BotPoi(new PickUpNode(this.GiverLocation, this.GiverId, this.GiverName, this.GiverType, this.QuestId, this.QuestName))))),
             (Composite)new Decorator((CanRunDecoratorDelegate)(context =>
             {
                 QuestObjectType? giverType = this.GiverType;
