@@ -204,8 +204,12 @@ namespace Styx.Logic.BehaviorTree
 			get { return _statusText; }
 			set
 			{
-				_statusText = value;
-				Logging.WriteDebug("StatusText: " + _statusText);
+				// Only log when status actually changes (avoid spam)
+				if (_statusText != value)
+				{
+					_statusText = value;
+					Logging.WriteDebug("StatusText: " + _statusText);
+				}
 			}
 		}
 
