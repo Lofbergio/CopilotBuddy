@@ -198,12 +198,50 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
-                // Un coffre peut être looté s'il n'est pas verrouillé et en état Ready
-                if (SubType == WoWGameObjectType.Chest || SubType == WoWGameObjectType.FishingHole)
+                // Check herbs (herbalism skill)
+                if (IsHerb)
                 {
-                    return !Locked && State == WoWGameObjectState.Ready;
+                    WoWSkill skill = ObjectManager.Me.GetSkill(SkillLine.Herbalism);
+                    if (skill != null && skill.MaxValue > 0)
+                    {
+                        int effectiveSkill = skill.CurrentValue;
+                        // Tauren racial: +15 Herbalism
+                        if (StyxWoW.Me.Race == WoWRace.Tauren)
+                            effectiveSkill += 15;
+                        
+                        uint? required = RequiredSkill;
+                        if (!required.HasValue || effectiveSkill >= required.Value)
+                            return true;
+                    }
                 }
-                return false;
+                // Check minerals (mining skill)
+                else if (IsMineral)
+                {
+                    WoWSkill skill = ObjectManager.Me.GetSkill(SkillLine.Mining);
+                    if (skill != null && skill.MaxValue > 0)
+                    {
+                        uint? required = RequiredSkill;
+                        if (!required.HasValue || skill.CurrentValue >= required.Value)
+                            return true;
+                    }
+                }
+                // Check locked chests (lockpicking skill)
+                else if (IsChest && Locked)
+                {
+                    WoWSkill skill = ObjectManager.Me.GetSkill(SkillLine.Lockpicking);
+                    if (skill != null && skill.MaxValue > 0)
+                    {
+                        uint? required = RequiredSkill;
+                        if (!required.HasValue || required.Value == 0 || skill.CurrentValue >= required.Value)
+                            return true;
+                    }
+                    return false;
+                }
+                
+                // Fallback for quest GameObjects (Goobers, unlocked chests, etc.):
+                // Check DynamicFlags: bit 0 = activatable, bit 3 = has loot/sparkle
+                // (FlagsDynamic & 9) == 9 means both flags are set
+                return (FlagsDynamic & 9) == 9;
             }
         }
         
