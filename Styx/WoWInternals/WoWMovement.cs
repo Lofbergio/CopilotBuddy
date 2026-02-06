@@ -202,6 +202,13 @@ namespace Styx.WoWInternals
 		{
 			StyxWoW.ResetAfk();
 
+			// Validate coordinates - NaN would crash WoW with INT_DIVIDE_BY_ZERO
+			if (float.IsNaN(clickPos.X) || float.IsNaN(clickPos.Y) || float.IsNaN(clickPos.Z))
+			{
+				Logging.WriteDebug("[CTM] ERROR: ClickPos contains NaN coordinates, aborting CTM");
+				return;
+			}
+
 			ExecutorRand? executor = ObjectManager.Executor;
 			if (executor == null)
 				throw new Exception("Invalid executor used in CGPlayer_C__ClickToMove");

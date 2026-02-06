@@ -54,7 +54,12 @@ public class ForcedQuestTurnIn : ForcedBehavior
 
     // Dispose removed - we should NEVER abandon a quest we're trying to turn in!
     
-    public override void OnStart() => TreeRoot.GoalText = this.GetGoalText();
+    public override void OnStart()
+    {
+        string goalText = this.GetGoalText();
+        Logging.Write("[TurnIn] {0}", (object)goalText);
+        TreeRoot.GoalText = goalText;
+    }
 
     private string GetGoalText()
     {
@@ -134,14 +139,14 @@ public class ForcedQuestTurnIn : ForcedBehavior
     {
         bool gossipVis = GossipFrame.Instance.IsVisible;
         bool questVis = QuestFrame.Instance.IsVisible;
-        Logging.Write("[CloseFrames] GossipFrame: {0}, QuestFrame: {1}", gossipVis, questVis);
+        Logging.WriteDebug("[CloseFrames] GossipFrame: {0}, QuestFrame: {1}", gossipVis, questVis);
         
         if (!gossipVis && !questVis)
         {
-            Logging.Write("[CloseFrames] No frames open, returning Success");
+            Logging.WriteDebug("[CloseFrames] No frames open, returning Success");
             return RunStatus.Success;
         }
-        Logging.Write("[CloseFrames] Closing frames...");
+        Logging.WriteDebug("[CloseFrames] Closing frames...");
         GossipFrame.Instance.Close();
         QuestFrame.Instance.Close();
         Thread.Sleep(300);
@@ -161,20 +166,20 @@ public class ForcedQuestTurnIn : ForcedBehavior
     {
         bool gossipVis = GossipFrame.Instance.IsVisible;
         bool questVis = QuestFrame.Instance.IsVisible;
-        Logging.Write("[InteractWithNpc] GossipFrame: {0}, QuestFrame: {1}", gossipVis, questVis);
+        Logging.WriteDebug("[InteractWithNpc] GossipFrame: {0}, QuestFrame: {1}", gossipVis, questVis);
         
         if (gossipVis || questVis)
         {
-            Logging.Write("[InteractWithNpc] Frame already open, returning Success");
+            Logging.WriteDebug("[InteractWithNpc] Frame already open, returning Success");
             return RunStatus.Success;
         }
         WoWObject woWobject = (WoWObject)context;
         if (!woWobject.WithinInteractRange)
         {
-            Logging.Write("[InteractWithNpc] Not in range, returning Failure");
+            Logging.WriteDebug("[InteractWithNpc] Not in range, returning Failure");
             return RunStatus.Failure;
         }
-        Logging.Write("[InteractWithNpc] Interacting...");
+        Logging.WriteDebug("[InteractWithNpc] Interacting...");
         woWobject.Interact();
         Thread.Sleep(300);
         return RunStatus.Running;
@@ -188,7 +193,7 @@ public class ForcedQuestTurnIn : ForcedBehavior
         bool gossipVis = GossipFrame.Instance.IsVisible;
         bool titleBtnVis = this.QuestTitleButton.IsVisible;
         bool result = gossipVis || titleBtnVis;
-        Logging.Write("[IsGossipOrQuestListVisible] GossipFrame: {0}, QuestTitleButton1: {1} => {2}", gossipVis, titleBtnVis, result);
+        Logging.WriteDebug("[IsGossipOrQuestListVisible] GossipFrame: {0}, QuestTitleButton1: {1} => {2}", gossipVis, titleBtnVis, result);
         return result;
     }
 
@@ -196,23 +201,23 @@ public class ForcedQuestTurnIn : ForcedBehavior
     {
         // HB 4.3.4: Only enter completion sequence when QuestFrame is visible
         bool result = QuestFrame.Instance.IsVisible;
-        Logging.Write("[IsQuestFrameVisible] QuestFrame.IsVisible: {0}", result);
+        Logging.WriteDebug("[IsQuestFrameVisible] QuestFrame.IsVisible: {0}", result);
         return result;
     }
 
     private bool IsCompleteButtonVisible(object context)
     {
         bool result = ForcedQuestTurnIn.QuestFrameCompleteButton.IsVisible;
-        Logging.Write("[IsCompleteButtonVisible] QuestFrameCompleteButton.IsVisible: {0}", result);
+        Logging.WriteDebug("[IsCompleteButtonVisible] QuestFrameCompleteButton.IsVisible: {0}", result);
         return result;
     }
 
     private RunStatus ClickContinue(object context)
     {
-        Logging.Write("[ClickContinue] Clicking Continue button");
+        Logging.WriteDebug("[ClickContinue] Clicking Continue button");
         QuestFrame.Instance.ClickContinue();
         Thread.Sleep(1000);
-        Logging.Write("[ClickContinue] After ClickContinue - QuestFrame.IsVisible: {0}", QuestFrame.Instance.IsVisible);
+        Logging.WriteDebug("[ClickContinue] After ClickContinue - QuestFrame.IsVisible: {0}", QuestFrame.Instance.IsVisible);
         return RunStatus.Success;
     }
 
@@ -220,24 +225,24 @@ public class ForcedQuestTurnIn : ForcedBehavior
     {
         uint shownId = QuestFrame.Instance.CurrentShownQuestId;
         Styx.Logic.Questing.Quest quest = Styx.Logic.Questing.Quest.FromId(shownId);
-        Logging.Write("[HasRewardChoice] CurrentShownQuestId: {0}, Quest found: {1}", shownId, quest != null);
+        Logging.WriteDebug("[HasRewardChoice] CurrentShownQuestId: {0}, Quest found: {1}", shownId, quest != null);
         
         if (quest == null)
         {
             int luaChoices = Lua.GetReturnVal<int>("return GetNumQuestChoices()", 0U);
-            Logging.Write("[HasRewardChoice] No quest cache, Lua GetNumQuestChoices: {0}", luaChoices);
+            Logging.WriteDebug("[HasRewardChoice] No quest cache, Lua GetNumQuestChoices: {0}", luaChoices);
             return luaChoices >= 1;
         }
         for (uint index = 0; (long)index < (long)quest.InternalInfo.RewardChoiceItem.Length; ++index)
         {
             if (quest.InternalInfo.RewardChoiceItem[(IntPtr)index] != 0)
             {
-                Logging.Write("[HasRewardChoice] Found reward choice at index {0}", index);
+                Logging.WriteDebug("[HasRewardChoice] Found reward choice at index {0}", index);
                 return true;
             }
         }
         int luaChoices2 = Lua.GetReturnVal<int>("return GetNumQuestChoices()", 0U);
-        Logging.Write("[HasRewardChoice] No cache rewards, Lua GetNumQuestChoices: {0}", luaChoices2);
+        Logging.WriteDebug("[HasRewardChoice] No cache rewards, Lua GetNumQuestChoices: {0}", luaChoices2);
         return luaChoices2 >= 1;
     }
 
@@ -245,25 +250,25 @@ public class ForcedQuestTurnIn : ForcedBehavior
     {
         bool qfVisible = QuestFrame.Instance.IsVisible;
         uint shownId = QuestFrame.Instance.CurrentShownQuestId;
-        Logging.Write("[CompleteQuest] QuestFrame.IsVisible: {0}, CurrentShownQuestId: {1}, Expected: {2}", 
+        Logging.WriteDebug("[CompleteQuest] QuestFrame.IsVisible: {0}, CurrentShownQuestId: {1}, Expected: {2}", 
             qfVisible, shownId, this.QuestId);
         
         if (qfVisible && (shownId == this.QuestId || shownId == 0))
         {
             if (this.completeQuestAttempts++ == 5)
             {
-                Logging.Write("[CompleteQuest] Tried 5 times, closing QuestFrame");
+                Logging.WriteDebug("[CompleteQuest] Tried 5 times, closing QuestFrame");
                 QuestFrame.Instance.Close();
                 this.completeQuestAttempts = 0;
                 return RunStatus.Failure;
             }
-            Logging.Write("[CompleteQuest] CompleteQuest attempt {0}/5", this.completeQuestAttempts);
+            Logging.WriteDebug("[CompleteQuest] CompleteQuest attempt {0}/5", this.completeQuestAttempts);
             QuestFrame.Instance.CompleteQuest();
             Thread.Sleep(500);
-            Logging.Write("[CompleteQuest] After CompleteQuest - QuestFrame.IsVisible: {0}", QuestFrame.Instance.IsVisible);
+            Logging.WriteDebug("[CompleteQuest] After CompleteQuest - QuestFrame.IsVisible: {0}", QuestFrame.Instance.IsVisible);
             return RunStatus.Running;
         }
-        Logging.Write("[CompleteQuest] Conditions not met, returning Success");
+        Logging.WriteDebug("[CompleteQuest] Conditions not met, returning Success");
         this.completeQuestAttempts = 0;
         return RunStatus.Success;
     }

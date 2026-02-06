@@ -180,6 +180,13 @@ namespace Styx.Logic.Pathing
 			if (destination == WoWPoint.Zero)
 				return MoveResult.Failed;
 
+			// Check for NaN coordinates - would crash WoW with INT_DIVIDE_BY_ZERO
+			if (float.IsNaN(destination.X) || float.IsNaN(destination.Y) || float.IsNaN(destination.Z))
+			{
+				Logging.WriteDebug("[Navigator] ERROR: Destination contains NaN coordinates, aborting movement");
+				return MoveResult.Failed;
+			}
+
 			LocalPlayer? me = ObjectManager.Me;
 			if (me == null)
 				return MoveResult.Failed;

@@ -3,6 +3,7 @@
 
 using Bots.Quest.Objectives;
 using Styx;
+using Styx.Helpers;
 using Styx.Logic.BehaviorTree;
 using Styx.WoWInternals;
 using Styx.WoWInternals.WoWCache;
@@ -43,7 +44,9 @@ public class ForcedQuestObjective : ForcedBehavior
 
     public override void OnStart()
     {
-        TreeRoot.GoalText = ForcedQuestObjective.GetGoalText(this.Objective);
+        string goalText = ForcedQuestObjective.GetGoalText(this.Objective);
+        Logging.Write("[Objective] {0}", (object)goalText);
+        TreeRoot.GoalText = goalText;
     }
 
     public override string ToString()

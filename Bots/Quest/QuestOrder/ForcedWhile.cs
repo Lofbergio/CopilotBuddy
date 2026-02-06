@@ -73,6 +73,7 @@ public class ForcedWhile : ForcedBehavior
                     yield return RunStatus.Success;
                     yield break;
                 }
+                Logging.Write("[While] Condition is true, executing While body");
                 this.hasInitialized = true;
                 QuestOrder order = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)this.whileNode.Body))
                 {

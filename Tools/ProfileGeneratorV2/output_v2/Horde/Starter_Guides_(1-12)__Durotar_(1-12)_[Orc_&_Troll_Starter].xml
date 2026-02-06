@@ -12,17 +12,19 @@
     <Vendor Name="Duokna" Entry="3158" Type="Ammo" X="-565,428" Y="-4214,2" Z="41,59047" />
     <Vendor Name="Zlagk" Entry="3882" Type="Food" X="-560,125" Y="-4217,2" Z="41,590607" />
   </Vendors>
+  <!-- blackspot-->
+   <Blackspots>
+    <Blackspot X="-738.66235" Y="-4286.4204" Z="41.11641" Radius="30" />
+  </Blackspots>
 
   <!-- Quest Overrides -->
   <Quest Id="4402" Name="Galgar&apos;s Cactus Apple Surprise">
-    <Objective Type="CollectItem" ItemId="11583" CollectCount="10">
+    <Objective Type="CollectItem" ItemId="11583" CollectCount="6">
       <CollectFrom>
         <GameObject Name="Cactus Apple" Id="171938" />
       </CollectFrom>
       <Hotspots>
-        <Hotspot X="-746.49" Y="-4276.66" Z="43.77" />
-        <Hotspot X="-674.29" Y="-4300.25" Z="44.95" />
-        <Hotspot X="-601.58" Y="-4075.62" Z="75.86" />
+        <Hotspot X="-668.2874" Y="-4294.703" Z="43.219574" />
         <Hotspot X="-592.09" Y="-4074.48" Z="74.47" />
         <Hotspot X="-556.42" Y="-4288.72" Z="37.44" />
         <Hotspot X="-551.58" Y="-4292.26" Z="37.09" />
@@ -260,7 +262,7 @@
     <If Condition="(Me.Class == WoWClass.Mage) &amp;&amp; (Me.Race == WoWRace.Troll)">
       <TurnIn QuestName="Glyphic Tablet" QuestId="3086" TurnInName="Mai&apos;ah" TurnInId="5884" />
     </If>
-    <Objective QuestName="Galgar&apos;s Cactus Apple Surprise" QuestId="4402" Type="CollectItem" ItemId="11583" ItemName="Cactus Apple" CollectCount="10" />
+    <Objective QuestName="Galgar&apos;s Cactus Apple Surprise" QuestId="4402" Type="CollectItem" ItemId="11583" ItemName="Cactus Apple" CollectCount="6" />
     <If Condition="Me.Level &lt; 3">
       <SetGrindArea>
         <GrindArea>

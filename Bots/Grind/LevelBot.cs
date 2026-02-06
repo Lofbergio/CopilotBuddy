@@ -627,11 +627,13 @@ namespace Bots.Grind
                                         () => BotPoi.Current.Type != PoiType.Loot ? 10 : 3,
                                         new TreeSharp.Action(ctx =>
                                         {
-                                            ulong lootingGuid = LootFrame.Instance.LootingObjectGuid;
-                                            WoWObject lootObj = ObjectManager.GetObjectByGuid<WoWObject>(lootingGuid);
-                                            Logging.Write("Looting {0} Guid 0x{1:X016}",
-                                                lootObj != null ? lootObj.Name : "Unknown Object", lootingGuid);
-                                            LootAllItems();
+                                            WoWObject lootObj = BotPoi.Current.AsObject;
+                                            if (lootObj != null)
+                                            {
+                                                Logging.Write("Looting {0} Guid 0x{1:X016}", lootObj.Name, lootObj.Guid);
+                                            }
+                                            // Loot all items via Lua
+                                            Lua.DoString("for i=1, GetNumLootItems() do LootSlot(i) ConfirmBindOnUse() end CloseLoot()");
                                         })
                                     ),
                                     // Skinning check

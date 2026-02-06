@@ -48,7 +48,9 @@ public class ForcedGrindTo : ForcedBehavior
         {
             StyxWoW.AreaManager.SetArea(QuestState.Instance.CurrentGrindArea);
             Targeting.Instance.IncludeTargetsFilter += new IncludeTargetsFilterDelegate(LevelBot.LevelBotIncludeTargetsFilter);
-            TreeRoot.GoalText = this.GetGoalText();
+            string goalText = this.GetGoalText();
+            Logging.Write("[GrindTo] {0}, Target Level: {1}", (object)goalText, (object)this.Node.Level);
+            TreeRoot.GoalText = goalText;
         }
     }
 

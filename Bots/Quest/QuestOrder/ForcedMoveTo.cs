@@ -69,6 +69,8 @@ public class ForcedMoveTo : ForcedBehavior
 
     public override void OnStart()
     {
-        TreeRoot.GoalText = string.Format("Moving to {0}", (object)this.LocationName);
+        string goalText = string.Format("Moving to {0}", (object)this.LocationName);
+        Logging.Write("[MoveTo] {0}", (object)goalText);
+        TreeRoot.GoalText = goalText;
     }
 }

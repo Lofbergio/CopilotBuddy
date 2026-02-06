@@ -1,10 +1,13 @@
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
 using Styx.Helpers;
+using Styx.Combat.CombatRoutine;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -13,7 +16,10 @@ namespace Styx.Logic.Profiles.Quest
 {
     /// <summary>
     /// Compiles and evaluates C# condition expressions at runtime.
-    /// Uses Roslyn Scripting (replaces legacy CSharpCodeProvider which is not supported on .NET Core)
+    /// Implements same pattern as HB 6.2.3 ConditionHelper with:
+    /// - Fast-path parser for common expressions (Class, Race, Level, HasQuest, IsQuestCompleted)
+    /// - Roslyn fallback for complex expressions
+    /// - Expression caching to prevent memory issues
     /// </summary>
     public class ConditionHelper
     {
@@ -22,29 +28,42 @@ namespace Styx.Logic.Profiles.Quest
         private readonly long _conditionId;
         
         // Script options with all required assemblies and imports (same as HB 4.3.4)
-        private static readonly ScriptOptions _scriptOptions;
+        private static ScriptOptions _scriptOptions;
+        private static bool _scriptOptionsInitialized = false;
+        private static readonly object _scriptOptionsLock = new object();
         
-        static ConditionHelper()
+        private static ScriptOptions GetScriptOptions()
         {
-            // Build script options once - same imports as HB 4.3.4 ConditionHelper
-            _scriptOptions = ScriptOptions.Default
-                .AddReferences(
-                    typeof(object).Assembly,                           // System.Runtime
-                    typeof(Enumerable).Assembly,                       // System.Linq
-                    typeof(Styx.StyxWoW).Assembly,                     // CopilotBuddy (this assembly)
-                    typeof(Styx.WoWInternals.ObjectManager).Assembly,
-                    typeof(Styx.Combat.CombatRoutine.WoWClass).Assembly
-                )
-                .AddImports(
-                    "System",
-                    "System.Linq",
-                    "Styx",
-                    "Styx.Helpers",
-                    "Styx.Logic.Combat",
-                    "Styx.WoWInternals",
-                    "Styx.WoWInternals.WoWObjects",
-                    "Styx.Combat.CombatRoutine"
-                );
+            if (_scriptOptionsInitialized)
+                return _scriptOptions;
+                
+            lock (_scriptOptionsLock)
+            {
+                if (_scriptOptionsInitialized)
+                    return _scriptOptions;
+                    
+                // Build script options once - same imports as HB 4.3.4 ConditionHelper
+                _scriptOptions = ScriptOptions.Default
+                    .AddReferences(
+                        typeof(object).Assembly,                           // System.Runtime
+                        typeof(Enumerable).Assembly,                       // System.Linq
+                        typeof(Styx.StyxWoW).Assembly,                     // CopilotBuddy (this assembly)
+                        typeof(Styx.WoWInternals.ObjectManager).Assembly,
+                        typeof(Styx.Combat.CombatRoutine.WoWClass).Assembly
+                    )
+                    .AddImports(
+                        "System",
+                        "System.Linq",
+                        "Styx",
+                        "Styx.Helpers",
+                        "Styx.Logic.Combat",
+                        "Styx.WoWInternals",
+                        "Styx.WoWInternals.WoWObjects",
+                        "Styx.Combat.CombatRoutine"
+                    );
+                _scriptOptionsInitialized = true;
+                return _scriptOptions;
+            }
         }
 
         public ConditionHelper(string conditionString)
@@ -63,7 +82,7 @@ namespace Styx.Logic.Profiles.Quest
                 // Create a globals object that provides Me property (like ProfileHelperFunctionsBase)
                 var script = CSharpScript.Create<bool>(
                     _conditionString,
-                    _scriptOptions,
+                    GetScriptOptions(),
                     globalsType: typeof(ConditionGlobals)
                 );
                 
@@ -109,7 +128,7 @@ namespace Styx.Logic.Profiles.Quest
             Func<bool> conditionString;
             try
             {
-                conditionString = new Func<bool>(new CompiledCondition(str).Evaluate);
+                conditionString = new Func<bool>(new ExpressionBinder(str).Evaluate);
             }
             catch (Styx.CantCompileException)
             {
@@ -125,8 +144,8 @@ namespace Styx.Logic.Profiles.Quest
             {
                 IXmlLineInfo xmlLineInfo = (IXmlLineInfo)conditionAttribute;
                 func = !xmlLineInfo.HasLineInfo()
-                    ? new Func<bool>(new CompiledCondition(conditionAttribute.Value).Evaluate)
-                    : new Func<bool>(new CompiledCondition(conditionAttribute.Value, xmlLineInfo.LineNumber).Evaluate);
+                    ? new Func<bool>(new ExpressionBinder(conditionAttribute.Value).Evaluate)
+                    : new Func<bool>(new ExpressionBinder(conditionAttribute.Value, xmlLineInfo.LineNumber).Evaluate);
             }
             catch (Styx.CantCompileException)
             {
@@ -135,72 +154,354 @@ namespace Styx.Logic.Profiles.Quest
             return func;
         }
 
-        private class CompiledCondition
+        /// <summary>
+        /// Fast-path expression parser for common profile conditions.
+        /// Returns null if expression cannot be parsed fast-path (needs Roslyn).
+        /// Same concept as Class1204.smethod_0 in HB 6.2.3
+        /// </summary>
+        private static class FastPathParser
         {
-            private static readonly Dictionary<string, Func<bool>> _cache = new Dictionary<string, Func<bool>>();
-            private static readonly object _lock = new object();
-            private readonly string _expression;
-            private Func<bool> _compiled;
-            private bool _initialized;
-            private readonly int? _lineNumber;
+            // Pattern for Me.Class == WoWClass.XXX
+            private static readonly Regex ClassPattern = new Regex(
+                @"^\s*\(?\s*Me\.Class\s*==\s*WoWClass\.(\w+)\s*\)?\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            // Pattern for Me.Race == WoWRace.XXX
+            private static readonly Regex RacePattern = new Regex(
+                @"^\s*\(?\s*Me\.Race\s*==\s*WoWRace\.(\w+)\s*\)?\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            // Pattern for Me.Level < N or Me.Level > N or Me.Level >= N or Me.Level <= N
+            private static readonly Regex LevelPattern = new Regex(
+                @"^\s*Me\.Level\s*([<>=!]+)\s*(\d+)\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            // Pattern for HasQuest(N)
+            private static readonly Regex HasQuestPattern = new Regex(
+                @"^\s*\(?\s*HasQuest\s*\(\s*(\d+)\s*\)\s*\)?\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            // Pattern for IsQuestCompleted(N)
+            private static readonly Regex IsQuestCompletedPattern = new Regex(
+                @"^\s*\(?\s*IsQuestCompleted\s*\(\s*(\d+)\s*\)\s*\)?\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            // Pattern for !HasQuest(N)
+            private static readonly Regex NotHasQuestPattern = new Regex(
+                @"^\s*\(?\s*!HasQuest\s*\(\s*(\d+)\s*\)\s*\)?\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            // Pattern for !IsQuestCompleted(N)
+            private static readonly Regex NotIsQuestCompletedPattern = new Regex(
+                @"^\s*\(?\s*!IsQuestCompleted\s*\(\s*(\d+)\s*\)\s*\)?\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            // Pattern for (Me.Class == WoWClass.XXX) && (Me.Race == WoWRace.YYY)
+            private static readonly Regex ClassAndRacePattern = new Regex(
+                @"^\s*\(\s*Me\.Class\s*==\s*WoWClass\.(\w+)\s*\)\s*&&\s*\(\s*Me\.Race\s*==\s*WoWRace\.(\w+)\s*\)\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            // Pattern for !((Me.Class == WoWClass.XXX) && (Me.Race == WoWRace.YYY))
+            private static readonly Regex NotClassAndRacePattern = new Regex(
+                @"^\s*!\s*\(\s*\(\s*Me\.Class\s*==\s*WoWClass\.(\w+)\s*\)\s*&&\s*\(\s*Me\.Race\s*==\s*WoWRace\.(\w+)\s*\)\s*\)\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            // Pattern for ((!HasQuest(N)) && (!IsQuestCompleted(N)))
+            private static readonly Regex NotHasQuestAndNotCompletedPattern = new Regex(
+                @"^\s*\(\s*\(\s*!HasQuest\s*\(\s*(\d+)\s*\)\s*\)\s*&&\s*\(\s*!IsQuestCompleted\s*\(\s*(\d+)\s*\)\s*\)\s*\)\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            // Pattern for ((HasQuest(N)) && (!IsQuestCompleted(N)))
+            private static readonly Regex HasQuestAndNotCompletedPattern = new Regex(
+                @"^\s*\(\s*\(\s*HasQuest\s*\(\s*(\d+)\s*\)\s*\)\s*&&\s*\(\s*!IsQuestCompleted\s*\(\s*(\d+)\s*\)\s*\)\s*\)\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            // Pattern for Me.Class == WoWClass.XXX (simple, no parens)
+            private static readonly Regex SimpleClassPattern = new Regex(
+                @"^\s*Me\.Class\s*==\s*WoWClass\.(\w+)\s*$",
+                RegexOptions.Compiled | RegexOptions.IgnoreCase);
+            
+            public static Func<bool> TryParse(string expression)
+            {
+                if (string.IsNullOrWhiteSpace(expression))
+                    return null;
+                
+                // Try simple bool first (like HB)
+                if (bool.TryParse(expression.Trim(), out bool boolValue))
+                    return () => boolValue;
+                
+                Match match;
+                
+                // Try (Me.Class == WoWClass.XXX) && (Me.Race == WoWRace.YYY)
+                match = ClassAndRacePattern.Match(expression);
+                if (match.Success)
+                {
+                    if (Enum.TryParse<WoWClass>(match.Groups[1].Value, true, out var wowClass) &&
+                        Enum.TryParse<WoWRace>(match.Groups[2].Value, true, out var wowRace))
+                    {
+                        return () => Styx.WoWInternals.ObjectManager.Me?.Class == wowClass &&
+                                    Styx.WoWInternals.ObjectManager.Me?.Race == wowRace;
+                    }
+                }
+                
+                // Try !((Me.Class == WoWClass.XXX) && (Me.Race == WoWRace.YYY))
+                match = NotClassAndRacePattern.Match(expression);
+                if (match.Success)
+                {
+                    if (Enum.TryParse<WoWClass>(match.Groups[1].Value, true, out var wowClass) &&
+                        Enum.TryParse<WoWRace>(match.Groups[2].Value, true, out var wowRace))
+                    {
+                        return () => !(Styx.WoWInternals.ObjectManager.Me?.Class == wowClass &&
+                                      Styx.WoWInternals.ObjectManager.Me?.Race == wowRace);
+                    }
+                }
+                
+                // Try ((!HasQuest(N)) && (!IsQuestCompleted(N)))
+                match = NotHasQuestAndNotCompletedPattern.Match(expression);
+                if (match.Success)
+                {
+                    if (int.TryParse(match.Groups[1].Value, out int questId1) &&
+                        int.TryParse(match.Groups[2].Value, out int questId2) &&
+                        questId1 == questId2)
+                    {
+                        return () => !ProfileHelperFunctions.HasQuest((uint)questId1) && 
+                                    !ProfileHelperFunctions.IsQuestCompleted((uint)questId1);
+                    }
+                }
+                
+                // Try ((HasQuest(N)) && (!IsQuestCompleted(N)))
+                match = HasQuestAndNotCompletedPattern.Match(expression);
+                if (match.Success)
+                {
+                    if (int.TryParse(match.Groups[1].Value, out int questId1) &&
+                        int.TryParse(match.Groups[2].Value, out int questId2) &&
+                        questId1 == questId2)
+                    {
+                        return () => ProfileHelperFunctions.HasQuest((uint)questId1) && 
+                                    !ProfileHelperFunctions.IsQuestCompleted((uint)questId1);
+                    }
+                }
+                
+                // Try Me.Class == WoWClass.XXX (with optional parens)
+                match = ClassPattern.Match(expression);
+                if (match.Success)
+                {
+                    if (Enum.TryParse<WoWClass>(match.Groups[1].Value, true, out var wowClass))
+                    {
+                        return () => Styx.WoWInternals.ObjectManager.Me?.Class == wowClass;
+                    }
+                }
+                
+                // Try simple class without parens
+                match = SimpleClassPattern.Match(expression);
+                if (match.Success)
+                {
+                    if (Enum.TryParse<WoWClass>(match.Groups[1].Value, true, out var wowClass))
+                    {
+                        return () => Styx.WoWInternals.ObjectManager.Me?.Class == wowClass;
+                    }
+                }
+                
+                // Try Me.Race == WoWRace.XXX
+                match = RacePattern.Match(expression);
+                if (match.Success)
+                {
+                    if (Enum.TryParse<WoWRace>(match.Groups[1].Value, true, out var wowRace))
+                    {
+                        return () => Styx.WoWInternals.ObjectManager.Me?.Race == wowRace;
+                    }
+                }
+                
+                // Try Me.Level comparisons
+                match = LevelPattern.Match(expression);
+                if (match.Success)
+                {
+                    string op = match.Groups[1].Value;
+                    if (int.TryParse(match.Groups[2].Value, out int level))
+                    {
+                        return op switch
+                        {
+                            "<" => () => (Styx.WoWInternals.ObjectManager.Me?.Level ?? 0) < level,
+                            ">" => () => (Styx.WoWInternals.ObjectManager.Me?.Level ?? 0) > level,
+                            "<=" => () => (Styx.WoWInternals.ObjectManager.Me?.Level ?? 0) <= level,
+                            ">=" => () => (Styx.WoWInternals.ObjectManager.Me?.Level ?? 0) >= level,
+                            "==" => () => (Styx.WoWInternals.ObjectManager.Me?.Level ?? 0) == level,
+                            "!=" => () => (Styx.WoWInternals.ObjectManager.Me?.Level ?? 0) != level,
+                            _ => null
+                        };
+                    }
+                }
+                
+                // Try HasQuest(N)
+                match = HasQuestPattern.Match(expression);
+                if (match.Success)
+                {
+                    if (int.TryParse(match.Groups[1].Value, out int questId))
+                    {
+                        return () => ProfileHelperFunctions.HasQuest((uint)questId);
+                    }
+                }
+                
+                // Try !HasQuest(N)
+                match = NotHasQuestPattern.Match(expression);
+                if (match.Success)
+                {
+                    if (int.TryParse(match.Groups[1].Value, out int questId))
+                    {
+                        return () => !ProfileHelperFunctions.HasQuest((uint)questId);
+                    }
+                }
+                
+                // Try IsQuestCompleted(N)
+                match = IsQuestCompletedPattern.Match(expression);
+                if (match.Success)
+                {
+                    if (int.TryParse(match.Groups[1].Value, out int questId))
+                    {
+                        return () => ProfileHelperFunctions.IsQuestCompleted((uint)questId);
+                    }
+                }
+                
+                // Try !IsQuestCompleted(N)
+                match = NotIsQuestCompletedPattern.Match(expression);
+                if (match.Success)
+                {
+                    if (int.TryParse(match.Groups[1].Value, out int questId))
+                    {
+                        return () => !ProfileHelperFunctions.IsQuestCompleted((uint)questId);
+                    }
+                }
+                
+                // Cannot fast-path parse, return null to fall back to Roslyn
+                return null;
+            }
+        }
 
-            public CompiledCondition(string expression, int? lineNumber = null)
+        /// <summary>
+        /// Expression binder - same pattern as HB 6.2.3 ExpressionBinder
+        /// </summary>
+        private class ExpressionBinder
+        {
+            private static readonly Dictionary<string, Func<bool>> _cachedMethods = new Dictionary<string, Func<bool>>();
+            private static readonly object _parserLock = new object();
+            private readonly string _expression;
+            private Func<bool> _method;
+            private bool _methodAssigned;
+            private readonly int? _line;
+
+            public ExpressionBinder(string expression, int? line = null)
             {
                 _expression = expression;
-                _lineNumber = lineNumber;
+                _line = line;
                 if (StyxSettings.Instance.ProfileDebuggingMode)
                 {
-                    _compiled = Compile();
-                    _initialized = true;
-                    if (_compiled == null)
+                    _method = Compile(_expression, _line);
+                    _methodAssigned = true;
+                    if (_method == null)
                         throw new Styx.CantCompileException();
                 }
             }
 
             public bool Evaluate()
             {
-                if (!_initialized)
+                if (!_methodAssigned)
                 {
-                    _compiled = Compile();
-                    _initialized = true;
+                    _method = Compile(_expression, _line);
+                    _methodAssigned = true;
                 }
-                return _compiled != null && _compiled();
+                return _method != null && _method();
             }
 
-            private Func<bool> Compile()
+            private static Func<bool> Compile(string expression, int? line)
             {
-                if (_cache.TryGetValue(_expression, out Func<bool> cached))
-                    return cached;
+                // Check cache first (outside lock for performance)
+                if (_cachedMethods.TryGetValue(expression, out Func<bool> func))
+                    return func;
 
-                lock (_lock)
+                bool lockTaken = false;
+                try
                 {
-                    if (_cache.TryGetValue(_expression, out cached))
-                        return cached;
-
-                    var helper = new ConditionHelper(_expression);
-                    if (_lineNumber.HasValue)
-                        Logging.WriteDebug("Compiling expression '{0}' @ line {1}", (object)_expression, (object)_lineNumber.Value);
+                    Monitor.Enter(_parserLock, ref lockTaken);
+                    
+                    // Double-check after acquiring lock
+                    if (_cachedMethods.TryGetValue(expression, out func))
+                        return func;
+                    
+                    // Try simple bool parse first (like HB)
+                    if (bool.TryParse(expression, out bool value))
+                    {
+                        func = () => value;
+                        _cachedMethods[expression] = func;
+                        return func;
+                    }
+                    
+                    if (line.HasValue)
+                        Logging.WriteDebug("Compiling expression '{0}' @ line {1}", expression, line.Value);
                     else
-                        Logging.WriteDebug("Compiling expression '{0}'", (object)_expression);
-
+                        Logging.WriteDebug("Compiling expression '{0}'", expression);
+                    
+                    // Try fast-path parser first (equivalent to Class1204.smethod_0 in HB)
+                    func = FastPathParser.TryParse(expression);
+                    if (func != null)
+                    {
+                        _cachedMethods[expression] = func;
+                        return func;
+                    }
+                    
+                    // Fall back to Roslyn compilation
+                    var helper = new ConditionHelper(expression);
                     if (helper.CompileAndBindExpression(out string[] errors, out Func<bool> bound))
                     {
-                        _cache[_expression] = bound;
+                        _cachedMethods[expression] = bound;
                         return bound;
                     }
                     else
                     {
-                        if (errors.Length > 0)
+                        if (errors != null && errors.Length > 0)
                         {
-                            Logging.WriteDebug("{0} errors encountered while compiling condition '{1}'", (object)errors.Length, (object)_expression);
+                            Logging.WriteDebug("{0} errors encountered while compiling condition '{1}'", errors.Length, expression);
                             foreach (var error in errors)
                                 Logging.WriteDebug(error);
                         }
-                        _cache[_expression] = null;
+                        _cachedMethods[expression] = null;
                         return null;
                     }
                 }
+                finally
+                {
+                    if (lockTaken)
+                        Monitor.Exit(_parserLock);
+                }
             }
+        }
+    }
+    
+    /// <summary>
+    /// Profile helper functions for quest conditions - same as HB
+    /// </summary>
+    public static class ProfileHelperFunctions
+    {
+        public static bool HasQuest(uint questId)
+        {
+            var me = Styx.WoWInternals.ObjectManager.Me;
+            if (me == null) return false;
+            // Check QuestLog first
+            var questLog = me.QuestLog;
+            if (questLog != null)
+            {
+                int index = questLog.GetIndexForQuest(questId);
+                if (index >= 0) return true;
+            }
+            return false;
+        }
+        
+        public static bool IsQuestCompleted(uint questId)
+        {
+            var me = Styx.WoWInternals.ObjectManager.Me;
+            if (me == null) return false;
+            // Check if quest is in completed quests list via QuestLog
+            var completedQuests = me.QuestLog?.GetCompletedQuests();
+            return completedQuests?.Contains(questId) ?? false;
         }
     }
     
@@ -214,5 +515,15 @@ namespace Styx.Logic.Profiles.Quest
         /// The local player - equivalent to StyxWoW.Me / ObjectManager.Me
         /// </summary>
         public Styx.WoWInternals.WoWObjects.LocalPlayer Me => Styx.WoWInternals.ObjectManager.Me;
+        
+        /// <summary>
+        /// Check if player has quest in their log
+        /// </summary>
+        public bool HasQuest(uint questId) => ProfileHelperFunctions.HasQuest(questId);
+        
+        /// <summary>
+        /// Check if player has completed quest
+        /// </summary>
+        public bool IsQuestCompleted(uint questId) => ProfileHelperFunctions.IsQuestCompleted(questId);
     }
 }

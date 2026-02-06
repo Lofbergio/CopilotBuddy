@@ -221,8 +221,10 @@ namespace Styx.Logic.Pathing
             if (me == null)
                 return;
 
-            Logging.WriteDebug("[STUCK] Adding blackspot.");
-            // TODO: BlackspotManager when implemented
+            // HB 4.3.4 Class472.method_7 pattern:
+            // Add a global blackspot at current location with radius 4 and height 5
+            Logging.WriteDebug("[STUCK] Adding global blackspot at current location.");
+            BlackspotManager.AddGlobalBlackspot(me.Location, 4f, 5f);
 
             Logging.WriteDebug("[STUCK] Moving backwards for {0}ms", milliseconds);
             WoWMovement.MoveStop();

@@ -4,6 +4,7 @@
 // MVID: FB7FEB85-27C0-4D17-B8DE-615FDFDA7752
 // Assembly location: C:\Users\Texy6\Desktop\Honorbuddy-cleaned.exe
 
+using Styx.Helpers;
 using Styx.Logic.Profiles.Quest;
 using Styx.Logic.Questing;
 using System;
@@ -57,7 +58,11 @@ public class ForcedCodeBehavior : ForcedBehavior
 
     public override bool IsDone => this.customBehavior.IsDone;
 
-    public override void OnStart() => this.customBehavior.OnStart();
+    public override void OnStart()
+    {
+        Logging.Write("[Code] Executing custom behavior: {0}", (object)this.customBehavior.GetType().Name);
+        this.customBehavior.OnStart();
+    }
 
     public override void OnTick() => this.customBehavior.OnTick();
 

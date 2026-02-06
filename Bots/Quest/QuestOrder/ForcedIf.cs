@@ -42,15 +42,22 @@ public class ForcedIf : ForcedBehavior
         {
             if (this.IfNode.Condition())
             {
+                Logging.Write("[If] Condition is true, executing If body");
                 this.conditionalOrder = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)this.IfNode.Body));
             }
             else
             {
                 OrderNodeCollection matchingElseIfBody;
                 if (this.TryGetMatchingElseIf(out matchingElseIfBody))
+                {
+                    Logging.Write("[ElseIf] Condition matched, executing ElseIf body");
                     this.conditionalOrder = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)matchingElseIfBody));
+                }
                 else if (this.IfNode.Else != null)
+                {
+                    Logging.Write("[Else] No conditions matched, executing Else body");
                     this.conditionalOrder = new QuestOrder(new OrderNodeCollection((IEnumerable<OrderNode>)this.IfNode.Else.Body));
+                }
             }
         }
         catch (Exception ex)

@@ -10,7 +10,7 @@ obj/
 *.sln.docstates
 .github/
 .test/
-
+.test
 # NuGet
 *.nupkg
 *.snupkg

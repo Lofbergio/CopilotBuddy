@@ -5,6 +5,7 @@
 // Assembly location: C:\Users\Texy6\Desktop\Honorbuddy-cleaned.exe
 
 using Styx;
+using Styx.Helpers;
 using Styx.Logic;
 using Styx.Logic.BehaviorTree;
 using Styx.Logic.Pathing;
@@ -73,6 +74,7 @@ public class ForcedUseItem : ForcedBehavior
                         {
                             WoWItem woWitem = (WoWItem)context;
                             WoWObject woWobject = this.TargetRetriever();
+                            Logging.Write("[UseItem] Using {0} (Entry: {1})", (object)woWitem.Name, (object)woWitem.Entry);
                             woWitem.Use(woWobject != (WoWObject)null ? woWobject.Guid : 0UL, this.ForceUse);
                             StyxWoW.SleepForLagDuration();
                         })),
