@@ -22,6 +22,7 @@ namespace Styx.Logic.Pathing
     {
         private static readonly List<Blackspot> _blackspots = new List<Blackspot>();
         private static readonly List<GlobalBlackspot> _globalBlackspots = new List<GlobalBlackspot>();
+        private static readonly HashSet<Blackspot> _markedBlackspots = new HashSet<Blackspot>();
         private static readonly object _lock = new object();
         
         /// <summary>
@@ -43,6 +44,12 @@ namespace Styx.Logic.Pathing
         /// Whether the blackspot area cost has been initialized.
         /// </summary>
         private static bool _areaCostInitialized = false;
+        
+        /// <summary>
+        /// Last map ID where blackspots were marked.
+        /// Used to re-mark all blackspots on map change.
+        /// </summary>
+        private static uint _lastMarkedMapId = 0;
         
         /// <summary>
         /// Static constructor - subscribes to profile events like HB 4.3.4.
@@ -216,20 +223,76 @@ namespace Styx.Logic.Pathing
         }
         
         /// <summary>
+        /// Ensures all blackspots are marked on the navmesh.
+        /// Call this before pathfinding to ensure tiles are loaded and blackspots applied.
+        /// This is the substitute for HB's OnTileLoaded callback.
+        /// </summary>
+        public static void EnsureBlackspotsMarked()
+        {
+            uint currentMapId = StyxWoW.Me?.MapId ?? 0;
+            if (currentMapId == 0)
+                return;
+                
+            // If map changed, clear marked blackspots to force re-marking
+            if (_lastMarkedMapId != currentMapId)
+            {
+                lock (_lock)
+                {
+                    _markedBlackspots.Clear();
+                    _lastMarkedMapId = currentMapId;
+                }
+            }
+            
+            EnsureAreaCostInitialized();
+            
+            lock (_lock)
+            {
+                // Re-mark profile blackspots that haven't been successfully marked
+                foreach (var spot in _blackspots)
+                {
+                    if (!_markedBlackspots.Contains(spot))
+                    {
+                        MarkBlackspotPolygons(spot, currentMapId);
+                    }
+                }
+                
+                // Re-mark global blackspots for current map
+                foreach (var globalSpot in _globalBlackspots)
+                {
+                    if (globalSpot.MapId == currentMapId && !_markedBlackspots.Contains(globalSpot.Blackspot))
+                    {
+                        MarkBlackspotPolygons(globalSpot.Blackspot, currentMapId);
+                    }
+                }
+            }
+        }
+        
+        /// <summary>
         /// Marks navmesh polygons within a blackspot zone with high-cost area type.
         /// This is the core of HB's blackspot system: SetPolyArea(polyRef, 26).
         /// </summary>
         private static void MarkBlackspotPolygons(Blackspot spot)
         {
+            uint mapId = StyxWoW.Me?.MapId ?? 0;
+            if (mapId == 0)
+            {
+                Logging.WriteDebug($"[Blackspot] Cannot mark polygons - no map loaded");
+                return;
+            }
+            MarkBlackspotPolygons(spot, mapId);
+        }
+        
+        /// <summary>
+        /// Marks navmesh polygons within a blackspot zone with high-cost area type.
+        /// </summary>
+        private static void MarkBlackspotPolygons(Blackspot spot, uint mapId)
+        {
             IntPtr polyRefsPtr = IntPtr.Zero;
             try
             {
-                uint mapId = StyxWoW.Me?.MapId ?? 0;
-                if (mapId == 0)
-                {
-                    Logging.WriteDebug($"[Blackspot] Cannot mark polygons - no map loaded");
-                    return;
-                }
+                // Ensure tiles are loaded at blackspot location
+                var centerXyz = new NativeMethods.XYZ(spot.Location.X, spot.Location.Y, spot.Location.Z);
+                NativeMethods.EnsureTiles(mapId, centerXyz, 1); // Load 3x3 tiles around blackspot
 
                 // Convert WoWPoint to navmesh coordinates
                 var center = new NativeMethods.XYZ
@@ -256,7 +319,8 @@ namespace Styx.Logic.Pathing
                 
                 if (polyCount <= 0)
                 {
-                    Logging.WriteDebug($"[Blackspot] No polygons found at {spot.Location} (radius {spot.Radius})");
+                    // Tiles might not be loaded yet - don't mark as successful
+                    Logging.WriteDebug($"[Blackspot] No polygons found at {spot.Location} (radius {spot.Radius}) - tile not loaded?");
                     return;
                 }
                 
@@ -278,7 +342,16 @@ namespace Styx.Logic.Pathing
                     }
                 }
                 
-                Logging.WriteDebug($"[Blackspot] Marked {markedCount}/{polyCount} polygons at {spot.Location} (radius {spot.Radius})");
+                // Track successfully marked blackspots so we don't re-mark them
+                if (markedCount > 0)
+                {
+                    _markedBlackspots.Add(spot);
+                    Logging.WriteDebug($"[Blackspot] Marked {markedCount}/{polyCount} polygons at {spot.Location} (radius {spot.Radius})");
+                }
+                else
+                {
+                    Logging.WriteDebug($"[Blackspot] Failed to mark any polygons at {spot.Location} (found {polyCount} polys)");
+                }
             }
             catch (Exception ex)
             {
