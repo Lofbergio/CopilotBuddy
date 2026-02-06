@@ -1,0 +1,416 @@
+{
+  "_comment": "Mapping of inn names to {npc_id, zone_id}",
+  "_note": "Zone IDs used for SetHearthstone AreaId parameter",
+  "Razor Hill": {
+    "npc_id": 6928,
+    "zone_id": 14
+  },
+  "Orgrimmar": {
+    "npc_id": 6929,
+    "zone_id": 1637
+  },
+  "Thunder Bluff": {
+    "npc_id": 6746,
+    "zone_id": 1638
+  },
+  "Undercity": {
+    "npc_id": 6741,
+    "zone_id": 1497
+  },
+  "The Crossroads": {
+    "npc_id": 5814,
+    "zone_id": 33
+  },
+  "The Sepulcher": {
+    "npc_id": 6739,
+    "zone_id": 130
+  },
+  "Bloodhoof Village": {
+    "npc_id": 6747,
+    "zone_id": 215
+  },
+  "Camp Taurajo": {
+    "npc_id": 7714,
+    "zone_id": 17
+  },
+  "Tarren Mill": {
+    "npc_id": 2388,
+    "zone_id": 267
+  },
+  "Hammerfall": {
+    "npc_id": 9501,
+    "zone_id": 45
+  },
+  "Grom'gol Base Camp": {
+    "npc_id": 12196,
+    "zone_id": 331
+  },
+  "Booty Bay": {
+    "npc_id": 7733,
+    "zone_id": 440
+  },
+  "Ratchet": {
+    "npc_id": 6791,
+    "zone_id": 17
+  },
+  "Camp Mojache": {
+    "npc_id": 7737,
+    "zone_id": 357
+  },
+  "Shadowprey Village": {
+    "npc_id": 11106,
+    "zone_id": 405
+  },
+  "Sun Rock Retreat": {
+    "npc_id": 6930,
+    "zone_id": 8
+  },
+  "Brackenwall Village": {
+    "npc_id": 11116,
+    "zone_id": 400
+  },
+  "Mudsprocket": {
+    "npc_id": 23995,
+    "zone_id": 15
+  },
+  "Everlook": {
+    "npc_id": 11118,
+    "zone_id": 618
+  },
+  "Gadgetzan": {
+    "npc_id": 6807,
+    "zone_id": 33
+  },
+  "Splintertree Post": {
+    "npc_id": 12196,
+    "zone_id": 331
+  },
+  "Freewind Post": {
+    "npc_id": 7731,
+    "zone_id": 406
+  },
+  "Zabra'jin": {
+    "npc_id": 18245,
+    "zone_id": 3521
+  },
+  "Garadar": {
+    "npc_id": 18907,
+    "zone_id": 3521
+  },
+  "Sylvanaar": {
+    "npc_id": 22922,
+    "zone_id": 3522
+  },
+  "Evergrove": {
+    "npc_id": 22485,
+    "zone_id": 3521
+  },
+  "Thunderlord Stronghold": {
+    "npc_id": 18905,
+    "zone_id": 0
+  },
+  "Area 52": {
+    "npc_id": 20123,
+    "zone_id": 3703
+  },
+  "The Stormspire": {
+    "npc_id": 19495,
+    "zone_id": 3522
+  },
+  "Honorbold (Shadowmoon Village)": {
+    "npc_id": 19319,
+    "zone_id": 3520
+  },
+  "Shadowmoon Village": {
+    "npc_id": 19319,
+    "zone_id": 3520
+  },
+  "Sanctum of the Stars": {
+    "npc_id": 23143,
+    "zone_id": 3520
+  },
+  "Falcon Watch": {
+    "npc_id": 16602,
+    "zone_id": 3483
+  },
+  "Thrallmar": {
+    "npc_id": 16826,
+    "zone_id": 3483
+  },
+  "Cenarion Refuge": {
+    "npc_id": 18907,
+    "zone_id": 3521
+  },
+  "Stonebreaker Hold": {
+    "npc_id": 18649,
+    "zone_id": 2367
+  },
+  "Altar of Sha'tar": {
+    "npc_id": 22484,
+    "zone_id": 0
+  },
+  "Shattrath City": {
+    "npc_id": 19046,
+    "zone_id": 3703
+  },
+  "Temple of Telhamat": {
+    "npc_id": 16826,
+    "zone_id": 3483
+  },
+  "Warsong Hold": {
+    "npc_id": 26596,
+    "zone_id": 3537
+  },
+  "Vengeance Landing": {
+    "npc_id": 26709,
+    "zone_id": 3537
+  },
+  "Taunka'le Village": {
+    "npc_id": 26985,
+    "zone_id": 65
+  },
+  "Agmar's Hammer": {
+    "npc_id": 27148,
+    "zone_id": 495
+  },
+  "Venomspite": {
+    "npc_id": 27042,
+    "zone_id": 65
+  },
+  "Moa'ki Harbor": {
+    "npc_id": 28686,
+    "zone_id": 4395
+  },
+  "Camp Oneqwah": {
+    "npc_id": 28799,
+    "zone_id": 66
+  },
+  "Conquest Hold": {
+    "npc_id": 29336,
+    "zone_id": 0
+  },
+  "Camp Winterhoof": {
+    "npc_id": 26596,
+    "zone_id": 3537
+  },
+  "Grom'arsh Crash-Site": {
+    "npc_id": 29583,
+    "zone_id": 0
+  },
+  "Bor'gorok Outpost": {
+    "npc_id": 26985,
+    "zone_id": 65
+  },
+  "Zim'Torga": {
+    "npc_id": 28684,
+    "zone_id": 0
+  },
+  "K3": {
+    "npc_id": 29904,
+    "zone_id": 0
+  },
+  "Bouldercrag's Refuge": {
+    "npc_id": 30005,
+    "zone_id": 67
+  },
+  "Sunreaver Pavilion": {
+    "npc_id": 30724,
+    "zone_id": 1638
+  },
+  "Dalaran": {
+    "npc_id": 31557,
+    "zone_id": 4395
+  },
+  "Goldshire": {
+    "npc_id": 295,
+    "zone_id": 12
+  },
+  "Stormwind City": {
+    "npc_id": 6740,
+    "zone_id": 1519
+  },
+  "Ironforge": {
+    "npc_id": 5111,
+    "zone_id": 1537
+  },
+  "Darnassus": {
+    "npc_id": 6735,
+    "zone_id": 1657
+  },
+  "The Exodar": {
+    "npc_id": 16553,
+    "zone_id": 3524
+  },
+  "Dolanaar": {
+    "npc_id": 6736,
+    "zone_id": 141
+  },
+  "Sentinel Hill": {
+    "npc_id": 8931,
+    "zone_id": 40
+  },
+  "Darkshire": {
+    "npc_id": 6790,
+    "zone_id": 10
+  },
+  "Southshore": {
+    "npc_id": 2352,
+    "zone_id": 267
+  },
+  "Menethil Harbor": {
+    "npc_id": 6737,
+    "zone_id": 148
+  },
+  "Astranaar": {
+    "npc_id": 6738,
+    "zone_id": 331
+  },
+  "Auberdine": {
+    "npc_id": 6736,
+    "zone_id": 141
+  },
+  "Theramore Isle": {
+    "npc_id": 6272,
+    "zone_id": 15
+  },
+  "Nijel's Point": {
+    "npc_id": 11103,
+    "zone_id": 405
+  },
+  "Feathermoon Stronghold": {
+    "npc_id": 7736,
+    "zone_id": 357
+  },
+  "Thelsamar": {
+    "npc_id": 1247,
+    "zone_id": 1
+  },
+  "Kharanos": {
+    "npc_id": 1464,
+    "zone_id": 11
+  },
+  "Loch Modan": {
+    "npc_id": 1247,
+    "zone_id": 1
+  },
+  "Azure Watch": {
+    "npc_id": 16553,
+    "zone_id": 3524
+  },
+  "Blood Watch": {
+    "npc_id": 16739,
+    "zone_id": 3557
+  },
+  "Honor Hold": {
+    "npc_id": 16826,
+    "zone_id": 3483
+  },
+  "Telaar": {
+    "npc_id": 18914,
+    "zone_id": 3518
+  },
+  "Orebor Harborage": {
+    "npc_id": 18906,
+    "zone_id": 3483
+  },
+  "Allerian Stronghold": {
+    "npc_id": 18908,
+    "zone_id": 3521
+  },
+  "Wildhammer Stronghold": {
+    "npc_id": 21088,
+    "zone_id": 3522
+  },
+  "Toshley's Station": {
+    "npc_id": 22056,
+    "zone_id": 0
+  },
+  "Valiance Keep": {
+    "npc_id": 26669,
+    "zone_id": 1196
+  },
+  "Fizzcrank Airstrip": {
+    "npc_id": 26895,
+    "zone_id": 0
+  },
+  "Amberpine Lodge": {
+    "npc_id": 27174,
+    "zone_id": 65
+  },
+  "Stars' Rest": {
+    "npc_id": 27148,
+    "zone_id": 495
+  },
+  "Wintergarde Keep": {
+    "npc_id": 27069,
+    "zone_id": 3537
+  },
+  "Kamagua": {
+    "npc_id": 28686,
+    "zone_id": 4395
+  },
+  "Westfall Brigade Encampment": {
+    "npc_id": 29583,
+    "zone_id": 0
+  },
+  "Fort Wildervar": {
+    "npc_id": 26709,
+    "zone_id": 3537
+  },
+  "Westguard Inn": {
+    "npc_id": 27148,
+    "zone_id": 495
+  },
+  "Valgarde": {
+    "npc_id": 26709,
+    "zone_id": 3537
+  },
+  "Frosthold": {
+    "npc_id": 29962,
+    "zone_id": 67
+  },
+  "Silver Covenant Pavilion": {
+    "npc_id": 30723,
+    "zone_id": 1637
+  },
+  "Wyrmrest Temple": {
+    "npc_id": 28686,
+    "zone_id": 4395
+  },
+  "The Argent Stand": {
+    "npc_id": 28687,
+    "zone_id": 4395
+  },
+  "Deepwater Tavern": {
+    "npc_id": 23995,
+    "zone_id": 15
+  },
+  "Fairbreeze Village": {
+    "npc_id": 16542,
+    "zone_id": 3433
+  },
+  "Falconwing Inn": {
+    "npc_id": 15397,
+    "zone_id": 3430
+  },
+  "Tranquillien": {
+    "npc_id": 16618,
+    "zone_id": 3487
+  },
+  "Stoutlager Inn": {
+    "npc_id": 5111,
+    "zone_id": 1537
+  },
+  "Thunderbrew Distillery": {
+    "npc_id": 5111,
+    "zone_id": 1537
+  },
+  "Gallows' End Tavern": {
+    "npc_id": 5688,
+    "zone_id": 85
+  },
+  "Wildhammer Keep": {
+    "npc_id": 21088,
+    "zone_id": 3522
+  }
+}
