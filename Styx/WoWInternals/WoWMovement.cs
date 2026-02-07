@@ -274,6 +274,14 @@ namespace Styx.WoWInternals
 			Face(target.Location);
 		}
 
+		/// <summary>HB 4.3.4+ compatibility: Face an object by its GUID.</summary>
+		public static void Face(ulong guid)
+		{
+			var obj = ObjectManager.GetObjectByGuid<WoWObject>(guid);
+			if (obj != null)
+				Face(obj.Location);
+		}
+
 		public static void Move(MovementDirection direction)
 		{
 			Move(direction, true);

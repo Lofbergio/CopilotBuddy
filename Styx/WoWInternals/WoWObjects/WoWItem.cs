@@ -537,12 +537,11 @@ namespace Styx.WoWInternals.WoWObjects
 
         #region Additional Properties
 
-        public int Cooldown
+        public float Cooldown
         {
             get
             {
-                string lua = $"local s,d,e = GetItemCooldown({Entry}); return (s+d-GetTime())*1000";
-                return Lua.GetReturnVal<int>(lua, 0);
+                return Lua.GetReturnVal<float>("return GetItemCooldown(" + Entry + ")", 0);
             }
         }
 

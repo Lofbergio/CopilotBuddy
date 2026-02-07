@@ -44,6 +44,17 @@ namespace TreeSharp
             Default = defaultArgument;
         }
 
+        // HB 4.3.4+ compatibility: Quest Behaviors use RetrieveSwitchParameterDelegate<T>(object context)
+        public Switch(RetrieveSwitchParameterDelegate<T> statement, params SwitchArgument<T>[] args)
+            : this(() => statement(null), args)
+        {
+        }
+
+        public Switch(RetrieveSwitchParameterDelegate<T> statement, Composite defaultArgument, params SwitchArgument<T>[] args)
+            : this(() => statement(null), defaultArgument, args)
+        {
+        }
+
         /// <summary>
         ///   The statement assigned to this Switch that will determine which logical branch to take.
         /// </summary>

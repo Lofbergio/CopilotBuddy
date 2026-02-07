@@ -182,7 +182,7 @@ public abstract class CustomForcedBehavior
     string[] aliases)
   {
     if (typeof (T) == typeof (WoWPoint))
-      return this.ParseWoWPointArray(attributeName, isRequired, aliases);
+      return this.ParseSingleWoWPoint(attributeName, isRequired, aliases);
     constraintChecker = constraintChecker ?? (CustomForcedBehavior.IConstraintChecker<T>) new CustomForcedBehavior.ConstrainTo.Anything<T>();
     string str = this.FindAttributeKeyOrAlias(isRequired, attributeName, aliases);
     if (str == null || !this.Args.ContainsKey(str))
@@ -345,7 +345,7 @@ public abstract class CustomForcedBehavior
     T convertedValue;
     try
     {
-      convertedValue = (T) Convert.ChangeType((object) stringValue, type);
+      convertedValue = (T) Convert.ChangeType((object) stringValue, type, System.Globalization.CultureInfo.InvariantCulture);
     }
     catch (Exception ex)
     {

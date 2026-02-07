@@ -696,7 +696,7 @@ namespace Styx.WoWInternals.WoWObjects
 
         #region Alive & Ghost
 
-        public bool IsAlive => !Dead && !IsGhost;
+        public bool IsAlive => !Dead;
 
         public virtual bool IsGhost => CurrentHealth == 1;
 
