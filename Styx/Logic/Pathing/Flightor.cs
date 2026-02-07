@@ -45,6 +45,21 @@ namespace Styx.Logic.Pathing
             LocalPlayer me = StyxWoW.Me;
             if (me == null) return;
 
+            // P6.10: Refuse to fly in no-fly zones (Dalaran, indoor dungeons)
+            // Force ground navigation instead of trying to mount a flying mount
+            if (Navigator.IsInNoFlyZone)
+            {
+                Navigator.MoveTo(destination);
+                return;
+            }
+
+            // Don't attempt flying while riding an elevator
+            if (Navigator.IsRidingElevator)
+            {
+                Navigator.MoveTo(destination);
+                return;
+            }
+
             // Don't fly if in combat and not already mounted
             if (me.Combat && !MountHelper.Mounted && !me.HasAura("Sea Legs"))
                 return;
@@ -354,18 +369,21 @@ namespace Styx.Logic.Pathing
         /// </summary>
         public static void DoAntiStuck()
         {
+            // S5.3: Reduced Thread.Sleep durations from 900ms total to ~400ms
+            // Original HB had 200+100+200+100+300 = 900ms blocking time
+            // Shorter durations still allow movement direction changes while being less disruptive
             WoWMovement.Move(WoWMovement.MovementDirection.Backwards);
-            Thread.Sleep(200);
-            WoWMovement.MoveStop(WoWMovement.MovementDirection.Backwards);
             Thread.Sleep(100);
+            WoWMovement.MoveStop(WoWMovement.MovementDirection.Backwards);
+            Thread.Sleep(50);
 
             WoWMovement.Move(WoWMovement.MovementDirection.StrafeRight | WoWMovement.MovementDirection.JumpAscend);
-            Thread.Sleep(200);
-            WoWMovement.MoveStop(WoWMovement.MovementDirection.StrafeRight | WoWMovement.MovementDirection.JumpAscend);
             Thread.Sleep(100);
+            WoWMovement.MoveStop(WoWMovement.MovementDirection.StrafeRight | WoWMovement.MovementDirection.JumpAscend);
+            Thread.Sleep(50);
 
             WoWMovement.Move(WoWMovement.MovementDirection.Forward | WoWMovement.MovementDirection.StrafeLeft);
-            Thread.Sleep(300);
+            Thread.Sleep(100);
             WoWMovement.MoveStop();
         }
 
@@ -508,6 +526,10 @@ namespace Styx.Logic.Pathing
             internal static void MountUpInternal(bool quick)
             {
                 if (!CanMount || Mounted)
+                    return;
+
+                // Block mount-up while riding elevator (HB 6.2.3 MeshNavigator.method_17)
+                if (Navigator.IsRidingElevator)
                     return;
 
                 // Clear shapeshift if druid

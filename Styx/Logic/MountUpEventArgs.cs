@@ -18,6 +18,12 @@ namespace Styx.Logic
         /// </summary>
         public string MountName { get; set; }
 
+        /// <summary>
+        /// Set to true to cancel the mount-up attempt (e.g. during elevator ride).
+        /// HB 6.2.3 pattern: MeshNavigator.method_17 cancels mount while riding transport.
+        /// </summary>
+        public bool Cancel { get; set; }
+
         public MountUpEventArgs()
         {
             IsFlying = false;

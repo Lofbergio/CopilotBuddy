@@ -424,8 +424,16 @@ namespace Styx.Logic
 
 			if (isMounted && !_wasMounted)
 			{
-				// Just mounted
-				OnMountUp?.Invoke(null, new MountUpEventArgs(me.IsFlying, "Mount"));
+				// Just mounted — fire event and check Cancel flag (HB 6.2.3 pattern)
+				var args = new MountUpEventArgs(me.IsFlying, "Mount");
+				OnMountUp?.Invoke(null, args);
+				if (args.Cancel)
+				{
+					Logging.WriteDebug("[Mount] Mount-up cancelled by event handler");
+					Dismount("cancelled by event handler");
+					_wasMounted = false;
+					return;
+				}
 			}
 			else if (!isMounted && _wasMounted)
 			{

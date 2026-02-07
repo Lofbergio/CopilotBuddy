@@ -31,6 +31,12 @@ namespace Tripper.Navigation
         public bool InProgress => (_value & DT_IN_PROGRESS) != 0;
 
         /// <summary>
+        /// Gets a value indicating whether the result is a partial path
+        /// (goal polygon was not reached, closest reachable point was used).
+        /// </summary>
+        public bool IsPartialResult => (_value & DT_PARTIAL_RESULT) != 0;
+
+        /// <summary>
         /// Gets the raw status value.
         /// </summary>
         public uint Value => _value;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Styx.Helpers;
 using Styx.Logic.Pathing.Interop;
@@ -17,6 +18,25 @@ namespace Styx.Logic.Pathing
 		private static TripperNav.Navigator? _navigator;
 		private static IMover? _playerMover;
 		private static IStuckHandler? _stuckHandler;
+		private static WaitTimer _stuckCheckTimer = new WaitTimer(TimeSpan.FromSeconds(2));
+		private static WaitTimer _doorInteractTimer = new WaitTimer(TimeSpan.FromSeconds(2)); // Cooldown between door interactions
+
+		// Path metadata — stored alongside _currentPath to support off-mesh, terrain type, and ability checks
+		private static TripperNav.StraightPathFlags[]? _currentFlags;
+		private static TripperNav.AreaType[]? _currentPolyTypes;
+		private static TripperNav.AbilityFlags[]? _currentAbilityFlags;
+		private static bool _elevatorBoarded; // Tracks elevator state (HB 4.3.4 pattern)
+		private static bool _ridingElevator; // True while actively riding an elevator (blocks mount-up)
+		private static int _unstickAttempts; // AUDIT FIX: Max retry counter to prevent infinite unstick loops
+		private const int MaxUnstickAttempts = 5; // After 5 failed unsticks, force path regeneration
+
+		// WotLK no-fly zone IDs — areas where flying is forbidden or problematic
+		private static readonly HashSet<uint> _noFlyZoneIds = new HashSet<uint>
+		{
+			4395, // Dalaran city (no flying allowed)
+			4613, // The Pit of Saron (indoor dungeon entrance area)
+			4820, // Halls of Reflection
+		};
 
 		public static float PathPrecision { get; set; } = 2.0f;
 		public static int LoadTilesAroundRadius { get; set; } = 2;
@@ -92,7 +112,41 @@ namespace Styx.Logic.Pathing
 			BotEvents.Player.OnMapChanged += OnMapChanged;
 			BotEvents.OnBotStart += OnBotStart;
 			BotEvents.OnBotStop += OnBotStop;
+
+			// HB 6.2.3 pattern: cancel mount-up while riding elevator
+			Mount.OnMountUp += OnMountUpDuringElevator;
 		}
+
+		/// <summary>
+		/// Prevents mounting while riding an elevator (HB 6.2.3 MeshNavigator.method_17).
+		/// </summary>
+		private static void OnMountUpDuringElevator(object? sender, MountUpEventArgs e)
+		{
+			if (_ridingElevator)
+			{
+				e.Cancel = true;
+				Logging.WriteDebug("[Navigator] Cancelled mount-up while riding elevator");
+			}
+		}
+
+		/// <summary>
+		/// Checks if the current zone is a no-fly zone (P6.10 — Dalaran etc.).
+		/// </summary>
+		public static bool IsInNoFlyZone
+		{
+			get
+			{
+				var me = ObjectManager.Me;
+				if (me == null) return false;
+				return _noFlyZoneIds.Contains(me.ZoneId);
+			}
+		}
+
+		/// <summary>
+		/// Gets whether the player is currently riding an elevator (blocks mount-up).
+		/// HB 6.2.3 pattern: MeshNavigator.method_17 cancels mount while on transport.
+		/// </summary>
+		public static bool IsRidingElevator => _ridingElevator;
 
 		private static void OnMapChanged(BotEvents.Player.MapChangedEventArgs args)
 		{
@@ -134,6 +188,36 @@ namespace Styx.Logic.Pathing
 			{
 				Logging.WriteDebug("[Navigator] Navigation meshes already loaded");
 			}
+
+			// Set faction-aware query filter (HB 6.2.3 pattern: OnBotStarted → SetFactionQueryFilter)
+			// Excludes opposite faction's paths and applies 50x cost penalty on their areas
+			if (IsNavigatorLoaded && _navigator != null)
+			{
+				try
+				{
+					var me = StyxWoW.Me;
+					if (me != null)
+					{
+						_navigator.SetFactionQueryFilter(me.IsHorde);
+					}
+				}
+				catch (Exception ex)
+				{
+					Logging.WriteDebug("[Navigator] Failed to set faction filter: {0}", ex.Message);
+				}
+			}
+
+			// Initialize flight path system (HB 4.3.4 Class448 startup pattern):
+			// Loads saved XmlFlightNode database and attaches TAXIMAP_OPENED Lua event handler.
+			// Without this call, P6.9 flight path auto-detection is non-functional.
+			try
+			{
+				FlightPaths.Initialize();
+			}
+			catch (Exception ex)
+			{
+				Logging.WriteDebug("[Navigator] Failed to initialize FlightPaths: {0}", ex.Message);
+			}
 		}
 
 		private static void OnBotStop(EventArgs args)
@@ -157,6 +241,12 @@ namespace Styx.Logic.Pathing
 			_destination = WoWPoint.Zero;
 			_currentPath.Clear();
 			_currentPathIndex = 0;
+			_currentFlags = null;
+			_currentPolyTypes = null;
+			_currentAbilityFlags = null;
+			_elevatorBoarded = false;
+			_ridingElevator = false;
+			_unstickAttempts = 0;
 			WoWMovement.MoveStop();
 		}
 
@@ -200,11 +290,26 @@ namespace Styx.Logic.Pathing
 				return MoveResult.ReachedDestination;
 			}
 
+			// P6.14 — Combat abort: If we're in combat, skip expensive pathfinding.
+			// In synchronous mode we can't abort mid-pathfind, but we CAN short-circuit
+			// before calling FindPath() and use direct click-to-move instead.
+			// This lets the combat routine take over faster (HB 6.2.3 equivalent of
+			// the 4-second combat abort timeout in method_16).
+			if (me.Combat && _currentPath.Count == 0)
+			{
+				// In combat with no existing path — move directly toward target
+				// to close distance or flee, without wasting time on pathfinding.
+				WoWMovement.ClickToMove(destination);
+				return MoveResult.Moved;
+			}
+
 			// If destination changed, generate new path
 			if (_destination != destination)
 			{
 				_destination = destination;
 				_currentPath.Clear();
+				_stuckCheckTimer.Reset();
+				_unstickAttempts = 0;
 
 				// New destination implies a new movement attempt; reset stuck state.
 				try
@@ -214,6 +319,38 @@ namespace Styx.Logic.Pathing
 				catch
 				{
 					// Ignore
+				}
+
+				// P6.14 — Combat abort: Skip pathfinding entirely if in combat.
+				// Direct click-to-move is sufficient for combat movement (kiting, chasing).
+				if (me.Combat)
+				{
+					_currentPath.Add(me.Location);
+					_currentPath.Add(destination);
+					_currentFlags = null;
+					_currentPolyTypes = null;
+					_currentAbilityFlags = null;
+					_currentPathIndex = 0;
+					Logging.WriteDebug("[Navigator] In combat — using direct movement to: {0}", destinationName);
+					WoWMovement.ClickToMove(destination);
+					return MoveResult.Moved;
+				}
+
+				// P6.9 — Flight path auto-detection (HB 6.2.3 method_10):
+				// For long distances (>400 yards), check if taking a taxi would be faster than running.
+				// ShouldTakeFlightpath compares run time vs flight+walk time, needs >30s savings.
+				// SetFlightPathUsage sets up a BotPoi(PoiType.Fly) to walk to the flight master.
+				float distanceSqr = me.Location.DistanceSqr(destination);
+				if (distanceSqr > 160000f) // 400² yards
+				{
+					if (FlightPaths.ShouldTakeFlightpath(me.Location, destination, me.MovementInfo.RunSpeed))
+					{
+						if (FlightPaths.SetFlightPathUsage(me.Location, destination, out _, out _))
+						{
+							Logging.Write("[Navigator] Flight path would be faster — setting taxi POI");
+							return MoveResult.PathGenerated;
+						}
+					}
 				}
 
 				// Try to use Tripper for pathfinding
@@ -234,6 +371,15 @@ namespace Styx.Logic.Pathing
 						{
 							_currentPath.Add(new WoWPoint(point.X, point.Y, point.Z));
 						}
+
+						// Store path metadata for off-mesh/terrain handling (P4.1 fix)
+						_currentFlags = result.Flags;
+						_currentPolyTypes = result.PolyTypes;
+						_currentAbilityFlags = result.AbilityFlags;
+
+						if (result.IsPartialPath)
+							Logging.Write("[Navigator] WARNING: Partial path — destination may be unreachable");
+
 						Logging.WriteDebug("[Navigator] Path generated with {0} points to: {1} ({2})", 
 							_currentPath.Count, destinationName, destination);
 					}
@@ -242,6 +388,9 @@ namespace Styx.Logic.Pathing
 						// Fallback to direct movement
 						_currentPath.Add(me.Location);
 						_currentPath.Add(destination);
+						_currentFlags = null;
+						_currentPolyTypes = null;
+						_currentAbilityFlags = null;
 						Logging.WriteDebug("[Navigator] Pathfinding failed, using direct movement to: {0} ({1})", 
 							destinationName, destination);
 					}
@@ -251,17 +400,120 @@ namespace Styx.Logic.Pathing
 					// No navmesh, use direct path
 					_currentPath.Add(me.Location);
 					_currentPath.Add(destination);
+					_currentFlags = null;
+					_currentPolyTypes = null;
+					_currentAbilityFlags = null;
 					Logging.WriteDebug("[Navigator] Moving directly to: {0} ({1})", destinationName, destination);
 				}
 
 				_currentPathIndex = 0;
+
+				// Path start skip (HB 6.2.3 method_14): skip early visible waypoints via raycast.
+				// Walk forward through path and raycast from player position — if we can see
+				// waypoint N directly, skip to it for smoother movement (avoids zigzag on flat terrain).
+				// Stop before any off-mesh connection.
+				if (_currentPath.Count > 2 && _currentFlags != null)
+				{
+					uint skipMapId = (uint)(GetCurrentMapId());
+					var playerVec = new Vector3(me.Location.X, me.Location.Y, me.Location.Z);
+					int lastVisible = 0;
+					for (int i = 1; i < Math.Min(_currentPath.Count - 1, 6); i++) // Check up to 5 waypoints ahead
+					{
+						// Don't skip past off-mesh connections
+						if (i < _currentFlags.Length &&
+						    (_currentFlags[i] & TripperNav.StraightPathFlags.OffMeshConnection) != 0)
+							break;
+
+						var wp = new Vector3(_currentPath[i].X, _currentPath[i].Y, _currentPath[i].Z);
+						var status = TripperNavigator.Raycast(skipMapId, playerVec, wp, out float hitT, out _);
+						if (status.Succeeded && hitT >= 1.0f)
+						{
+							lastVisible = i;
+						}
+						else
+						{
+							break; // No point checking further if this one is blocked
+						}
+					}
+					if (lastVisible > 0)
+					{
+						// Remove skipped waypoints from the path instead of advancing _currentPathIndex.
+						// This keeps _currentPathIndex = 0, preventing the drift detection from comparing
+						// player position against a segment that is far ahead (which caused infinite
+						// path regeneration loops — drift detected → regen → skip → drift → regen).
+						_currentPath.RemoveRange(0, lastVisible);
+						if (_currentFlags != null && _currentFlags.Length > lastVisible)
+							_currentFlags = _currentFlags[lastVisible..];
+						if (_currentPolyTypes != null && _currentPolyTypes.Length > lastVisible)
+							_currentPolyTypes = _currentPolyTypes[lastVisible..];
+						if (_currentAbilityFlags != null && _currentAbilityFlags.Length > lastVisible)
+							_currentAbilityFlags = _currentAbilityFlags[lastVisible..];
+						Logging.WriteDebug("[Navigator] Skipped {0} visible early waypoints", lastVisible);
+					}
+				}
 			}
 
 			// Move along path
 			// HB 4.3.4: Check both 2D distance and Z difference, push waypoint ahead
 			if (_currentPath.Count > 0 && _currentPathIndex < _currentPath.Count)
 			{
+				// P6.14 — Combat abort during path following: when combat starts mid-path,
+				// abandon the current path and let the behavior tree's combat routine take over.
+				// This is the synchronous equivalent of HB 6.2.3's 4-second combat abort timeout.
+				// We clear the path so next MoveTo() call will use the direct-movement shortcut above.
+				if (me.Combat)
+				{
+					_destination = WoWPoint.Zero;
+					_currentPath.Clear();
+					_currentPathIndex = 0;
+					_currentFlags = null;
+					_currentPolyTypes = null;
+					_currentAbilityFlags = null;
+					Logging.WriteDebug("[Navigator] Combat detected — aborting path to let combat routine take over");
+					return MoveResult.Moved;
+				}
+
+				// Door handling (HB 6.2.3 method_7): auto-detect and interact with closed doors on path
+				var doorResult = HandleDoors(me);
+				if (doorResult != null)
+					return doorResult.Value;
+
+				// Stuck detection — integrated directly in MoveTo() to cover ALL callers
+				// (ActionMoveToPoi, corpse run, loot, hotspot, plugins, etc.)
+				if (_stuckCheckTimer.IsFinished)
+				{
+					_stuckCheckTimer.Reset();
+					if (StuckHandler.IsStuck())
+					{
+						_unstickAttempts++;
+						if (_unstickAttempts >= MaxUnstickAttempts)
+						{
+							// AUDIT FIX: After MaxUnstickAttempts failed attempts, force path regeneration
+							Logging.Write("[Navigator] {0} unstick attempts failed — forcing path regeneration", _unstickAttempts);
+							_unstickAttempts = 0;
+							_destination = WoWPoint.Zero; // Force new path on next call
+							return MoveResult.Failed;
+						}
+						StuckHandler.Unstick();
+						return MoveResult.UnstuckAttempt;
+					}
+				}
+
 				WoWPoint nextPoint = _currentPath[_currentPathIndex];
+
+				// Path validity check (P6.7): if player has drifted far from the current path segment
+				// (knockback, teleport, fear, etc.), force path regeneration instead of following stale path
+				if (_currentPathIndex > 0)
+				{
+					WoWPoint prevPoint = _currentPath[_currentPathIndex - 1];
+					float distToSegment = DistanceToLineSegment(me.Location, prevPoint, nextPoint);
+					if (distToSegment > PathPrecision * 5f) // >10 yards off path = stale
+					{
+						Logging.WriteDebug("[Navigator] Player drifted {0:F1}yd from path — regenerating", distToSegment);
+						_destination = WoWPoint.Zero; // Force new path on next call
+						return MoveResult.Moved;
+					}
+				}
 				
 				// For intermediate waypoints, use PathPrecision (2.0)
 				// For final waypoint, use requested precision
@@ -274,6 +526,36 @@ namespace Styx.Logic.Pathing
 				
 				if (distance2DSqr < waypointPrecision * waypointPrecision && zDiff < 4.5f)
 				{
+					// Off-mesh guard: if this waypoint is an off-mesh entry point (elevator, portal),
+					// require tighter precision before advancing — don't skip critical transition points
+					if (_currentFlags != null && _currentPathIndex < _currentFlags.Length &&
+					    (_currentFlags[_currentPathIndex] & TripperNav.StraightPathFlags.OffMeshConnection) != 0)
+					{
+						const float offMeshPrecision = 1.0f; // 1 yard tight precision for off-mesh points
+						if (distance2DSqr > offMeshPrecision * offMeshPrecision)
+						{
+							// Not close enough to off-mesh connection point yet, click directly to it
+							WoWMovement.ClickToMove(nextPoint);
+							return MoveResult.Moved;
+						}
+						Logging.WriteDebug("[Navigator] Reached off-mesh connection at waypoint {0}", _currentPathIndex);
+						
+						// Dispatch off-mesh connection based on AreaType (ported from HB 4.3.4 method_4)
+						// AUDIT FIX: Use _currentPathIndex (the off-mesh polygon) not _currentPathIndex-1 (previous = Ground/Road)
+						// In Detour, straightPathPolys[i] is the polygon AT point i, so when flags[i] = OffMesh,
+						// polyTypes[i] gives the off-mesh area type (Elevator/Portal/InteractUnit/InteractObject).
+						if (_currentPolyTypes != null && _currentPathIndex < _currentPolyTypes.Length)
+						{
+							var offMeshResult = HandleOffMeshConnection(me, nextPoint, _currentPolyTypes[_currentPathIndex]);
+							if (offMeshResult != null)
+								return offMeshResult.Value;
+						}
+					}
+
+					// Reset stuck timer and unstick counter on successful waypoint advance
+					_stuckCheckTimer.Reset();
+					_unstickAttempts = 0;
+
 					_currentPathIndex++;
 					if (_currentPathIndex >= _currentPath.Count)
 					{
@@ -333,16 +615,27 @@ namespace Styx.Logic.Pathing
 				// =========== END STAIR HANDLING ===========
 
 				// HB: Push waypoint ahead by PathPrecision in movement direction (for flat terrain)
+				// BUT validate with navmesh raycast to prevent cutting corners near walls (P6.5 fix)
 				WoWPoint direction = nextPoint - me.Location;
 				float length = (float)Math.Sqrt(direction.X * direction.X + direction.Y * direction.Y + direction.Z * direction.Z);
 				if (length > 0.01f)
 				{
 					direction = new WoWPoint(direction.X / length, direction.Y / length, direction.Z / length);
-					clickPoint = nextPoint + direction * PathPrecision;
+					WoWPoint pushedPoint = nextPoint + direction * PathPrecision;
+
+					// Raycast from waypoint to pushed point: if clear, use push; if wall, click exact waypoint
+					if (!Raycast(nextPoint, pushedPoint, out _))
+					{
+						clickPoint = pushedPoint;
+					}
+					else
+					{
+						// Push would cross a navmesh edge (wall/cliff) — click exact waypoint
+						clickPoint = nextPoint;
+					}
 				}
 
 				WoWMovement.ClickToMove(clickPoint);
-				
 				return MoveResult.Moved;
 			}
 
@@ -625,6 +918,366 @@ namespace Styx.Logic.Pathing
 				default:
 					throw new ArgumentOutOfRangeException(nameof(moveResult));
 			}
+		}
+
+		/// <summary>
+		/// Calculates the shortest distance from a point to a line segment (2D, XY plane).
+		/// Used for path validity checking — detects when player has drifted off the current path.
+		/// </summary>
+		private static float DistanceToLineSegment(WoWPoint point, WoWPoint segA, WoWPoint segB)
+		{
+			float dx = segB.X - segA.X;
+			float dy = segB.Y - segA.Y;
+			float lenSqr = dx * dx + dy * dy;
+
+			if (lenSqr < 0.0001f)
+			{
+				// Segment is essentially a point
+				return point.Distance(segA);
+			}
+
+			// Project point onto segment, clamped to [0, 1]
+			float t = ((point.X - segA.X) * dx + (point.Y - segA.Y) * dy) / lenSqr;
+			t = Math.Max(0f, Math.Min(1f, t));
+
+			// Closest point on segment
+			float closestX = segA.X + t * dx;
+			float closestY = segA.Y + t * dy;
+			float closestZ = segA.Z + t * (segB.Z - segA.Z);
+
+			float ex = point.X - closestX;
+			float ey = point.Y - closestY;
+			float ez = point.Z - closestZ;
+			return (float)Math.Sqrt(ex * ex + ey * ey + ez * ez);
+		}
+
+		/// <summary>
+		/// Handles off-mesh connection dispatch based on AreaType.
+		/// Ported from HB 4.3.4 MeshNavigator.method_4 — Elevator/Portal/InteractUnit/InteractObject.
+		/// Returns null to continue normal waypoint advancement, or a MoveResult to return immediately.
+		/// </summary>
+		private static MoveResult? HandleOffMeshConnection(LocalPlayer me, WoWPoint targetPoint, TripperNav.AreaType areaType)
+		{
+			Logging.WriteDebug("[Navigator] Off-mesh dispatch: AreaType={0}, target={1}", areaType, targetPoint);
+			switch (areaType)
+			{
+				case TripperNav.AreaType.Elevator:
+					return HandleElevator(me, targetPoint);
+
+				case TripperNav.AreaType.Portal:
+				case TripperNav.AreaType.DefendersPortal:
+				case TripperNav.AreaType.HordePortal:
+				case TripperNav.AreaType.AlliancePortal:
+					return HandlePortal(me);
+
+				case TripperNav.AreaType.InteractUnit:
+					return HandleInteractUnit(me);
+
+				case TripperNav.AreaType.InteractObject:
+					return HandleInteractObject(me);
+
+				default:
+					// Standard off-mesh: Run/Jump connections (HB 6.2.3 method_19)
+					// Check ability flags to determine if this connection is traversable
+					return HandleStandardOffMesh(me, targetPoint);
+			}
+		}
+
+		/// <summary>
+		/// Standard off-mesh connection handler for Run/Jump connections.
+		/// Ported from HB 6.2.3 MeshNavigator.method_19.
+		/// Only allows connections with Run and/or Jump flags.
+		/// If the connection requires Teleport, Transport, or Swim and isn't handled
+		/// by a specific handler above, we fail.
+		/// </summary>
+		private static MoveResult? HandleStandardOffMesh(LocalPlayer me, WoWPoint targetPoint)
+		{
+			// Check ability flags for this off-mesh connection
+			if (_currentAbilityFlags != null && _currentPathIndex < _currentAbilityFlags.Length)
+			{
+				var abilityFlags = _currentAbilityFlags[_currentPathIndex];
+				var allowedFlags = TripperNav.AbilityFlags.Run | TripperNav.AbilityFlags.Jump | TripperNav.AbilityFlags.RunSafe;
+
+				// If the connection requires abilities beyond Run/Jump (e.g. Teleport, Transport),
+				// and we haven't handled it via a specific handler, fail gracefully
+				if ((abilityFlags & ~allowedFlags) != TripperNav.AbilityFlags.None &&
+				    (abilityFlags & TripperNav.AbilityFlags.Unwalkable) != 0)
+				{
+					Logging.WriteDebug("[Navigator] Off-mesh connection requires unsupported abilities: {0}", abilityFlags);
+					return MoveResult.Failed;
+				}
+
+				// Jump connection — dismount first if mounted (can't jump mounted in WotLK)
+				if ((abilityFlags & TripperNav.AbilityFlags.Jump) != 0)
+				{
+					if (me.Mounted)
+					{
+						Mount.Dismount();
+						return MoveResult.Moved;
+					}
+				}
+			}
+
+			// Standard Run/Jump — click to the target point and advance
+			WoWMovement.ClickToMove(targetPoint);
+			return null; // Advance to next waypoint normally
+		}
+
+		/// <summary>
+		/// Elevator handling: find transport, wait for it, board, ride, exit.
+		/// HB 4.3.4 pattern: detect elevator via GameObjects with Transport type.
+		/// AUDIT FIX: When multiple transports exist, prefer the one closest to target Z
+		/// (direction-aware selection) over pure proximity.
+		/// </summary>
+		private static MoveResult? HandleElevator(LocalPlayer me, WoWPoint targetPoint)
+		{
+			// Find elevator/transport game objects within reasonable range (50 yards)
+			var transports = ObjectManager.GetObjectsOfType<WoWGameObject>(false, false)
+				.Where(go => (go.SubType == WoWGameObjectType.Transport || go.SubType == WoWGameObjectType.MapObjectTransport)
+				              && go.Location.DistanceSqr(me.Location) < 2500f) // 50 yards
+				.ToList();
+
+			if (transports.Count == 0)
+			{
+				Logging.WriteNavigator("No elevator/transport found nearby. Continuing.");
+				return null;
+			}
+
+			// If multiple transports found, prefer the one whose current Z is closer to player Z
+			// (i.e., the one at our level or approaching our level — direction-aware)
+			WoWGameObject transport;
+			if (transports.Count > 1)
+			{
+				transport = transports.OrderBy(go => Math.Abs(go.Z - me.Z)).First();
+				Logging.WriteDebug("[Navigator] Multiple transports nearby ({0}), chose closest to player Z: {1}",
+					transports.Count, transport.Name);
+			}
+			else
+			{
+				transport = transports[0];
+			}
+
+			// If we're already close to the target point, elevator ride is complete
+			if (me.Location.DistanceSqr(targetPoint) < 4f)
+			{
+				_elevatorBoarded = false;
+				_ridingElevator = false;
+				Logging.WriteNavigator("Elevator ride complete.");
+				return null; // Continue normal waypoint advancement
+			}
+
+			// If we're on the transport
+			if (me.IsOnTransport)
+			{
+				_ridingElevator = true; // Block mount-up while riding (HB 6.2.3 pattern)
+
+				// Check if elevator has reached destination height
+				if (Math.Abs(me.Z - targetPoint.Z) > 2f)
+				{
+					Logging.WriteNavigator("Riding elevator, waiting for destination height...");
+					return MoveResult.Moved; // Wait on elevator
+				}
+
+				// Elevator reached destination — move off it
+				_elevatorBoarded = true;
+				_ridingElevator = false;
+				Logging.WriteNavigator("Moving out of elevator.");
+				WoWMovement.ClickToMove(targetPoint);
+				return MoveResult.Moved;
+			}
+
+			// Not on transport yet — check if elevator is at our level
+			if (Math.Abs(transport.Z - me.Z) > 2f)
+			{
+				// Elevator isn't at our level — move to waiting spot and wait
+				if (_currentPathIndex > 0 && _currentPathIndex - 1 < _currentPath.Count)
+				{
+					var waitSpot = _currentPath[_currentPathIndex - 1];
+					if (me.Location.DistanceSqr(waitSpot) > 4f)
+					{
+						Logging.WriteNavigator("Moving to elevator waiting spot.");
+						WoWMovement.ClickToMove(waitSpot);
+						return MoveResult.Moved;
+					}
+				}
+				Logging.WriteNavigator("Waiting for elevator...");
+				return MoveResult.Moved;
+			}
+
+			// Elevator is at our level — board it
+			if (!_elevatorBoarded)
+			{
+				Logging.WriteNavigator("Boarding elevator.");
+				if (me.Mounted)
+				{
+					Mount.Dismount();
+				}
+				WoWMovement.ClickToMove(transport.Location);
+				return MoveResult.Moved;
+			}
+
+			return MoveResult.Failed;
+		}
+
+		/// <summary>
+		/// Portal handling: find nearest Goober or SpellCaster game object and interact.
+		/// HB 4.3.4 pattern from MeshNavigator.method_4.
+		/// AUDIT FIX: Added 30-yard range limit to avoid interacting with distant random objects.
+		/// </summary>
+		private static MoveResult? HandlePortal(LocalPlayer me)
+		{
+			// Find nearest portal-type game object within 30 yards (Goober or SpellCaster)
+			const float maxSearchDistSqr = 900f; // 30 yards squared
+			WoWGameObject? bestPortal = null;
+			float bestDistSqr = maxSearchDistSqr;
+
+			foreach (var go in ObjectManager.GetObjectsOfType<WoWGameObject>())
+			{
+				if (go.SubType == WoWGameObjectType.Goober || go.SubType == WoWGameObjectType.SpellCaster)
+				{
+					float distSqr = go.Location.DistanceSqr(me.Location);
+					if (distSqr < bestDistSqr)
+					{
+						bestDistSqr = distSqr;
+						bestPortal = go;
+					}
+				}
+			}
+
+			if (bestPortal == null)
+			{
+				Logging.WriteNavigator("Could not find portal to interact with.");
+				return MoveResult.Failed;
+			}
+
+			if (bestPortal.WithinInteractRange)
+			{
+				Logging.WriteDebug("[Navigator] Interacting with portal: {0}", bestPortal.Name);
+				bestPortal.Interact();
+				return MoveResult.Moved;
+			}
+
+			// Move closer to the portal
+			WoWMovement.ClickToMove(bestPortal.Location);
+			return MoveResult.Moved;
+		}
+
+		/// <summary>
+		/// InteractUnit handling: find nearest non-hostile, alive NPC and interact.
+		/// HB 4.3.4 pattern from MeshNavigator.method_4.
+		/// AUDIT FIX: Filter out hostile units, dead units, and player-controlled units
+		/// to avoid targeting enemy mobs during off-mesh traversal.
+		/// </summary>
+		private static MoveResult? HandleInteractUnit(LocalPlayer me)
+		{
+			var unit = ObjectManager.GetObjectsOfType<WoWUnit>(false, false)
+				.Where(u => !u.IsDead && !u.IsHostile && !u.PlayerControlled && !u.IsPlayer)
+				.OrderBy(u => u.Location.DistanceSqr(me.Location))
+				.FirstOrDefault();
+
+			if (unit == null)
+			{
+				Logging.WriteNavigator("Could not find unit to interact with.");
+				return MoveResult.Failed;
+			}
+
+			if (!unit.WithinInteractRange)
+			{
+				WoWMovement.ClickToMove(unit.Location);
+				return MoveResult.Moved;
+			}
+
+			Mount.Dismount("InteractUnit in path");
+			unit.Interact();
+			return MoveResult.Moved;
+		}
+
+		/// <summary>
+		/// InteractObject handling: find nearest interactable game object and interact.
+		/// HB 4.3.4 pattern from MeshNavigator.method_4.
+		/// </summary>
+		private static MoveResult? HandleInteractObject(LocalPlayer me)
+		{
+			var gameObject = ObjectManager.GetObjectsOfType<WoWGameObject>(false, false)
+				.OrderBy(go => go.Location.DistanceSqr(me.Location))
+				.Where(go => go.WithinInteractRange)
+				.FirstOrDefault();
+
+			if (gameObject == null)
+			{
+				// No interactable object in range — skip this off-mesh point
+				return null;
+			}
+
+			Mount.Dismount("InteractObject in path");
+			gameObject.Interact();
+			return MoveResult.Moved;
+		}
+
+		/// <summary>
+		/// Door handling: auto-detect closed doors on the path and interact to open them.
+		/// Ported from HB 6.2.3 MeshNavigator.method_7/method_8.
+		/// Returns null if no door action needed, MoveResult.Moved if interacting with a door.
+		/// </summary>
+		private static MoveResult? HandleDoors(LocalPlayer me)
+		{
+			// Cooldown between door interactions to avoid spam
+			if (!_doorInteractTimer.IsFinished)
+				return null;
+
+			// Find closed/ready Door-type GameObjects within 10 yards
+			const float doorSearchDistSqr = 100f; // 10 yards squared
+			WoWGameObject? closestDoor = null;
+			float closestDistSqr = doorSearchDistSqr;
+
+			foreach (var go in ObjectManager.GetObjectsOfType<WoWGameObject>(false, false))
+			{
+				if (go.SubType != WoWGameObjectType.Door)
+					continue;
+
+				// State.Ready = closed and interactable; Active = already open
+				if (go.State != WoWGameObjectState.Ready)
+					continue;
+
+				// Skip locked doors (can't open without key)
+				if (go.Locked)
+					continue;
+
+				float distSqr = go.Location.DistanceSqr(me.Location);
+				if (distSqr < closestDistSqr)
+				{
+					// Verify the door is actually on our path direction
+					// (avoid opening random doors that are beside us but not blocking)
+					if (_currentPathIndex < _currentPath.Count)
+					{
+						WoWPoint nextWp = _currentPath[_currentPathIndex];
+						// Door must be roughly between us and the next waypoint
+						float distToNext = go.Location.DistanceSqr(nextWp);
+						float playerToNext = me.Location.DistanceSqr(nextWp);
+						if (distToNext > playerToNext)
+							continue; // Door is behind us relative to movement direction
+					}
+
+					closestDistSqr = distSqr;
+					closestDoor = go;
+				}
+			}
+
+			if (closestDoor == null)
+				return null;
+
+			// Move to door if not in interact range
+			if (!closestDoor.WithinInteractRange)
+			{
+				WoWMovement.ClickToMove(closestDoor.Location);
+				return MoveResult.Moved;
+			}
+
+			// Interact to open the door
+			Logging.WriteDebug("[Navigator] Opening door: {0}", closestDoor.Name);
+			closestDoor.Interact();
+			_doorInteractTimer.Reset();
+			return MoveResult.Moved;
 		}
 	}
 }

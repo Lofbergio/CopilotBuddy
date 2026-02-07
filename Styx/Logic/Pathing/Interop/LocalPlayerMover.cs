@@ -57,13 +57,17 @@ namespace Styx.Logic.Pathing.Interop
             float distance = ObjectManager.Me.Location.Distance(targetPoint);
             if (distance > 10f)
             {
-                // Click on a point 8 yards away in the direction of target
+                // Click on a point up to 30 yards away in the direction of target
+                // S5.1: Increased from 8yd to 30yd — 8yd was too short for Flightor,
+                // causing constant re-clicks and choppy flying movement.
+                // HB 6.2.3 uses 27yd; 30yd provides smooth CTM arcs for both ground and flying.
+                float clickDist = Math.Min(distance, 30f);
                 Vector3 direction = point - new Vector3(ObjectManager.Me.Location.X, ObjectManager.Me.Location.Y, ObjectManager.Me.Location.Z);
                 direction.Normalize();
                 targetPoint = new WoWPoint(
-                    ObjectManager.Me.Location.X + direction.X * 8f,
-                    ObjectManager.Me.Location.Y + direction.Y * 8f,
-                    ObjectManager.Me.Location.Z + direction.Z * 8f
+                    ObjectManager.Me.Location.X + direction.X * clickDist,
+                    ObjectManager.Me.Location.Y + direction.Y * clickDist,
+                    ObjectManager.Me.Location.Z + direction.Z * clickDist
                 );
             }
 

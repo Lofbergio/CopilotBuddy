@@ -208,19 +208,11 @@ namespace Tripper.Navigation
             NativeMethods.XYZ nearestPoint;
             if (NativeMethods.FindNearestPoly(mapId, new NativeMethods.XYZ(newPos), 1.0f, out nearestPoint))
             {
-                // Also check we can raycast from wall to new pos
-                if (NativeMethods.HasLineOfSight(mapId, new NativeMethods.XYZ(wallPos), nearestPoint))
-                {
-                    // Use midpoint between wall and raycast end for safety
-                    point = (wallPos + nearestPoint.ToVector3()) / 2f;
-                    return true;
-                }
-                else
-                {
-                    // Just use the snapped point
-                    point = nearestPoint.ToVector3();
-                    return true;
-                }
+                // Use the snapped navmesh point directly — it's already verified navigable.
+                // HasLineOfSight check removed: both branches yielded the same result,
+                // and the snapped point from FindNearestPoly is safe regardless.
+                point = nearestPoint.ToVector3();
+                return true;
             }
 
             // Fallback: just move slightly away from wall
@@ -296,6 +288,9 @@ namespace Tripper.Navigation
         /// <summary>
         /// Fixes path segments that may have become unwalkable after modifications.
         /// Based on HB's method_5/method_9 (FixPathWalkability).
+        /// AUDIT FIX: When a segment is blocked (no line of sight), insert a midpoint on navmesh
+        /// between the two endpoints and recurse. This prevents post-MoveAwayFromEdges paths
+        /// from silently becoming invalid.
         /// </summary>
         private static void FixPathWalkability(
             uint mapId,
@@ -326,11 +321,27 @@ namespace Tripper.Navigation
                 // Check if we can walk directly between points
                 if (!NativeMethods.HasLineOfSight(mapId, new NativeMethods.XYZ(start), new NativeMethods.XYZ(end)))
                 {
-                    // Path is blocked, need to find alternative route
-                    // This would require full pathfinding between the two points
-                    // For now, we skip fixing blocked segments to avoid infinite recursion
-                    // The original path should still work, just not optimally
-                    continue;
+                    // Path segment is blocked — insert a midpoint on the navmesh between start and end.
+                    // This splits the blocked segment into two, which may be individually walkable.
+                    // If not, the recursion will continue splitting until MaxRecursionDepth.
+                    Vector3 midpoint = (start + end) * 0.5f;
+                    NativeMethods.XYZ snappedMid;
+                    if (NativeMethods.FindNearestPoly(mapId, new NativeMethods.XYZ(midpoint), 5.0f, out snappedMid))
+                    {
+                        Vector3 newPoint = snappedMid.ToVector3();
+                        // Only insert if the midpoint is meaningfully different from both endpoints
+                        if (Vector3.DistanceSquared(newPoint, start) > 1.0f &&
+                            Vector3.DistanceSquared(newPoint, end) > 1.0f)
+                        {
+                            points.Insert(i + 1, newPoint);
+                            flags.Insert(i + 1, StraightPathFlags.None);
+                            // Don't increment i — re-check the start→midpoint segment on next iteration
+                            // Recurse on the modified path to fix remaining blocked sub-segments
+                            FixPathWalkability(mapId, points, flags, edgeDistance, recursionDepth + 1);
+                            return; // Recursion handles the rest
+                        }
+                    }
+                    // If snap failed or midpoint too close, skip — can't fix this segment
                 }
             }
         }

@@ -117,16 +117,16 @@ namespace Tripper.Navigation
         /// </summary>
         private void InitializeQueryFilters()
         {
-            // Default filter - standard ground/water movement
+            // Default filter - standard ground/water movement (HB 6.2.3 pattern)
             _queryFilters["Default"] = new QueryFilter
             {
                 IncludeFlags = AbilityFlags.Run | AbilityFlags.Swim,
                 ExcludeFlags = AbilityFlags.Unwalkable,
                 AreaCosts = new Dictionary<AreaType, float>
                 {
-                    { AreaType.Ground, 1.0f },
-                    { AreaType.Water, 2.0f },
-                    { AreaType.Road, 0.5f }
+                    { AreaType.Ground, 1.66f },
+                    { AreaType.Water, 3.33f },
+                    { AreaType.Road, 1.0f }
                 }
             };
 
@@ -207,17 +207,17 @@ namespace Tripper.Navigation
 
         /// <summary>
         /// Sets default area costs in the native DLL filter.
-        /// Matches HB WoD SetDefaultQueryFilterCosts pattern.
-        /// Road=0.5 (strong priority), Ground=1.66, Water=3.33, etc.
+        /// Matches HB 6.2.3 WowNavigator.SetDefaultQueryFilterCosts pattern.
+        /// Road=1.0 (preferred), Ground=1.66, Water=3.33, etc.
         /// </summary>
         private void SetDefaultAreaCosts()
         {
             try
             {
-                // HB WoD pattern from WowNavigator.SetDefaultQueryFilterCosts
-                // Lower cost = preferred path. Road should be much lower to force road usage.
+                // HB 6.2.3 SetDefaultQueryFilterCosts — exact values from decompile
+                // Lower cost = preferred path. Road=1.0 is natural preference without detour-causing suroptimisation.
                 NativeMethods.SetAreaCost((uint)AreaType.Ground, 1.66f);
-                NativeMethods.SetAreaCost((uint)AreaType.Road, 0.5f);            // STRONG PRIORITY - much lower cost!
+                NativeMethods.SetAreaCost((uint)AreaType.Road, 1.0f);             // HB 6.2.3: 1.0 (was 0.5 — caused road detours)
                 NativeMethods.SetAreaCost((uint)AreaType.Water, 3.33f);
                 NativeMethods.SetAreaCost((uint)AreaType.Lava, 55.0f);
                 NativeMethods.SetAreaCost((uint)AreaType.Fall, 1.7f);
@@ -230,8 +230,11 @@ namespace Tripper.Navigation
                 NativeMethods.SetAreaCost((uint)AreaType.Blocked, 100.0f);
                 NativeMethods.SetAreaCost((uint)AreaType.InteractUnit, 1.66f);
                 NativeMethods.SetAreaCost((uint)AreaType.InteractObject, 1.66f);
+                NativeMethods.SetAreaCost((uint)AreaType.Blackspot, 60.0f);       // HB 6.2.3: blackspot penalty
+                NativeMethods.SetAreaCost((uint)AreaType.Horde, 1.66f);           // HB 6.2.3: faction area
+                NativeMethods.SetAreaCost((uint)AreaType.Alliance, 1.66f);        // HB 6.2.3: faction area
                 
-                Log("Default area costs set (Road=0.5, Ground=1.66)");
+                Log("Default area costs set (Road=1.0, Ground=1.66)");
             }
             catch (Exception ex)
             {
@@ -399,6 +402,21 @@ namespace Tripper.Navigation
                             }
                         }
 
+                        // Water/Lava Z+2f fix (HB 6.2.3 step 15 in Class1458.method_0)
+                        // When path points are in Water or Lava area, elevate Z by 2f to prevent
+                        // the character from swimming under the surface.
+                        if (polyTypes != null)
+                        {
+                            for (int i = 1; i < points.Length - 1; i++)
+                            {
+                                if (i < polyTypes.Length &&
+                                    (polyTypes[i] == AreaType.Water || polyTypes[i] == AreaType.Lava))
+                                {
+                                    points[i] = new System.Numerics.Vector3(points[i].X, points[i].Y, points[i].Z + 2.0f);
+                                }
+                            }
+                        }
+
                         // Create full result
                         var result = new PathFindResult
                         {
@@ -414,7 +432,7 @@ namespace Tripper.Navigation
                             Start = points.Length > 0 ? points[0] : start,
                             End = points.Length > 0 ? points[^1] : end,
                             Aborted = false,
-                            IsPartialPath = false, // TODO: detect from status flags
+                            IsPartialPath = status.IsPartialResult,
                             FailStep = PathFindStep.None
                         };
 
@@ -1174,6 +1192,48 @@ namespace Tripper.Navigation
         #endregion
 
         #region Query Filter Settings
+
+        /// <summary>
+        /// Sets faction-aware query filter based on player faction.
+        /// Ported from HB 6.2.3 WowNavigator.SetFactionQueryFilter.
+        /// Excludes the opposite faction's ability flag and applies a 50x cost penalty
+        /// on the opposite faction's area type (prevents pathing through enemy-only areas).
+        /// </summary>
+        /// <param name="isHorde">True if the player is Horde, false if Alliance.</param>
+        public void SetFactionQueryFilter(bool isHorde)
+        {
+            try
+            {
+                // Get current include/exclude flags
+                ushort currentInclude = NativeMethods.GetIncludeFlags();
+                ushort currentExclude = NativeMethods.GetExcludeFlags();
+
+                if (isHorde)
+                {
+                    // Horde: exclude Alliance flag, add huge cost to Alliance areas
+                    currentExclude |= (ushort)AbilityFlags.Alliance;
+                    currentExclude &= unchecked((ushort)~(ushort)AbilityFlags.Horde);
+                    NativeMethods.SetExcludeFlags(currentExclude);
+                    NativeMethods.SetAreaCost((uint)AreaType.Alliance, 50.0f);    // huge penalty
+                    NativeMethods.SetAreaCost((uint)AreaType.Horde, 1.66f);       // normal
+                    Log("Faction filter set: Horde (excluding Alliance paths)");
+                }
+                else
+                {
+                    // Alliance: exclude Horde flag, add huge cost to Horde areas
+                    currentExclude |= (ushort)AbilityFlags.Horde;
+                    currentExclude &= unchecked((ushort)~(ushort)AbilityFlags.Alliance);
+                    NativeMethods.SetExcludeFlags(currentExclude);
+                    NativeMethods.SetAreaCost((uint)AreaType.Horde, 50.0f);       // huge penalty
+                    NativeMethods.SetAreaCost((uint)AreaType.Alliance, 1.66f);     // normal
+                    Log("Faction filter set: Alliance (excluding Horde paths)");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Failed to set faction filter: {ex.Message}");
+            }
+        }
 
         /// <summary>
         /// Sets polygon include flags for pathfinding.
