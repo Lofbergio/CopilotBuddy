@@ -9,6 +9,7 @@ using Styx.Logic.Combat;
 using Styx.Logic.Pathing;
 using Styx.Patchables;
 using Styx.WoWInternals.WoWCache;
+using Matrix = Tripper.Tools.Math.Matrix;
 
 namespace Styx.WoWInternals.WoWObjects
 {
@@ -391,14 +392,14 @@ namespace Styx.WoWInternals.WoWObjects
             return false;
         }
 
-        public Matrix4x4 WorldMatrix => GetWorldMatrix();
+        public Matrix WorldMatrix => GetWorldMatrix();
 
-        public Matrix4x4 GetWorldMatrix()
+        public Matrix GetWorldMatrix()
         {
             return BuildWorldMatrix(Location, Rotation);
         }
 
-        public Matrix4x4 GetWorldMatrix(bool includeScale)
+        public Matrix GetWorldMatrix(bool includeScale)
         {
             return GetWorldMatrix();
         }
