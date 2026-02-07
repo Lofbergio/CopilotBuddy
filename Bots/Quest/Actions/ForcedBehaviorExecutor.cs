@@ -106,11 +106,24 @@ public class ForcedBehaviorExecutor : Composite
                 }
             }
             this.Order.CurrentBehavior.OnTick();
+            // Guard against bot stop during execution — CurrentBehavior or Branch may be set to null
+            // when TreeRoot.Stop() is called while the behavior tree is yielding RunStatus.Running
+            if (this.Order.CurrentBehavior?.Branch == null)
+            {
+                yield return RunStatus.Failure;
+                yield break;
+            }
             this.Order.CurrentBehavior.Branch.Start(context);
-            while (this.Order.CurrentBehavior.Branch.Tick(context) == RunStatus.Running)
+            while (this.Order.CurrentBehavior?.Branch != null && 
+                   this.Order.CurrentBehavior.Branch.Tick(context) == RunStatus.Running)
                 yield return RunStatus.Running;
+            if (this.Order.CurrentBehavior?.Branch == null)
+            {
+                yield return RunStatus.Failure;
+                yield break;
+            }
             this.Order.CurrentBehavior.Branch.Stop(context);
-            yield return (RunStatus)((int?)this.Order.CurrentBehavior.Branch.LastStatus ?? 0);
+            yield return (RunStatus)((int?)this.Order.CurrentBehavior?.Branch?.LastStatus ?? 0);
         }
     }
 
