@@ -76,7 +76,8 @@ def fetch_creature_spawns(npc_ids: Set[int], host: str, port: int,
     )
     cursor = conn.cursor()
     
-    # Fetch names from creature_template
+    # Fetch names and factions from creature_template
+    factions: Dict[int, int] = {}
     batch_size = 500
     npc_list = sorted(npc_ids)
     
@@ -84,11 +85,13 @@ def fetch_creature_spawns(npc_ids: Set[int], host: str, port: int,
         batch = npc_list[i:i + batch_size]
         ids_str = ','.join(str(x) for x in batch)
         
-        cursor.execute(f"SELECT entry, name FROM creature_template WHERE entry IN ({ids_str})")
-        for entry, name in cursor:
+        cursor.execute(f"SELECT entry, name, faction FROM creature_template WHERE entry IN ({ids_str})")
+        for entry, name, faction in cursor:
             names[entry] = name
+            if faction:
+                factions[entry] = int(faction)
     
-    print(f"  Found {len(names)} creature templates")
+    print(f"  Found {len(names)} creature templates ({len(factions)} with faction)")
     
     # Fetch spawn positions from creature table
     # For each NPC, get up to 10 spawn positions (some NPCs have many spawns)
@@ -121,11 +124,18 @@ def fetch_creature_spawns(npc_ids: Set[int], host: str, port: int,
     cursor.close()
     conn.close()
     
-    return spawns, names
+    return spawns, names, factions
 
 
-def generate_json(spawns: Dict[int, List[Dict]], names: Dict[int, str], output_file: str):
-    """Generate creature_spawns.json"""
+def generate_json(spawns: Dict[int, List[Dict]], names: Dict[int, str], output_file: str, factions: Dict[int, int] = None):
+    """Generate creature_spawns.json
+    
+    Includes ALL creatures from creature_template (not just those with spawns),
+    so that faction data is available for event mobs, dynamically spawned creatures, etc.
+    """
+    if factions is None:
+        factions = {}
+    
     output = {
         "_info": "Creature spawn world coordinates for CopilotBuddy profiles (WoW 3.3.5a)",
         "_usage": "Used by zygor_parser_v2.py to convert Zygor/Questie percentage coords to world coords",
@@ -133,19 +143,27 @@ def generate_json(spawns: Dict[int, List[Dict]], names: Dict[int, str], output_f
         "creatures": {}
     }
     
-    for npc_id in sorted(spawns.keys()):
+    # Include ALL creatures from creature_template (names dict),
+    # not just those with spawns, so we have faction data for all mobs
+    all_npc_ids = sorted(set(list(spawns.keys()) + list(names.keys())))
+    
+    for npc_id in all_npc_ids:
         name = names.get(npc_id, f"Unknown {npc_id}")
-        output["creatures"][str(npc_id)] = {
+        creature_data = {
             "name": name,
-            "spawns": spawns[npc_id]
+            "spawns": spawns.get(npc_id, [])
         }
+        if npc_id in factions:
+            creature_data["faction"] = factions[npc_id]
+        output["creatures"][str(npc_id)] = creature_data
     
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
     
+    with_spawns = sum(1 for npc_id in all_npc_ids if npc_id in spawns)
     file_size_mb = Path(output_file).stat().st_size / (1024 * 1024)
     print(f"\nCreature spawns saved to: {output_file} ({file_size_mb:.1f} MB)")
-    print(f"  Total creatures: {len(spawns)}")
+    print(f"  Total creatures: {len(all_npc_ids)} ({with_spawns} with spawns)")
     print(f"  Total spawn points: {sum(len(v) for v in spawns.values())}")
 
 
@@ -170,12 +188,12 @@ def main():
     npc_ids = parse_questie_npc_ids(args.questie)
     
     # Fetch from database
-    spawns, names = fetch_creature_spawns(
+    spawns, names, factions = fetch_creature_spawns(
         npc_ids, args.host, args.port, args.user, args.password, args.database
     )
     
     # Generate JSON
-    generate_json(spawns, names, output_file)
+    generate_json(spawns, names, output_file, factions)
     
     # Verify with known NPCs
     print("\n=== Verification ===")

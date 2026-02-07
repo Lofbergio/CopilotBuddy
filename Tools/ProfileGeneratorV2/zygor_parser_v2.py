@@ -190,6 +190,7 @@ class ZygorParser:
         # Creature world coordinates from SPP database
         self.creature_spawns: Dict[int, List[Dict]] = {}  # npc_id -> [{map, x, y, z}]
         self.creature_names: Dict[int, str] = {}  # npc_id -> name
+        self.creature_factions: Dict[int, int] = {}  # npc_id -> faction_id
         
         # Innkeeper mapping: inn_name -> {npc_id, zone_id}
         self.innkeeper_mapping: Dict[str, Dict] = {}
@@ -247,8 +248,10 @@ class ZygorParser:
                 npc_id = int(npc_id_str)
                 self.creature_names[npc_id] = info.get('name', '')
                 self.creature_spawns[npc_id] = info.get('spawns', [])
+                if 'faction' in info:
+                    self.creature_factions[npc_id] = info['faction']
             
-            print(f"  Loaded {len(self.creature_spawns)} creature world coordinates")
+            print(f"  Loaded {len(self.creature_spawns)} creature world coordinates ({len(self.creature_factions)} with faction)")
         except Exception as e:
             print(f"  Warning: Could not load creature_spawns.json: {e}")
     
@@ -528,6 +531,39 @@ class ZygorParser:
                     patterns = [
                         rf'(?:kill|slay|defeat|destroy|burn|eliminate|free|dismember|infect)\s+(\d+)\s+{re.escape(variant)}',
                         rf'(\d+)\s+{re.escape(variant)}',
+                    ]
+                    for pattern in patterns:
+                        match = re.search(pattern, text_lower)
+                        if match:
+                            return int(match.group(1))
+        return None
+
+    def get_collect_count_from_questie(self, quest_id: int, item_name: str) -> Optional[int]:
+        """Get the collect count from Questie's objectives_text for an item.
+        
+        Questie's data reflects the actual WoW database, so it's more accurate than
+        Zygor guide counts which may be from a different patch.
+        """
+        if quest_id not in self.questie_quests:
+            return None
+        quest = self.questie_quests[quest_id]
+        if not quest.objectives_text:
+            return None
+        
+        item_name_clean = item_name.lower().strip()
+        # Handle plurals - try singular, plural (+s), and original
+        item_name_singular = item_name_clean.rstrip('s')
+        item_name_plural = item_name_clean if item_name_clean.endswith('s') else item_name_clean + 's'
+        item_variants = [item_name_clean, item_name_singular, item_name_plural]
+        
+        for text in quest.objectives_text:
+            text_lower = text.lower()
+            for variant in item_variants:
+                if variant in text_lower and len(variant) > 3:  # Avoid false matches
+                    patterns = [
+                        rf'(?:collect|gather|obtain|retrieve|bring|get|find|recover)\s+(\d+)\s+{re.escape(variant)}',
+                        rf'(\d+)(?:/\d+)?\s+{re.escape(variant)}',
+                        rf'{re.escape(variant)}.*?(\d+)',
                     ]
                     for pattern in patterns:
                         match = re.search(pattern, text_lower)
@@ -1024,7 +1060,7 @@ class ZygorParser:
                 # Parse collect objective
                 collect_match = PATTERN_COLLECT.search(line)
                 if collect_match:
-                    count = int(collect_match.group(1)) if collect_match.group(1) else 1
+                    zygor_count = int(collect_match.group(1)) if collect_match.group(1) else None
                     item_name = collect_match.group(2).strip()
                     item_id = int(collect_match.group(3))
                     
@@ -1050,6 +1086,19 @@ class ZygorParser:
                     # FALLBACK 2: If only one active quest, use it
                     elif not quest_id and len(active_quests) == 1:
                         quest_id = next(iter(active_quests.keys()))
+                    
+                    # Priority: Questie DB count > Zygor count > default 1
+                    # Questie's data reflects the actual WoW 3.3.5a database, which is
+                    # more accurate than Zygor counts (which may be from a different patch).
+                    count = 1
+                    if quest_id:
+                        questie_count = self.get_collect_count_from_questie(quest_id, item_name)
+                        if questie_count:
+                            count = questie_count
+                        elif zygor_count:
+                            count = zygor_count
+                    elif zygor_count:
+                        count = zygor_count
                     
                     quest_name = None
                     if quest_id:
@@ -1281,16 +1330,23 @@ class ZygorParser:
                     mob_data = self.questie_npcs[step.grind_mob_id]
                     step.hotspots = [Hotspot(x=mob_data['x'], y=mob_data['y'])]
                 
-                # Get mob metadata from Questie or creature_spawns
+                # Get mob metadata from creature_spawns (SPP DB) or Questie
                 if not step.grind_mob_name:
                     if step.grind_mob_id in self.creature_names:
                         step.grind_mob_name = self.creature_names[step.grind_mob_id]
                     elif step.grind_mob_id in self.questie_npcs:
                         step.grind_mob_name = self.questie_npcs[step.grind_mob_id].get('name', '')
+                
+                # Faction: prefer creature_spawns.json (from SPP DB, always accurate)
+                # Fallback: Questie NPC DB (only has quest-related NPCs)
+                if not step.grind_faction_id:
+                    if step.grind_mob_id in self.creature_factions:
+                        step.grind_faction_id = self.creature_factions[step.grind_mob_id]
+                    elif step.grind_mob_id in self.questie_npcs:
+                        step.grind_faction_id = self.questie_npcs[step.grind_mob_id].get('faction_id', 0)
+                
                 if step.grind_mob_id in self.questie_npcs:
                     mob_data = self.questie_npcs[step.grind_mob_id]
-                    if not step.grind_faction_id:
-                        step.grind_faction_id = mob_data.get('faction_id', 0)
                     if not step.grind_min_level:
                         step.grind_min_level = mob_data.get('min_level', 1)
                     if not step.grind_max_level:
@@ -1334,6 +1390,122 @@ class ZygorParser:
                         step.quest_id = past_step.quest_id
                         step.quest_name = past_step.quest_name
                         break
+
+    def assign_missing_grind_factions(self, guide: Guide):
+        """Post-processing: Assign factions to GrindTo areas that still don't have one.
+        
+        Some LevelRequirement steps have no grind_mob_id because there was no
+        kill objective before the |ding line in the Zygor guide. The Zygor guide
+        just says "Kill enemies around this area" without specifying which mob.
+        
+        Strategy:
+        1. Search backwards through steps for the nearest mob_id or target_mob_id
+        2. If not found backwards, search forwards
+        3. Use that mob's faction from creature_factions (SPP DB) or questie_npcs (fallback)
+        4. Also assign the mob_id/name so coordinates can be resolved
+        
+        Must run BEFORE remove_redundant_kill_objectives() so KillMob steps
+        are still available for the backward search.
+        """
+        def _get_any_mob_id(s: 'QuestStep') -> Optional[int]:
+            """Extract any mob reference from a step (kill target, UseItemOn target, etc.)"""
+            if s.mob_id:
+                return s.mob_id
+            if s.target_mob_id and s.target_mob_id > 0:
+                return s.target_mob_id
+            return None
+        
+        def _get_faction_for_mob(mob_id: int) -> Optional[int]:
+            """Get faction from SPP DB, fallback to Questie NPC DB."""
+            if mob_id in self.creature_factions:
+                return self.creature_factions[mob_id]
+            if mob_id in self.questie_npcs:
+                fid = self.questie_npcs[mob_id].get('faction_id', 0)
+                if fid:
+                    return fid
+            return None
+        
+        fixed_count = 0
+        for i, step in enumerate(guide.steps):
+            if step.step_type != "LevelRequirement":
+                continue
+            if step.grind_faction_id:
+                continue
+            
+            # Search backwards for any step with a mob reference
+            found_mob_id = None
+            for j in range(i - 1, -1, -1):
+                mid = _get_any_mob_id(guide.steps[j])
+                if mid:
+                    faction = _get_faction_for_mob(mid)
+                    if faction:
+                        found_mob_id = mid
+                        break
+            
+            # If not found backwards, search forwards
+            if not found_mob_id:
+                for j in range(i + 1, len(guide.steps)):
+                    mid = _get_any_mob_id(guide.steps[j])
+                    if mid:
+                        faction = _get_faction_for_mob(mid)
+                        if faction:
+                            found_mob_id = mid
+                            break
+            
+            if found_mob_id:
+                faction = _get_faction_for_mob(found_mob_id)
+                if faction:
+                    step.grind_faction_id = faction
+                    if not step.grind_mob_id:
+                        step.grind_mob_id = found_mob_id
+                        if found_mob_id in self.creature_names:
+                            step.grind_mob_name = self.creature_names[found_mob_id]
+                        elif found_mob_id in self.questie_npcs:
+                            step.grind_mob_name = self.questie_npcs[found_mob_id].get('name', '')
+                        # Also get world coordinates if available
+                        world_pos = self.get_creature_world_pos(found_mob_id)
+                        if world_pos:
+                            step.hotspots = [Hotspot(x=world_pos['x'], y=world_pos['y'], z=world_pos['z'])]
+                            step.coords_are_world = True
+                    fixed_count += 1
+        
+        if fixed_count > 0:
+            print(f"  Assigned factions to {fixed_count} GrindTo areas (from nearby kill objectives)")
+
+    def remove_redundant_kill_objectives(self, guide: Guide):
+        """Post-processing: Remove KillMob objectives that are redundant with CollectItem.
+        
+        In WoW, quests like "Sarkoth" (790) or "Sting of the Scorpid" (789) have
+        only CollectItem objectives in the quest log. The kills are just the means
+        to obtain the item drops. Zygor lists both "kill X" and "collect Y" lines,
+        but the bot should only track the CollectItem objective.
+        
+        Rule:
+        - If a quest has BOTH Objective (KillMob) AND CollectItem steps → remove KillMob
+        - If a quest has ONLY Objective (KillMob) steps → keep them (genuine kill quest)
+        """
+        # Build a set of quest_ids that have CollectItem objectives
+        quests_with_collect: Set[int] = set()
+        for step in guide.steps:
+            if step.step_type == "CollectItem" and step.quest_id:
+                quests_with_collect.add(step.quest_id)
+        
+        # Remove KillMob objectives for quests that also have CollectItem
+        original_count = len(guide.steps)
+        guide.steps = [
+            step for step in guide.steps
+            if not (
+                step.step_type == "Objective"
+                and step.quest_id
+                and step.mob_id
+                and step.kill_count
+                and step.quest_id in quests_with_collect
+            )
+        ]
+        
+        removed = original_count - len(guide.steps)
+        if removed > 0:
+            print(f"  Removed {removed} redundant KillMob objectives (quest has CollectItem)")
 
 
 # ============================================================================
@@ -1957,6 +2129,8 @@ def main():
         for guide in guides:
             zygor_parser.enrich_with_questie(guide)
             zygor_parser.resolve_unknown_quests(guide)  # Post-process to fix Unknown quests
+            zygor_parser.assign_missing_grind_factions(guide)  # Fix GrindTo without faction (before kill removal)
+            zygor_parser.remove_redundant_kill_objectives(guide)  # Remove KillMob when CollectItem exists
     
     # Generate profiles with V2 generator
     generator = ProfileGeneratorV2(zygor_parser)
