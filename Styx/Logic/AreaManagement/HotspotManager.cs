@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Xml.Linq;
 using Styx.Helpers;
@@ -82,7 +83,7 @@ namespace Styx.Logic.AreaManagement
 											{
 												throw new ProfileException("You have placed the 'Z' attribute before the 'X' and 'Y' attribute!");
 											}
-											if (!float.TryParse(xattribute.Value, out float parsedZ))
+										if (!float.TryParse(xattribute.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float parsedZ))
 											{
 												throw new ProfileAttributeExpectedException<float>(xattribute);
 											}

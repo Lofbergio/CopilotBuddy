@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Xml.Linq;
 using Styx.Helpers;
 using Styx.Logic.Pathing;
@@ -23,19 +24,19 @@ namespace Styx.Logic.AreaManagement
 					if (name == "x")
 					{
 						float val;
-						if (float.TryParse(attr.Value, out val))
+						if (float.TryParse(attr.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out val))
 							x = val;
 					}
 					else if (name == "y")
 					{
 						float val;
-						if (float.TryParse(attr.Value, out val))
+						if (float.TryParse(attr.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out val))
 							y = val;
 					}
 					else if (name == "z")
 					{
 						float val;
-						if (float.TryParse(attr.Value, out val))
+						if (float.TryParse(attr.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out val))
 							z = val;
 					}
 				}
