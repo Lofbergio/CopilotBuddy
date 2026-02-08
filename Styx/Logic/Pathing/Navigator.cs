@@ -323,8 +323,15 @@ namespace Styx.Logic.Pathing
 				return MoveResult.Moved;
 			}
 
-			// If destination changed, generate new path (with throttle to prevent regen spam)
-			if (_destination != destination)
+			// If destination changed significantly, generate new path (with throttle to prevent regen spam)
+			// BUG FIX: Was using exact equality (_destination != destination) which triggers on float
+			// jitter every tick, resetting stuck state mid-unstick sequence ("saute une fois puis rien").
+			// Now uses distance-based comparison: only regen path if destination moved >1 yard.
+			bool destinationChanged = _destination == WoWPoint.Zero || _destination.DistanceSqr(destination) > 1.0f;
+			// Also regen if path was cleared (drift, combat, MaxUnstick) but destination hasn't changed.
+			// In that case we do NOT reset stuck state — the unstick sequence continues.
+			bool needsPathRegen = !destinationChanged && _currentPath.Count == 0;
+			if (destinationChanged || needsPathRegen)
 			{
 				if (!_pathRegenThrottle.IsFinished)
 				{
@@ -336,17 +343,23 @@ namespace Styx.Logic.Pathing
 
 				_destination = destination;
 				_currentPath.Clear();
-				_stuckCheckTimer.Reset();
-				_unstickAttempts = 0;
 
-				// New destination implies a new movement attempt; reset stuck state.
-				try
+				// Only reset stuck state when the destination truly changed.
+				// If we're just regenerating after drift/combat/MaxUnstick, keep stuck state intact
+				// so the unstick sequence (jump 1→2→3→strafe→...) can continue.
+				if (destinationChanged)
 				{
-					StuckHandler.Reset();
-				}
-				catch
-				{
-					// Ignore
+					_stuckCheckTimer.Reset();
+					_unstickAttempts = 0;
+
+					try
+					{
+						StuckHandler.Reset();
+					}
+					catch
+					{
+						// Ignore
+					}
 				}
 
 				// P6.14 — Combat abort: Skip pathfinding entirely if in combat.
@@ -491,7 +504,11 @@ namespace Styx.Logic.Pathing
 				// We clear the path so next MoveTo() call will use the direct-movement shortcut above.
 				if (me.Combat)
 				{
-					_destination = WoWPoint.Zero;
+					// BUG FIX: Don't set _destination = WoWPoint.Zero here.
+					// That caused the next MoveTo() call to see destinationChanged=true,
+					// which reset StuckHandler mid-unstick sequence.
+					// Instead, just clear the path — the destination stays so we don't
+					// reset stuck state when combat ends and we resume the same path.
 					_currentPath.Clear();
 					_currentPathIndex = 0;
 					_currentFlags = null;
@@ -520,8 +537,13 @@ namespace Styx.Logic.Pathing
 							// AUDIT FIX: After MaxUnstickAttempts failed attempts, force path regeneration
 							Logging.Write("[Navigator] {0} unstick attempts failed — forcing path regeneration", _unstickAttempts);
 							_unstickAttempts = 0;
-							_destination = WoWPoint.Zero; // Force new path on next call
+							// Force path regen by clearing path. Keep _destination so we don't
+							// accidentally trigger a full StuckHandler.Reset() on next call.
+							// StuckHandler.Reset() IS appropriate here since we're starting fresh.
+							_currentPath.Clear();
+							_currentPathIndex = 0;
 							_pathRegenThrottle = new WaitTimer(TimeSpan.FromMilliseconds(500)); // Allow immediate regen
+							try { StuckHandler.Reset(); } catch { }
 							return MoveResult.Failed;
 						}
 						StuckHandler.Unstick();
@@ -540,50 +562,23 @@ namespace Styx.Logic.Pathing
 					if (distToSegment > PathPrecision * 5f) // >10 yards off path = stale
 					{
 						Logging.WriteDebug("[Navigator] Player drifted {0:F1}yd from path — regenerating", distToSegment);
-						_destination = WoWPoint.Zero; // Force new path on next call
+						// BUG FIX: Don't set _destination = WoWPoint.Zero here.
+						// That caused destinationChanged=true on next MoveTo(), resetting
+						// StuckHandler mid-unstick sequence. Instead, just clear the path
+						// so it gets regenerated, but keep _destination intact.
+						_currentPath.Clear();
+						_currentPathIndex = 0;
 						_pathRegenThrottle = new WaitTimer(TimeSpan.FromMilliseconds(500)); // Allow immediate regen
 						return MoveResult.Moved;
 					}
 				}
 				
-				// For intermediate waypoints, use PathPrecision (2.0)
-				// For final waypoint, use requested precision
+				// HB 6.2.3 method_27: waypoint reached = 2D distance² ≤ precision² AND |ΔZ| < 4.5
 				bool isFinalPoint = (_currentPathIndex == _currentPath.Count - 1);
 				float waypointPrecision = isFinalPoint ? precision : PathPrecision;
-
-				// Stair entry detection: if the NEXT waypoint has a big elevation change
-				// relative to the CURRENT waypoint, this waypoint is a stair entry/exit point.
-				// Tighten precision to ensure we actually reach it before turning toward stairs.
-				// Without this, the bot turns early (2yd away) and walks into the railing.
-				bool isStairEntryPoint = false;
-				if (!isFinalPoint && _currentPathIndex + 1 < _currentPath.Count)
-				{
-					float nextSegmentZDiff = Math.Abs(_currentPath[_currentPathIndex + 1].Z - nextPoint.Z);
-					if (nextSegmentZDiff > 2.5f)
-					{
-						isStairEntryPoint = true;
-						waypointPrecision = 1.0f; // Must reach within 1yd before advancing to stair waypoint
-					}
-				}
-
-				// Waypoint advance: use 2D distance + Z threshold for flat terrain,
-				// but use 3D distance for elevation changes (stairs/ramps) to avoid
-				// premature advance that changes direction and causes railing collisions.
 				float distance2DSqr = me.Location.Distance2DSqr(nextPoint);
 				float zDiff = Math.Abs(me.Location.Z - nextPoint.Z);
-				
-				bool reachedWaypoint;
-				if (zDiff > 2.0f)
-				{
-					// On stairs: use 3D distance — prevents skipping when Z gap is large
-					float dist3D = me.Location.Distance(nextPoint);
-					reachedWaypoint = dist3D < waypointPrecision + 0.5f;
-				}
-				else
-				{
-					// Flat terrain (or stair entry with tightened precision): 2D distance + Z < 4.5
-					reachedWaypoint = distance2DSqr < waypointPrecision * waypointPrecision && zDiff < 4.5f;
-				}
+				bool reachedWaypoint = distance2DSqr <= waypointPrecision * waypointPrecision && zDiff < 4.5f;
 				
 				if (reachedWaypoint)
 				{
@@ -626,112 +621,25 @@ namespace Styx.Logic.Pathing
 					nextPoint = _currentPath[_currentPathIndex];
 				}
 
-				// =========== STAIR HANDLING IMPROVEMENT ===========
-				// When approaching stairs/ramps, click at the entry/exit point (top or bottom)
-				// instead of clicking at the center of the stair waypoint.
-				// This prevents the character from walking into railings or getting stuck.
-				const float StairZThreshold = 2.5f; // Min Z difference to consider as stair/ramp
-				
+				// HB 6.2.3 method_26: For CTM mover, push waypoint slightly ahead in movement
+				// direction to prevent character from stopping at each intermediate waypoint.
+				// Validate with a single navmesh raycast (if extended point is off-mesh, use exact waypoint).
 				WoWPoint clickPoint = nextPoint;
-				
-				// Check if current segment has significant height change (stair/ramp)
-				float segmentZDiff = Math.Abs(nextPoint.Z - me.Location.Z);
-				float segment2DDist = (float)Math.Sqrt(me.Location.Distance2DSqr(nextPoint));
-				
-				// If there's a significant height change relative to horizontal distance = steep stair
-				if (segmentZDiff > StairZThreshold && segment2DDist > 0.1f)
-				{
-					bool goingUp = nextPoint.Z > me.Location.Z;
-					
-					if (goingUp)
-					{
-						// Going UP stairs: click at the TOP of the stairs (the waypoint itself)
-						// Don't push ahead, use exact waypoint which is at the top
-						clickPoint = nextPoint;
-						
-						// If there's a next waypoint that's roughly at the same level as the top,
-						// we can look ahead to that for smoother movement
-						if (_currentPathIndex + 1 < _currentPath.Count)
-						{
-							WoWPoint afterStair = _currentPath[_currentPathIndex + 1];
-							float zDiffNext = Math.Abs(afterStair.Z - nextPoint.Z);
-							// If next point is at similar height (plateau at top of stairs)
-							if (zDiffNext < 1.0f)
-							{
-								// Click towards the plateau, not center of stairs
-								clickPoint = nextPoint;
-							}
-						}
-					}
-					else
-					{
-						// Going DOWN stairs: click at the BOTTOM of the stairs (the waypoint)
-						// The waypoint is already at the bottom, just use it
-						clickPoint = nextPoint;
-					}
-					
-					// For stairs, don't push the waypoint ahead - click exactly where the stair ends
-					WoWMovement.ClickToMove(clickPoint);
-					return MoveResult.Moved;
-				}
-				// =========== END STAIR HANDLING ===========
 
-				// HB 6.2.3 method_26: Push waypoint ahead by PathPrecision in movement direction,
-				// BUT validate the extended point via navmesh raycast from BOTH the waypoint AND
-				// the player position. This prevents cutting corners near walls/barriers.
-				// Also reduce push near direction changes (turns) to prevent wall grazing.
-				WoWPoint direction = nextPoint - me.Location;
-				float length = (float)Math.Sqrt(direction.X * direction.X + direction.Y * direction.Y + direction.Z * direction.Z);
-				if (length > 0.01f)
+				if (!isFinalPoint)
 				{
-					direction = new WoWPoint(direction.X / length, direction.Y / length, direction.Z / length);
-					
-					// Check if next segment has a significant direction change (turn)
-					float pushDistance = PathPrecision;
-					if (_currentPathIndex + 1 < _currentPath.Count)
+					WoWPoint direction = nextPoint - me.Location;
+					float length = (float)Math.Sqrt(direction.X * direction.X + direction.Y * direction.Y + direction.Z * direction.Z);
+					if (length > 0.01f)
 					{
-						WoWPoint nextNextPoint = _currentPath[_currentPathIndex + 1];
-						WoWPoint nextDir = nextNextPoint - nextPoint;
-						float nextLen = (float)Math.Sqrt(nextDir.X * nextDir.X + nextDir.Y * nextDir.Y + nextDir.Z * nextDir.Z);
-						if (nextLen > 0.01f)
-						{
-							nextDir = new WoWPoint(nextDir.X / nextLen, nextDir.Y / nextLen, nextDir.Z / nextLen);
-							float dot = direction.X * nextDir.X + direction.Y * nextDir.Y;
-							// dot < 0.7 means >45° turn — reduce push to avoid wall grazing
-							if (dot < 0.7f)
-								pushDistance = 0f; // No push at turns — click exact waypoint
-							else if (dot < 0.9f)
-								pushDistance = PathPrecision * 0.5f; // Slight turn — half push
-						}
-					}
-					else
-					{
-						// Final waypoint — no push
-						pushDistance = 0f;
-					}
-					
-					if (pushDistance > 0.01f)
-					{
-						WoWPoint pushedPoint = nextPoint + direction * pushDistance;
+						direction = new WoWPoint(direction.X / length, direction.Y / length, direction.Z / length);
+						WoWPoint pushedPoint = nextPoint + direction * PathPrecision;
 
-						// Double raycast validation (HB 6.2.3 pattern):
-						// 1. Waypoint → pushed point: no wall past the waypoint
-						// 2. Player → pushed point: no wall between player and overshoot target
-						bool clearFromWaypoint = !Raycast(nextPoint, pushedPoint, out _);
-						bool clearFromPlayer = !Raycast(me.Location, pushedPoint, out _);
-						
-						if (clearFromWaypoint && clearFromPlayer)
+						// Single raycast validation: check if pushed point is reachable on navmesh
+						if (!Raycast(nextPoint, pushedPoint, out _))
 						{
 							clickPoint = pushedPoint;
 						}
-						else
-						{
-							clickPoint = nextPoint;
-						}
-					}
-					else
-					{
-						clickPoint = nextPoint;
 					}
 				}
 

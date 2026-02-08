@@ -9,7 +9,8 @@ namespace Styx.Logic.Pathing
 {
     /// <summary>
     /// Handles stuck detection and recovery for WoW 3.3.5a.
-    /// Based on HB 4.3.4 Class471 implementation.
+    /// Direct port of HB 6.2.3 Class469 (MeshNavigator stuck handler).
+    /// Sequence: Dismount → Jump(1x, LOS-gated) → StrafeFwdL → StrafeFwdR → Dismount2 → StrafeL → StrafeR → Blackspot+Reverse
     /// </summary>
     internal class StuckHandler : IStuckHandler
     {
@@ -26,7 +27,7 @@ namespace Styx.Logic.Pathing
         private long _unstickAttemptCount = 1;
 
         private bool _triedDismount;
-        private int _jumpAttempts;
+        private bool _triedJump;
         private bool _triedStrafeForwardLeft;
         private bool _triedStrafeForwardRight;
         private bool _triedStrafeLeft;
@@ -43,7 +44,7 @@ namespace Styx.Logic.Pathing
             if (me == null)
                 return false;
 
-if (me.Stunned || me.Fleeing || me.Dazed || me.Rooted || me.IsFalling)
+            if (me.Stunned || me.Fleeing || me.Dazed || me.Rooted || me.IsFalling)
             {
                 Reset();
                 return false;
@@ -59,12 +60,17 @@ if (me.Stunned || me.Fleeing || me.Dazed || me.Rooted || me.IsFalling)
             WoWPoint currentLocation = me.Location;
             if (_lastCheckLocation != WoWPoint.Empty)
             {
+                float elapsed = (float)_movementStopwatch.Elapsed.TotalSeconds;
                 float expectedDistance = GetExpectedTravelDistance(me, _movementStopwatch.Elapsed) * ExpectedDistanceScale;
-                float? pathDistance = TryGetPathDistance(_lastCheckLocation, currentLocation);
+                // HB uses straight-line distance between old/new position, NOT path-distance.
+                // Path-distance was buggy: returned 2×dist_to_nearest_waypoint for a stationary bot,
+                // which could exceed expectedDistance and prevent stuck detection entirely.
+                float actualDistance = _lastCheckLocation.Distance(currentLocation);
 
-                if (pathDistance.HasValue && pathDistance.Value < expectedDistance)
+                if (actualDistance < expectedDistance)
                 {
-                    Logging.WriteDebug("[STUCK] Movement stalled.");
+                    Logging.WriteDebug("[STUCK] Movement stalled — moved {0:F1}yd in {1:F1}s (expected {2:F1}yd).",
+                        actualDistance, elapsed, expectedDistance);
                     _movementStopwatch.Restart();
                     _lastCheckLocation = currentLocation;
                     return true;
@@ -110,44 +116,54 @@ if (me.Stunned || me.Fleeing || me.Dazed || me.Rooted || me.IsFalling)
                 }
                 _triedDismount = true;
             }
-            else if (_jumpAttempts < 3)
+            else if (!_triedJump)
             {
-                // HB 4.3.4 Class479: always try jumping when stuck — jumping IS the
-                // mechanism to clear small obstacles. No LOS gate on the jump itself.
-                Logging.WriteDebug("[STUCK] Jump attempt {0}/3 while moving forward.", _jumpAttempts + 1);
-                PerformJump();
-                _jumpAttempts++;
+                // HB 6.2.3 Class469: ONE jump attempt, only if forward path is clear (LOS check).
+                // If blocked ahead, jumping won't help — skip straight to strafe.
+                WoWPoint fwd = location.RayCast(rotation, JumpRaycastDistance).Add(0f, 0f, 2f);
+                WoWPoint src = location.Add(0f, 0f, 2f);
+
+                if (GameWorld.IsInLineOfSight(src, fwd))
+                {
+                    Logging.WriteDebug("[STUCK] Jump attempt — forward path clear, jumping over obstacle.");
+                    WoWMovement.Move(WoWMovement.MovementDirection.Forward | WoWMovement.MovementDirection.JumpAscend);
+                    Thread.Sleep(100);
+                    WoWMovement.MoveStop(WoWMovement.MovementDirection.Forward | WoWMovement.MovementDirection.JumpAscend);
+                    Thread.Sleep(200);
+                }
+                else
+                {
+                    Logging.WriteDebug("[STUCK] Jump skipped — forward path blocked, will try strafe.");
+                }
+                _triedJump = true;
             }
             else if (!_triedStrafeForwardLeft)
             {
-                // HB pattern: Strafe to the side using raycast to find best direction
-                Logging.WriteDebug("[STUCK] Trying strafe forward left for {0}ms", duration);
+                Logging.WriteDebug("[STUCK] Trying strafe forward-left for {0}ms.", duration);
                 MoveInDirection(WoWMovement.MovementDirection.Forward | WoWMovement.MovementDirection.StrafeLeft, duration);
                 _triedStrafeForwardLeft = true;
             }
             else if (!_triedStrafeForwardRight)
             {
-                Logging.WriteDebug("[STUCK] Trying strafe forward right for {0}ms", duration);
+                Logging.WriteDebug("[STUCK] Trying strafe forward-right for {0}ms.", duration);
                 MoveInDirection(WoWMovement.MovementDirection.Forward | WoWMovement.MovementDirection.StrafeRight, duration);
                 _triedStrafeForwardRight = true;
             }
             else if (me.Mounted)
             {
-                Logging.WriteDebug("[STUCK] Trying dismount.");
+                Logging.WriteDebug("[STUCK] Still mounted after strafe attempts — dismounting.");
                 Mount.Dismount("[STUCK] Dismounting to navigate obstacle");
             }
             else if (!_triedStrafeLeft)
             {
-                Logging.WriteDebug("[STUCK] Trying strafe left for {0}ms", duration);
+                Logging.WriteDebug("[STUCK] Trying strafe left for {0}ms.", duration);
                 MoveInDirection(WoWMovement.MovementDirection.StrafeLeft, duration);
-                RefreshClickToMove();
                 _triedStrafeLeft = true;
             }
             else if (!_triedStrafeRight)
             {
-                Logging.WriteDebug("[STUCK] Trying strafe right for {0}ms", duration);
+                Logging.WriteDebug("[STUCK] Trying strafe right for {0}ms.", duration);
                 MoveInDirection(WoWMovement.MovementDirection.StrafeRight, duration);
-                RefreshClickToMove();
                 _triedStrafeRight = true;
             }
             else
@@ -157,31 +173,6 @@ if (me.Stunned || me.Fleeing || me.Dazed || me.Rooted || me.IsFalling)
             }
 
             _movementStopwatch.Restart();
-        }
-
-        /// <summary>
-        /// Performs a jump while moving forward, like HB 4.3.4 Class479/Class485.
-        /// Uses WoWMovement.Move(Forward | JumpAscend) instead of Lua — matches HB exactly.
-        /// </summary>
-        private void PerformJump()
-        {
-            // HB pattern: Forward + JumpAscend combined, 100ms pulse, then stop both
-            WoWMovement.Move(WoWMovement.MovementDirection.Forward | WoWMovement.MovementDirection.JumpAscend);
-            Thread.Sleep(100);
-            WoWMovement.MoveStop(WoWMovement.MovementDirection.Forward | WoWMovement.MovementDirection.JumpAscend);
-            Thread.Sleep(200);
-
-            // Wait for landing (max 1.5s — HB Class485 uses 750ms total, we give a bit more)
-            var me = ObjectManager.Me;
-            int startTick = Environment.TickCount;
-            while (me != null && me.IsFalling && (Environment.TickCount - startTick) < 1500)
-            {
-                Thread.Sleep(50);
-            }
-
-            // Re-issue ClickToMove to current waypoint after jump (HB Class472 pattern)
-            RefreshClickToMove();
-            Thread.Sleep(100);
         }
 
         public void Reset()
@@ -195,20 +186,22 @@ if (me.Stunned || me.Fleeing || me.Dazed || me.Rooted || me.IsFalling)
         private void ResetUnstickAttempts()
         {
             _triedDismount = false;
-            _jumpAttempts = 0;
+            _triedJump = false;
             _triedStrafeForwardLeft = false;
             _triedStrafeForwardRight = false;
             _triedStrafeLeft = false;
             _triedStrafeRight = false;
         }
 
+        /// <summary>
+        /// HB 6.2.3 pattern: Move → Sleep(duration) → MoveStop → Sleep(200).
+        /// </summary>
         private void MoveInDirection(WoWMovement.MovementDirection direction, int milliseconds)
         {
             WoWMovement.Move(direction);
-            RefreshClickToMove();
             Thread.Sleep(milliseconds);
             WoWMovement.MoveStop(direction);
-            Thread.Sleep(100);
+            Thread.Sleep(200);
         }
 
         private void AddBlackspotAndReverse(int milliseconds)
@@ -217,12 +210,8 @@ if (me.Stunned || me.Fleeing || me.Dazed || me.Rooted || me.IsFalling)
             if (me == null)
                 return;
 
-            // HB 4.3.4 Class472.method_7 pattern:
-            // Add a global blackspot at current location with radius 4 and height 5
-            Logging.WriteDebug("[STUCK] Adding global blackspot at current location.");
+            Logging.WriteDebug("[STUCK] All attempts failed — adding blackspot and reversing.");
             BlackspotManager.AddGlobalBlackspot(me.Location, 4f, 5f);
-
-            Logging.WriteDebug("[STUCK] Moving backwards for {0}ms", milliseconds);
             WoWMovement.MoveStop();
             Thread.Sleep(100);
             WoWMovement.Move(WoWMovement.MovementDirection.Backwards);
@@ -230,38 +219,8 @@ if (me.Stunned || me.Fleeing || me.Dazed || me.Rooted || me.IsFalling)
             WoWMovement.MoveStop();
             Thread.Sleep(200);
 
-            Logging.WriteDebug("[STUCK] Clearing current path to regenerate around stuck location.");
+            Logging.WriteDebug("[STUCK] Clearing path to regenerate around blackspot.");
             Navigator.Clear();
-        }
-
-        private void RefreshClickToMove()
-        {
-            try
-            {
-                var currentPath = Navigator.CurrentPath;
-                var me = ObjectManager.Me;
-                if (currentPath != null && currentPath.Count > 0 && me != null)
-                {
-                    int currentIndex = 0;
-                    for (int i = 0; i < currentPath.Count; i++)
-                    {
-                        if (me.Location.Distance(currentPath[i]) < Navigator.PathPrecision)
-                        {
-                            currentIndex = Math.Min(i + 1, currentPath.Count - 1);
-                            break;
-                        }
-                    }
-                    
-                    if (currentIndex < currentPath.Count)
-                    {
-                        WoWMovement.ClickToMove(currentPath[currentIndex]);
-                    }
-                }
-            }
-            catch
-            {
-                // Ignore
-            }
         }
 
         private float GetExpectedTravelDistance(Styx.WoWInternals.WoWObjects.LocalPlayer me, TimeSpan timeSpan)
@@ -271,61 +230,12 @@ if (me.Stunned || me.Fleeing || me.Dazed || me.Rooted || me.IsFalling)
                 speed = me.MovementInfo.SwimSpeed;
             else if (me.MovementInfo.IsFlying)
                 speed = me.MovementInfo.FlySpeed;
-            else if (me.Mounted)
-                speed = me.MovementInfo.RunSpeed; // RunSpeed already includes mount speed buff
             else
                 speed = me.MovementInfo.RunSpeed;
 
             return speed * (float)timeSpan.TotalSeconds;
         }
 
-        private float? TryGetPathDistance(WoWPoint from, WoWPoint to)
-        {
-            var path = Navigator.CurrentPath;
-            if (path == null || path.Count == 0)
-                return from.Distance(to);
 
-            int fromIndex = FindClosestPathIndex(from, path);
-            int toIndex = FindClosestPathIndex(to, path);
-            if (fromIndex < 0 || toIndex < 0)
-                return from.Distance(to);
-
-            float distance = from.Distance(path[fromIndex]) + to.Distance(path[toIndex]);
-
-            if (fromIndex <= toIndex)
-            {
-                for (int i = fromIndex; i < toIndex; i++)
-                {
-                    distance += path[i].Distance(path[i + 1]);
-                }
-            }
-            else
-            {
-                for (int i = fromIndex; i > toIndex; i--)
-                {
-                    distance += path[i].Distance(path[i - 1]);
-                }
-            }
-
-            return distance;
-        }
-
-        private int FindClosestPathIndex(WoWPoint point, System.Collections.Generic.IList<WoWPoint> path)
-        {
-            int closestIndex = -1;
-            float closestDistance = float.MaxValue;
-
-            for (int i = 0; i < path.Count; i++)
-            {
-                float distance = point.Distance(path[i]);
-                if (distance < closestDistance)
-                {
-                    closestDistance = distance;
-                    closestIndex = i;
-                }
-            }
-
-            return closestIndex;
-        }
     }
 }
