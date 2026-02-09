@@ -27,7 +27,7 @@ namespace CommonBehaviors.Actions
 
 			if (botPoi.Location == WoWPoint.Zero)
 			{
-				Logging.Write("ActionMoveToPoi: I don't want to move to (0,0,0)");
+				Logging.Write("I don't want to move to (0, 0, 0).");
 				_hasLoggedMove = false;
 				return RunStatus.Failure;
 			}

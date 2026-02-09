@@ -280,7 +280,7 @@ namespace Styx.Logic
 			// If vendor doesn't sell food or drink, blacklist it
 			if (bestDrinkIndex == -1 && bestFoodIndex == -1)
 			{
-				Logging.Write("[Vendors] Vendor does not sell food or water. Blacklisting it.");
+				Logging.Write("Vendor does not sell food or water. Blacklisting it.");
 				ProfileManager.CurrentProfile?.VendorManager?.Blacklist.Add(BotPoi.Current.AsVendor);
 				BotPoi.Clear("Blacklisted Vendor");
 				return;
@@ -293,7 +293,7 @@ namespace Styx.Logic
 				var drinkItem = _merchantFrame.GetMerchantItemByIndex(bestDrinkIndex);
 				if (drinkItem != null)
 				{
-					Logging.Write("[Vendors] Buying {0}x {1}", CharacterSettings.Instance.DrinkAmount, drinkItem.Name);
+					Logging.Write("Buying {0}x {1}", CharacterSettings.Instance.DrinkAmount, drinkItem.Name);
 					_merchantFrame.BuyItem(bestDrinkIndex, CharacterSettings.Instance.DrinkAmount);
 				}
 			}
@@ -305,7 +305,7 @@ namespace Styx.Logic
 				var foodItem = _merchantFrame.GetMerchantItemByIndex(bestFoodIndex);
 				if (foodItem != null)
 				{
-					Logging.Write("[Vendors] Buying {0}x {1}", CharacterSettings.Instance.FoodAmount, foodItem.Name);
+					Logging.Write("Buying {0}x {1}", CharacterSettings.Instance.FoodAmount, foodItem.Name);
 					_merchantFrame.BuyItem(bestFoodIndex, CharacterSettings.Instance.FoodAmount);
 				}
 			}

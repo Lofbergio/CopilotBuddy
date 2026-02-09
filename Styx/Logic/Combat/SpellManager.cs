@@ -40,41 +40,34 @@ namespace Styx.Logic.Combat
 
 		public static void Refresh()
 		{
-			Logging.Write("[SpellManager] Refresh() called. LastCount={0}, CurrentCount={1}", _lastKnownSpellCount, NumKnownSpells);
+			Logging.WriteDebug("Refresh() called. LastCount={0}, CurrentCount={1}", _lastKnownSpellCount, NumKnownSpells);
 			
 			if (_lastKnownSpellCount == 0 || NumKnownSpells != _lastKnownSpellCount)
 			{
-				Logging.Write("[SpellManager] Refreshing known spells...");
+				Logging.Write("Building spell book");
 				_knownSpells.Clear();
 
 				LocalPlayer? me = StyxWoW.Me;
 				if (me == null)
 				{
-					Logging.Write("[SpellManager] ERROR: LocalPlayer is null!");
+					Logging.WriteDebug("ERROR: LocalPlayer is null!");
 					return;
 				}
 
 				var knownSpells = me.KnownSpells;
-				Logging.Write("[SpellManager] Found {0} spells from LocalPlayer.KnownSpells", knownSpells.Count);
+				Logging.WriteDebug("Found {0} spells from LocalPlayer.KnownSpells", knownSpells.Count);
 				
 				foreach (WoWSpell spell in knownSpells)
 				{
 					if (!_knownSpells.ContainsKey(spell.Name))
 					{
 						_knownSpells.Add(spell.Name, spell);
+						Logging.Write("Adding {0}", spell.Name);
 					}
 				}
 
 				_lastKnownSpellCount = NumKnownSpells;
-				Logging.Write("[SpellManager] Spell refresh complete. {0} unique spells loaded.", _knownSpells.Count);
-				
-				// Log first few spells for debugging
-				int count = 0;
-				foreach (var kvp in _knownSpells)
-				{
-					if (count++ < 10)
-						Logging.WriteDebug("[SpellManager] Spell: {0} (ID: {1})", kvp.Key, kvp.Value.Id);
-				}
+				Logging.Write("Spell book built");
 			}
 		}
 

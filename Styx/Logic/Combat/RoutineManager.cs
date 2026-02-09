@@ -42,11 +42,11 @@ namespace Styx.Logic.Combat
 		{
 			string routinesPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Routines");
 			
-			Logging.Write("[RoutineManager] Looking for routines in: {0}", routinesPath);
+			Logging.WriteDebug("Looking for routines in: {0}", routinesPath);
 			
 			if (!Directory.Exists(routinesPath))
 			{
-				Logging.Write("[RoutineManager] Routines folder not found, creating it...");
+				Logging.WriteDebug("Routines folder not found, creating it...");
 				Directory.CreateDirectory(routinesPath);
 				return;
 			}
@@ -57,11 +57,11 @@ namespace Styx.Logic.Combat
 				
 				if (csFiles.Length == 0)
 				{
-					Logging.Write("[RoutineManager] No .cs files found in Routines folder");
+					Logging.WriteDebug("No .cs files found in Routines folder");
 					return;
 				}
 
-				Logging.Write("[RoutineManager] Found {0} routine source files, compiling...", csFiles.Length);
+				Logging.Write("Compiling {0} routine source files...", csFiles.Length);
 
 				try
 				{
@@ -70,15 +70,15 @@ namespace Styx.Logic.Combat
 					foreach (CombatRoutine routine in loadedRoutines)
 					{
 						_routines.Add(routine);
-						Logging.Write("[RoutineManager] Loaded routine: {0} for class {1}", 
+						Logging.Write("Loaded routine: {0} for class {1}", 
 							routine.Name ?? "Unknown", routine.Class);
 					}
 					
-					Logging.Write("[RoutineManager] Compilation complete. Loaded {0} combat routine(s)", _routines.Count);
+					Logging.Write("Compilation complete. Loaded {0} combat routine(s)", _routines.Count);
 				}
 				catch (InvalidOperationException ex)
 				{
-					Logging.Write("[RoutineManager] COMPILATION ERROR:");
+					Logging.Write("COMPILATION ERROR:");
 					foreach (var line in ex.Message.Split(new[] { Environment.NewLine }, StringSplitOptions.RemoveEmptyEntries))
 					{
 						Logging.Write("  {0}", line);
@@ -86,7 +86,7 @@ namespace Styx.Logic.Combat
 				}
 				catch (Exception ex)
 				{
-					Logging.Write("[RoutineManager] Failed to compile routines: {0}", ex.Message);
+					Logging.Write("Failed to compile routines: {0}", ex.Message);
 					Logging.WriteException(ex);
 				}
 			}
@@ -100,7 +100,7 @@ namespace Styx.Logic.Combat
 		{
 			if (ObjectManager.Me == null)
 			{
-				Logging.Write("[RoutineManager] Cannot select routine - player not available");
+				Logging.Write("Cannot select routine - player not available");
 				_current = new DefaultCombatRoutine();
 				return;
 			}
@@ -112,16 +112,17 @@ namespace Styx.Logic.Combat
 				if (routine.Class == playerClass)
 				{
 					_current = routine;
-					Logging.Write("Selected Combat Routine: {0} for {1}", routine.Name, playerClass);
+					Logging.Write("Chose {0} as your combat class.", routine.Name);
+					Logging.Write("Confirmed {0} as your class.", playerClass);
 					
 					try
 					{
 						routine.Initialize();
-						Logging.Write("[RoutineManager] Routine initialized successfully");
+						Logging.WriteDebug("Routine initialized successfully");
 					}
 					catch (Exception ex)
 					{
-						Logging.Write("[RoutineManager] Routine Initialize() failed: {0}", ex.Message);
+						Logging.Write("Routine Initialize() failed: {0}", ex.Message);
 						Logging.WriteException(ex);
 					}
 					return;
@@ -129,7 +130,7 @@ namespace Styx.Logic.Combat
 			}
 			
 			// No matching routine found
-			Logging.Write("No Combat Routine found for {0}. Using default.", playerClass);
+			Logging.Write("Could not find a routine fitting for your class. Using default.");
 			_current = new DefaultCombatRoutine();
 		}
 

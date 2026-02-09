@@ -31,7 +31,7 @@ namespace Styx.Logic.Profiles
 			}
 			else
 			{
-				Logging.Write("No profile loaded.");
+				Logging.Write("We either outleveled the currently loaded profile, or something has gone terribly wrong. Can't find a new sub-profile to use.");
 			}
 		}
 
@@ -91,7 +91,7 @@ namespace Styx.Logic.Profiles
 
 		private static void OnLevelUp(BotEvents.Player.LevelUpEventArgs args)
 		{
-			Logging.Write("Level up! Checking for new profile...");
+			Logging.Write("We leveled up! Checking if we need to switch profiles.");
 			LoadProfileForLevel();
 		}
 

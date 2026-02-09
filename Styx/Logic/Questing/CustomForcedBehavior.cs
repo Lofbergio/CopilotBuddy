@@ -371,7 +371,7 @@ public abstract class CustomForcedBehavior
     this.WarnUnusedAttributes();
     if (this.IsAttributeProblem)
     {
-      this.LogMessage("error", "Stopping Honorbuddy.  Please repair the profile!");
+      this.LogMessage("error", "Stopping CopilotBuddy.  Please repair the profile!");
       TreeRoot.Stop();
     }
     else
@@ -422,7 +422,7 @@ public abstract class CustomForcedBehavior
       Logging.Write(messageColor.Value, message);
     if (!(messageType == "(fatal)"))
       return;
-    Logging.Write(Color.Red, "Fatal error. Stopping Honorbuddy.");
+    Logging.Write(Color.Red, "Fatal error. Stopping CopilotBuddy.");
     TreeRoot.Stop();
   }
 

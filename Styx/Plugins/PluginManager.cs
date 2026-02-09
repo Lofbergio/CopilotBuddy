@@ -155,7 +155,7 @@ namespace Styx.Plugins
                     }
                     catch (CompilerErrorsException ex)
                     {
-                        Logging.Write("Could not compile plugin: {0}", files[i]);
+                        Logging.Write("Plugin from {0} could not be compiled. Compiler errors:", files[i]);
                         Logging.Write(ex.ToString());
                     }
                     catch (Exception ex)

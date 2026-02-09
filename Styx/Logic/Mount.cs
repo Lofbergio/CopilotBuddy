@@ -58,13 +58,13 @@ namespace Styx.Logic
 			if (me == null) return;
 
 			if (!string.IsNullOrEmpty(reason))
-				Logging.Write("[Mount] Dismounting: {0}", reason);
+				Logging.WriteDebug("Stop and dismount. Reason: {0}", reason);
 
 			ShapeshiftForm shapeshift = me.Shapeshift;
 			if (me.Mounted || shapeshift == ShapeshiftForm.FlightForm || shapeshift == ShapeshiftForm.EpicFlightForm)
 			{
 				if (string.IsNullOrEmpty(reason))
-					Logging.Write("[Mount] Dismounting...");
+					Logging.WriteDebug("Stop and dismount.");
 					
 				WoWMovement.MoveStop();
 
@@ -98,7 +98,7 @@ namespace Styx.Logic
 				{
 					var mount = groundMounts[_random.Next(0, groundMounts.Count)];
 					CharacterSettings.Instance.MountName = mount.CreatureSpellId.ToString();
-					Logging.WriteDebug("[Mount] Auto-detected random ground mount: {0}", mount.Name);
+					Logging.WriteDebug("Auto-detected random ground mount: {0}", mount.Name);
 				}
 
 				var flyingMounts = MountHelper.FlyingMounts;
@@ -106,7 +106,7 @@ namespace Styx.Logic
 				{
 					var mount = flyingMounts[_random.Next(0, flyingMounts.Count)];
 					CharacterSettings.Instance.FlyingMountName = mount.CreatureSpellId.ToString();
-					Logging.WriteDebug("[Mount] Auto-detected random flying mount: {0}", mount.Name);
+					Logging.WriteDebug("Auto-detected random flying mount: {0}", mount.Name);
 				}
 			}
 			else
@@ -120,7 +120,7 @@ namespace Styx.Logic
 					{
 						var mount = groundMounts[0];
 						CharacterSettings.Instance.MountName = mount.CreatureSpellId.ToString();
-						Logging.WriteDebug("[Mount] Auto-detected ground mount: {0}", mount.Name);
+						Logging.WriteDebug("Auto-detected ground mount: {0}", mount.Name);
 					}
 				}
 
@@ -132,7 +132,7 @@ namespace Styx.Logic
 					{
 						var mount = flyingMounts[0];
 						CharacterSettings.Instance.FlyingMountName = mount.CreatureSpellId.ToString();
-						Logging.WriteDebug("[Mount] Auto-detected flying mount: {0}", mount.Name);
+						Logging.WriteDebug("Auto-detected flying mount: {0}", mount.Name);
 					}
 				}
 			}
@@ -174,7 +174,7 @@ namespace Styx.Logic
 				return;
 
 			WoWMovement.MoveStop();
-			Logging.WriteDebug("[Mount] Mounting up: {0}", LevelbotSettings.Instance.MountName);
+			Logging.Write("Mounting: {0}", LevelbotSettings.Instance.MountName);
 			Thread.Sleep(200);
 
 			DoMount();
@@ -303,7 +303,7 @@ namespace Styx.Logic
 			if (!_cantMountSpots.Contains(location))
 			{
 				_cantMountSpots.Add(location);
-				Logging.WriteDebug("[Mount] Added can't mount spot at: {0}", location);
+				Logging.WriteDebug("Added can't mount spot at: {0}", location);
 			}
 		}
 
@@ -363,7 +363,7 @@ namespace Styx.Logic
 			// Dismount if in combat and not moving
 			if (me.Combat && !me.IsMoving)
 			{
-				Logging.WriteDebug("[Mount] Dismounting - in combat and not moving");
+				Logging.WriteDebug("Dismount for attacker.");
 				return true;
 			}
 
@@ -378,7 +378,7 @@ namespace Styx.Logic
 			{
 				if (distance <= 100f && Targeting.Instance.FirstUnit != null)
 				{
-					Logging.WriteDebug("[Mount] Dismounting - near hotspot with target");
+					Logging.WriteDebug("Dismount to pull near hotspot.");
 					return true;
 				}
 			}
@@ -388,7 +388,7 @@ namespace Styx.Logic
 			{
 				if (distance <= CharacterSettings.Instance.PullDistance)
 				{
-					Logging.WriteDebug("[Mount] Dismounting - near kill POI");
+					Logging.WriteDebug("Dismount to kill bot poi.");
 					return true;
 				}
 			}
@@ -404,7 +404,7 @@ namespace Styx.Logic
 			{
 				if (distance <= 10f)
 				{
-					Logging.WriteDebug("[Mount] Dismounting - near interaction POI");
+					Logging.WriteDebug("Dismount for interaction.");
 					return true;
 				}
 			}
@@ -429,7 +429,7 @@ namespace Styx.Logic
 				OnMountUp?.Invoke(null, args);
 				if (args.Cancel)
 				{
-					Logging.WriteDebug("[Mount] Mount-up cancelled by event handler");
+					Logging.WriteDebug("Mount-up cancelled by event handler");
 					Dismount("cancelled by event handler");
 					_wasMounted = false;
 					return;

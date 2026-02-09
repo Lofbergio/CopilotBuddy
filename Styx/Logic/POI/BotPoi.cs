@@ -117,11 +117,11 @@ namespace Styx.Logic.POI
 				_current = value ?? new BotPoi(PoiType.None);
 				if (_current.Type == PoiType.None)
 				{
-					Logging.WriteDebug("Clearing current POI");
+					Logging.WriteDebug("Cleared POI");
 				}
 				else
 				{
-					Logging.WriteDebug("Setting current POI to: {0}", value);
+					Logging.WriteDebug("Changed POI to: {0}", value);
 				}
 			}
 		}
@@ -258,7 +258,7 @@ namespace Styx.Logic.POI
 		{
 			if (!string.IsNullOrEmpty(reason))
 			{
-				Logging.WriteDebug("Clearing current POI: {0}", reason);
+				Logging.WriteDebug("Cleared POI - Reason {0}", reason);
 			}
 			Current = new BotPoi(PoiType.None);
 		}

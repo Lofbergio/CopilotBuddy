@@ -33,11 +33,11 @@ namespace CommonBehaviors.Actions
 
 			if (targetObject == null)
 			{
-				Logging.WriteDebug("ActionInteract: Trying to interact with a null object");
+				Logging.WriteDebug("Trying to interact with a null object. Wtf.");
 				return RunStatus.Failure;
 			}
 
-			Logging.WriteDebug("ActionInteract: Interacting with {0}", targetObject.Name);
+			Logging.WriteDebug("Interacting with {0}", targetObject.Name);
 			targetObject.Interact(_ignoreInteractTimer);
 			return RunStatus.Success;
 		}

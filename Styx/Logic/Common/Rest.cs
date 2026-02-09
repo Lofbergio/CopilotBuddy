@@ -60,13 +60,14 @@ public static class Rest
             var foodCount = Lua.GetReturnVal<int>($"return GetItemCount(\"{LevelbotSettings.Instance.FoodName}\")", 0);
             if (foodCount > 0)
             {
+                Logging.Write("Eating {0}", LevelbotSettings.Instance.FoodName);
                 Lua.DoString($"UseItemByName(\"{LevelbotSettings.Instance.FoodName}\")");
                 NoFood = false;
             }
             else
             {
                 NoFood = true;
-                Logging.Write($"No {LevelbotSettings.Instance.FoodName} in bags!");
+                Logging.Write("No {0} in bags.", LevelbotSettings.Instance.FoodName);
             }
         }
 
@@ -79,12 +80,13 @@ public static class Rest
             if (drinkCount > 0)
             {
                 NoDrink = false;
+                Logging.Write("Drinking {0}", LevelbotSettings.Instance.DrinkName);
                 Lua.DoString($"UseItemByName(\"{LevelbotSettings.Instance.DrinkName}\")");
             }
             else
             {
                 NoDrink = true;
-                Logging.Write($"No {LevelbotSettings.Instance.DrinkName} in bags!");
+                Logging.Write("No {0} in bags.", LevelbotSettings.Instance.DrinkName);
             }
         }
 
@@ -126,13 +128,13 @@ public static class Rest
         WoWItem food = Consumable.GetBestFood(false);
         if (food != null)
         {
-            Logging.WriteDebug($"Using food: {food.Name}");
+            Logging.Write("Eating {0}", food.Name);
             food.UseContainerItem();
         }
         else
         {
             NoFood = true;
-            Logging.Write("No food found in bags!");
+            Logging.Write("Could not find any food to eat.");
         }
     }
 
@@ -150,13 +152,13 @@ public static class Rest
         WoWItem drink = Consumable.GetBestDrink(false);
         if (drink != null)
         {
-            Logging.WriteDebug($"Using drink: {drink.Name}");
+            Logging.Write("Drinking {0}", drink.Name);
             drink.UseContainerItem();
         }
         else
         {
             NoDrink = true;
-            Logging.Write("No drink found in bags!");
+            Logging.Write("Could not find any water to drink.");
         }
     }
 }

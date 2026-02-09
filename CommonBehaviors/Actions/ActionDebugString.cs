@@ -1,3 +1,4 @@
+using Styx.Helpers;
 using TreeSharp;
 
 namespace CommonBehaviors.Actions
@@ -22,6 +23,11 @@ namespace CommonBehaviors.Actions
 			if (_stringDelegate != null)
 			{
 				_message = _stringDelegate(context);
+			}
+
+			if (!string.IsNullOrEmpty(_message))
+			{
+				Logging.WriteDiagnostic(_message);
 			}
 
 			return Parent != null && Parent is Selector ? RunStatus.Failure : RunStatus.Success;
