@@ -321,7 +321,12 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
-                return InstanceDeathLocation != WoWPoint.Empty ? InstanceDeathLocation : CorpsePoint;
+                // HB 4.3.4 pattern: BotEvents sets InstanceDeathLocation from dungeon map DB
+                // when player dies inside an instance, and clears it to Empty otherwise.
+                // WoWPoint.Empty = (NaN,NaN,NaN), WoWPoint.Zero = (0,0,0) — both mean "no value".
+                if (InstanceDeathLocation != WoWPoint.Empty && InstanceDeathLocation != WoWPoint.Zero)
+                    return InstanceDeathLocation;
+                return WoWPoint.Empty;
             }
         }
         
