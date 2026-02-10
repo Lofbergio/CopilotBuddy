@@ -202,7 +202,13 @@ namespace Styx.Logic.Pathing
 
 		public bool Equals(WoWPoint other)
 		{
-			return X == other.X && Y == other.Y && Z == other.Z;
+			// NaN-aware: two NaN values compare equal (for WoWPoint.Empty sentinel).
+			// In IEEE 754, NaN != NaN, but we need Empty == Empty to return true
+			// so that checks like 'InstanceCorpseLocation != WoWPoint.Empty' work correctly.
+			bool xEq = X == other.X || (float.IsNaN(X) && float.IsNaN(other.X));
+			bool yEq = Y == other.Y || (float.IsNaN(Y) && float.IsNaN(other.Y));
+			bool zEq = Z == other.Z || (float.IsNaN(Z) && float.IsNaN(other.Z));
+			return xEq && yEq && zEq;
 		}
 
 		public override bool Equals(object? obj)
