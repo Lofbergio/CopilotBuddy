@@ -30,21 +30,23 @@ namespace Styx.Logic.Pathing
 		private static int _unstickAttempts; // AUDIT FIX: Max retry counter to prevent infinite unstick loops
 		private const int MaxUnstickAttempts = 5; // After 5 failed unsticks, force path regeneration
 
+		// Path drift suppression after an initial node skip.
+		// We may set _currentPathIndex > 0 immediately after generating a new path (HB 6.2.3 method_14).
+		// Our drift detection (P6.7) would otherwise see the player "far from segment" and regen endlessly.
+		private static bool _suppressDriftCheck;
+		private static int _suppressDriftCheckIndex;
+
 		// Elevator sequence tracking (HB 6.2.3: once method_18 enters method_20, the elevator
 		// handler keeps being called every tick via the path index — no re-checking player
 		// position vs offmesh start). This flag locks the bot into elevator mode.
 		private static bool _inElevatorSequence;
 		private static WoWPoint _elevatorTarget = WoWPoint.Zero;
-
-		// Elevator movement tracking (HB 6.2.3 method_20: poll every 400ms to detect moving/stopped)
-		private static WoWPoint _lastElevatorPos = WoWPoint.Zero;
-		private static WaitTimer _elevatorPollTimer = new WaitTimer(TimeSpan.FromMilliseconds(400));
-		private static bool _isElevatorMoving;
-		private static DateTime _elevatorWaitStart = DateTime.MinValue; // Timeout for elevator wait
-		// Elevator ride direction tracking — used to detect stop at destination level
-		private static float _lastRideZ;           // playerZ from previous tick while riding
-		private static bool _elevatorHasMoved;     // True once playerZ changes significantly from boarding
-		private static bool _elevatorExitRequested; // True once direction reversal detected → walk off
+		// HB 4.3.4 MeshNavigator.bool_0: state flag used by elevator off-mesh logic
+		private static bool _hbElevatorFlag;
+		// Track whether the current path is partial (navmesh doesn't fully connect start→dest).
+		// HB 6.2.3 method_24: returns MoveResult.Failed when reaching end of a partial path,
+		// instead of ReachedDestination, so the behavior tree knows the bot isn't at the goal.
+		private static bool _isPartialPath;
 
 		// WotLK no-fly zone IDs — areas where flying is forbidden or problematic
 		private static readonly HashSet<uint> _noFlyZoneIds = new HashSet<uint>
@@ -111,7 +113,6 @@ namespace Styx.Logic.Pathing
 				if (_navigator == null)
 				{
 					_navigator = new TripperNav.Navigator();
-					_navigator.LogMessage += msg => Logging.WriteDebug("[Tripper] {0}", msg);
 				}
 				return _navigator;
 			}
@@ -124,7 +125,6 @@ namespace Styx.Logic.Pathing
 
 		static Navigator()
 		{
-			Logging.WriteDebug("[Navigator] Static constructor called - subscribing to events");
 			BotEvents.Player.OnMapChanged += OnMapChanged;
 			BotEvents.OnBotStart += OnBotStart;
 			BotEvents.OnBotStop += OnBotStop;
@@ -141,7 +141,6 @@ namespace Styx.Logic.Pathing
 			if (_ridingElevator)
 			{
 				e.Cancel = true;
-				Logging.WriteDebug("[Navigator] Cancelled mount-up while riding elevator");
 			}
 		}
 
@@ -167,42 +166,31 @@ namespace Styx.Logic.Pathing
 		private static void OnMapChanged(BotEvents.Player.MapChangedEventArgs args)
 		{
 			Clear();
-			Logging.WriteDebug("[Navigator] Changed map(s) from {0} to {1}. Path cleared.", args.OldMapId, args.NewMapId);
 		}
 
 		private static void OnBotStart(EventArgs args)
 		{
-			Logging.WriteDebug("[Navigator] OnBotStart event received");
 			Clear();
 			// Load navigation meshes on bot start
 			if (_navigator == null)
 			{
-				Logging.WriteDebug("[Navigator] Creating new Tripper.Navigator instance");
 				_navigator = new TripperNav.Navigator();
-				_navigator.LogMessage += msg => Logging.WriteDebug("[Tripper] {0}", msg);
 			}
 			if (!_navigator.IsLoaded)
 			{
-				Logging.Write("[Navigator] Loading navigation meshes...");
 				try
 				{
 					if (_navigator.LoadMeshes())
 					{
-						Logging.Write("[Navigator] Navigation meshes loaded successfully.");
 					}
 					else
 					{
-						Logging.Write(LogLevel.Quiet, "[Navigator] Failed to load navigation meshes. Using direct movement.");
 					}
 				}
 				catch (Exception ex)
 				{
-					Logging.Write(LogLevel.Quiet, "[Navigator] Exception loading navigation meshes: {0}", ex.Message);
+					_ = ex;
 				}
-			}
-			else
-			{
-				Logging.WriteDebug("[Navigator] Navigation meshes already loaded");
 			}
 
 			// Set faction-aware query filter (HB 6.2.3 pattern: OnBotStarted → SetFactionQueryFilter)
@@ -219,7 +207,7 @@ namespace Styx.Logic.Pathing
 				}
 				catch (Exception ex)
 				{
-					Logging.WriteDebug("[Navigator] Failed to set faction filter: {0}", ex.Message);
+					_ = ex;
 				}
 			}
 
@@ -232,7 +220,7 @@ namespace Styx.Logic.Pathing
 			}
 			catch (Exception ex)
 			{
-				Logging.WriteDebug("[Navigator] Failed to initialize FlightPaths: {0}", ex.Message);
+				_ = ex;
 			}
 		}
 
@@ -264,12 +252,6 @@ namespace Styx.Logic.Pathing
 			_inElevatorSequence = false;
 			_elevatorTarget = WoWPoint.Zero;
 			_unstickAttempts = 0;
-			_lastElevatorPos = WoWPoint.Zero;
-			_elevatorPollTimer = new WaitTimer(TimeSpan.FromMilliseconds(400));
-			_isElevatorMoving = false;
-			_lastRideZ = 0f;
-			_elevatorHasMoved = false;
-			_elevatorExitRequested = false;
 			_doorCenterTarget = WoWPoint.Zero;
 			_pathRegenThrottle = new WaitTimer(TimeSpan.FromMilliseconds(500)); // Reset so next path gen is immediate
 			WoWMovement.MoveStop();
@@ -294,21 +276,18 @@ namespace Styx.Logic.Pathing
 		{
 			if (destination == WoWPoint.Zero)
 			{
-				Logging.WriteDebug("[Navigator] MoveTo: destination is WoWPoint.Zero — returning Failed");
 				return MoveResult.Failed;
 			}
 
 			// Check for NaN coordinates - would crash WoW with INT_DIVIDE_BY_ZERO
 			if (float.IsNaN(destination.X) || float.IsNaN(destination.Y) || float.IsNaN(destination.Z))
 			{
-				Logging.WriteDebug("[Navigator] ERROR: Destination contains NaN coordinates, aborting movement");
 				return MoveResult.Failed;
 			}
 
 			LocalPlayer? me = ObjectManager.Me;
 			if (me == null)
 			{
-				Logging.WriteDebug("[Navigator] MoveTo: ObjectManager.Me is null — returning Failed");
 				return MoveResult.Failed;
 			}
 
@@ -316,7 +295,6 @@ namespace Styx.Logic.Pathing
 			float distance = me.Location.Distance(destination);
 			if (distance < precision)
 			{
-				Logging.WriteDebug("[Navigator] MoveTo: Already at destination (dist={0:F1} < precision={1:F1})", distance, precision);
 				_destination = WoWPoint.Zero;
 				_currentPath.Clear();
 				return MoveResult.ReachedDestination;
@@ -335,7 +313,7 @@ namespace Styx.Logic.Pathing
 			}
 			catch (System.Exception ex)
 			{
-				Logging.WriteDebug("[Navigator] Mount.ShouldMount/StateMount exception: {0}", ex.Message);
+				_ = ex;
 			}
 
 			// Auto-dismount near destination (HB pattern):
@@ -350,7 +328,7 @@ namespace Styx.Logic.Pathing
 			}
 			catch (System.Exception ex)
 			{
-				Logging.WriteDebug("[Navigator] Mount.ShouldDismount/Dismount exception: {0}", ex.Message);
+				_ = ex;
 			}
 
 			// P6.14 — Combat abort: If we're in combat, skip expensive pathfinding.
@@ -374,14 +352,11 @@ namespace Styx.Logic.Pathing
 			// Also regen if path was cleared (drift, combat, MaxUnstick) but destination hasn't changed.
 			// In that case we do NOT reset stuck state — the unstick sequence continues.
 			bool needsPathRegen = !destinationChanged && _currentPath.Count == 0;
-			Logging.WriteDebug("[Navigator] MoveTo: dest={0}, destChanged={1}, needsRegen={2}, pathCount={3}",
-				destination, destinationChanged, needsPathRegen, _currentPath.Count);
 			if (destinationChanged || needsPathRegen)
 			{
 				if (!_pathRegenThrottle.IsFinished)
 				{
 					// Too soon since last path generation — wait (HB pattern: never blindly ClickToMove)
-					Logging.WriteDebug("[Navigator] MoveTo: pathRegenThrottle not finished — returning Moved (silent wait)");
 					return MoveResult.Moved;
 				}
 				_pathRegenThrottle.Reset();
@@ -412,11 +387,6 @@ namespace Styx.Logic.Pathing
 					_inElevatorSequence = false;
 					_elevatorTarget = WoWPoint.Zero;
 					_ridingElevator = false;
-					_lastElevatorPos = WoWPoint.Zero;
-					_isElevatorMoving = false;
-					_lastRideZ = 0f;
-					_elevatorHasMoved = false;
-					_elevatorExitRequested = false;
 				}
 
 				// P6.14 — Combat abort: Skip pathfinding entirely if in combat.
@@ -429,7 +399,6 @@ namespace Styx.Logic.Pathing
 					_currentPolyTypes = null;
 					_currentAbilityFlags = null;
 					_currentPathIndex = 0;
-					Logging.WriteDebug("[Navigator] In combat — using direct movement to: {0}", destinationName);
 					WoWMovement.ClickToMove(destination);
 					return MoveResult.Moved;
 				}
@@ -445,7 +414,6 @@ namespace Styx.Logic.Pathing
 					{
 						if (FlightPaths.SetFlightPathUsage(me.Location, destination, out _, out _))
 						{
-							Logging.Write("[Navigator] Flight path would be faster — setting taxi POI");
 							return MoveResult.PathGenerated;
 						}
 					}
@@ -458,21 +426,65 @@ namespace Styx.Logic.Pathing
 					var start = new Vector3(me.Location.X, me.Location.Y, me.Location.Z);
 					var end = new Vector3(destination.X, destination.Y, destination.Z);
 
+					// HB-style tile streaming: ensure navmesh tiles are loaded at BOTH
+					// start AND destination before pathfinding. Without this, the A*
+					// search can't discover offmesh connections (elevators, portals) that
+					// sit in tiles far from the player, causing the pathfinder to generate
+					// a long detour path or return a partial path.
+					// NOTE: HB's WowNavigator loads tiles on-demand during A* via MeshProvider.
+					// We can't do that, so we pre-load tiles explicitly instead.
+					try
+					{
+						TripperNavigator.EnsureTilesAroundPosition(mapId, start, LoadTilesAroundRadius);
+						TripperNavigator.EnsureTilesAroundPosition(mapId, end, LoadTilesAroundRadius);
+
+						// COPILOTBUDDY ENHANCEMENT (not in HB): also load tiles at the midpoint
+						// to bridge large gaps. HB doesn't need this because it loads tiles
+						// on-demand during A*; we pre-load so need to cover the corridor.
+						float distSqr = Vector3.DistanceSquared(start, end);
+						if (distSqr > 40000f) // > 200 yards
+						{
+							var mid = (start + end) * 0.5f;
+							TripperNavigator.EnsureTilesAroundPosition(mapId, mid, LoadTilesAroundRadius);
+						}
+					}
+					catch
+					{
+						// Non-fatal: pathfinding still works with whatever tiles are loaded
+					}
+
 					// Ensure blackspots are marked on navmesh before pathfinding
 					// This is HB 4.3.4's OnTileLoaded workaround
 					BlackspotManager.EnsureBlackspotsMarked();
 
-					Logging.WriteDebug("[Navigator] FindPath: ({0:F0},{1:F0},{2:F0}) -> ({3:F0},{4:F0},{5:F0}) map={6}",
-						start.X, start.Y, start.Z, end.X, end.Y, end.Z, mapId);
 					var sw = System.Diagnostics.Stopwatch.StartNew();
 					var result = TripperNavigator.FindPath(mapId, start, end, true);
 					sw.Stop();
-					Logging.WriteDebug("[Navigator] FindPath returned in {0}ms — Succeeded={1}, Points={2}, Partial={3}",
-						sw.ElapsedMilliseconds, result.Succeeded,
-						result.Points?.Length ?? 0, result.IsPartialPath);
 					LogPathResult(result, me.Location, destination, mapId);
 					if (result.Status.Succeeded && result.Points != null && result.Points.Length > 0)
 					{
+						// HB 4.3.4: if the path is partial (navmesh doesn't fully connect
+						// start to destination), log it and consider flight paths.
+						if (result.IsPartialPath)
+						{
+							Logging.WriteDebug("Could not generate full path from {0} to {1}", me.Location, destination);
+
+							// COPILOTBUDDY ENHANCEMENT (not in HB): try flight paths on partial
+							// paths regardless of distance. HB only checks flights BEFORE
+							// pathfinding (distance > threshold). We add this because our
+							// pre-loaded tiles may miss corridors that HB's on-demand loading
+							// would find, resulting in partial paths where HB gets full paths.
+							if (FlightPaths.ShouldTakeFlightpath(me.Location, destination, me.MovementInfo.RunSpeed))
+							{
+								if (FlightPaths.SetFlightPathUsage(me.Location, destination, out _, out _))
+								{
+									return MoveResult.PathGenerated;
+								}
+							}
+							// No flight path available — follow the partial path anyway
+							// (HB 4.3.4 logs warning but still follows partial paths).
+						}
+
 						foreach (var point in result.Points)
 						{
 							_currentPath.Add(new WoWPoint(point.X, point.Y, point.Z));
@@ -482,6 +494,7 @@ namespace Styx.Logic.Pathing
 						_currentFlags = result.Flags;
 						_currentPolyTypes = result.PolyTypes;
 						_currentAbilityFlags = result.AbilityFlags;
+						_isPartialPath = result.IsPartialPath;
 					}
 					else
 					{
@@ -489,7 +502,6 @@ namespace Styx.Logic.Pathing
 						// Never blindly ClickToMove (causes walking into walls, off cliffs,
 						// climbing impossible hills, and "random walking" behavior).
 						WoWMovement.MoveStop();
-						Logging.Write("[Navigator] Path generation failed — staying still");
 						return MoveResult.PathGenerationFailed;
 					}
 				}
@@ -498,11 +510,12 @@ namespace Styx.Logic.Pathing
 					// HB pattern: no navmesh available — stop and return failure.
 					// Never blindly ClickToMove without navigation data.
 					WoWMovement.MoveStop();
-					Logging.Write("[Navigator] No navmesh loaded — staying still (destination: {0})", destinationName);
 					return MoveResult.PathGenerationFailed;
 				}
 
 				_currentPathIndex = 0;
+				_suppressDriftCheck = false;
+				_suppressDriftCheckIndex = 0;
 
 				// Path start skip (HB 6.2.3 method_14): skip early visible waypoints via raycast.
 				// Walk forward through path and raycast from player position — if we can see
@@ -533,18 +546,14 @@ namespace Styx.Logic.Pathing
 					}
 					if (lastVisible > 0)
 					{
-						// Remove skipped waypoints from the path instead of advancing _currentPathIndex.
-						// This keeps _currentPathIndex = 0, preventing the drift detection from comparing
-						// player position against a segment that is far ahead (which caused infinite
-						// path regeneration loops — drift detected → regen → skip → drift → regen).
-						_currentPath.RemoveRange(0, lastVisible);
-						if (_currentFlags != null && _currentFlags.Length > lastVisible)
-							_currentFlags = _currentFlags[lastVisible..];
-						if (_currentPolyTypes != null && _currentPolyTypes.Length > lastVisible)
-							_currentPolyTypes = _currentPolyTypes[lastVisible..];
-						if (_currentAbilityFlags != null && _currentAbilityFlags.Length > lastVisible)
-							_currentAbilityFlags = _currentAbilityFlags[lastVisible..];
-						Logging.WriteDebug("[Navigator] Skipped {0} visible early waypoints", lastVisible);
+						// HB behavior: advance the path index instead of mutating the path.
+						_currentPathIndex = lastVisible;
+						_suppressDriftCheck = true;
+						_suppressDriftCheckIndex = lastVisible;
+
+						// HB 6.2.3 logs only when skipping 2+ nodes.
+						if (lastVisible >= 2)
+							Logging.WriteDebug("Skipped {0} path nodes", lastVisible);
 					}
 				}
 			}
@@ -553,8 +562,6 @@ namespace Styx.Logic.Pathing
 			// HB 4.3.4: Check both 2D distance and Z difference, push waypoint ahead
 			if (_currentPath.Count > 0 && _currentPathIndex < _currentPath.Count)
 			{
-				Logging.WriteDebug("[Navigator] Path following: pathCount={0}, index={1}, nextWP={2}",
-					_currentPath.Count, _currentPathIndex, _currentPath[_currentPathIndex]);
 				// P6.14 — Combat abort during path following: when combat starts mid-path,
 				// abandon the current path and let the behavior tree's combat routine take over.
 				// This is the synchronous equivalent of HB 6.2.3's 4-second combat abort timeout.
@@ -568,11 +575,12 @@ namespace Styx.Logic.Pathing
 					// reset stuck state when combat ends and we resume the same path.
 					_currentPath.Clear();
 					_currentPathIndex = 0;
+						_suppressDriftCheck = false;
+						_suppressDriftCheckIndex = 0;
 					_currentFlags = null;
 					_currentPolyTypes = null;
 					_currentAbilityFlags = null;
 					_pathRegenThrottle = new WaitTimer(TimeSpan.FromMilliseconds(500)); // Allow immediate regen after combat
-					Logging.WriteDebug("[Navigator] Combat detected — aborting path to let combat routine take over");
 					return MoveResult.Moved;
 				}
 
@@ -595,6 +603,8 @@ namespace Styx.Logic.Pathing
 					try { StuckHandler.Reset(); } catch { }
 					_currentPath.Clear();
 					_currentPathIndex = 0;
+					_suppressDriftCheck = false;
+					_suppressDriftCheckIndex = 0;
 					_currentFlags = null;
 					_currentPolyTypes = null;
 					_currentAbilityFlags = null;
@@ -621,13 +631,14 @@ namespace Styx.Logic.Pathing
 						if (_unstickAttempts >= MaxUnstickAttempts)
 						{
 							// AUDIT FIX: After MaxUnstickAttempts failed attempts, force path regeneration
-							Logging.Write("[Navigator] {0} unstick attempts failed — forcing path regeneration", _unstickAttempts);
 							_unstickAttempts = 0;
 							// Force path regen by clearing path. Keep _destination so we don't
 							// accidentally trigger a full StuckHandler.Reset() on next call.
 							// StuckHandler.Reset() IS appropriate here since we're starting fresh.
 							_currentPath.Clear();
 							_currentPathIndex = 0;
+							_suppressDriftCheck = false;
+							_suppressDriftCheckIndex = 0;
 							_pathRegenThrottle = new WaitTimer(TimeSpan.FromMilliseconds(500)); // Allow immediate regen
 							try { StuckHandler.Reset(); } catch { }
 							return MoveResult.Failed;
@@ -641,19 +652,21 @@ namespace Styx.Logic.Pathing
 
 				// Path validity check (P6.7): if player has drifted far from the current path segment
 				// (knockback, teleport, fear, etc.), force path regeneration instead of following stale path
-				if (_currentPathIndex > 0 && !_ridingElevator && !_inElevatorSequence)
+				if (_currentPathIndex > 0 && !_ridingElevator && !_inElevatorSequence
+				    && !(_suppressDriftCheck && _currentPathIndex == _suppressDriftCheckIndex))
 				{
 					WoWPoint prevPoint = _currentPath[_currentPathIndex - 1];
 					float distToSegment = DistanceToLineSegment(me.Location, prevPoint, nextPoint);
 					if (distToSegment > PathPrecision * 5f) // >10 yards off path = stale
 					{
-						Logging.WriteDebug("[Navigator] Player drifted {0:F1}yd from path — regenerating", distToSegment);
 						// BUG FIX: Don't set _destination = WoWPoint.Zero here.
 						// That caused destinationChanged=true on next MoveTo(), resetting
 						// StuckHandler mid-unstick sequence. Instead, just clear the path
 						// so it gets regenerated, but keep _destination intact.
 						_currentPath.Clear();
 						_currentPathIndex = 0;
+						_suppressDriftCheck = false;
+						_suppressDriftCheckIndex = 0;
 						_pathRegenThrottle = new WaitTimer(TimeSpan.FromMilliseconds(500)); // Allow immediate regen
 						return MoveResult.Moved;
 					}
@@ -680,7 +693,6 @@ namespace Styx.Logic.Pathing
 							WoWMovement.ClickToMove(nextPoint);
 							return MoveResult.Moved;
 						}
-						Logging.WriteDebug("[Navigator] Reached off-mesh connection at waypoint {0}", _currentPathIndex);
 						
 						// Dispatch off-mesh connection based on AreaType (ported from HB 4.3.4 method_4)
 						// The offmesh START is at _currentPathIndex, the offmesh END is at _currentPathIndex+1.
@@ -702,7 +714,6 @@ namespace Styx.Logic.Pathing
 							// PolyTypes not available (mmap-extractor paths don't return them).
 							// Use geometry-based fallback: HandleOffMeshConnection detects
 							// elevators via Z-delta regardless of AreaType.
-							Logging.WriteDebug("[Navigator] Off-mesh dispatch: PolyTypes unavailable, using geometry fallback");
 							var offMeshResult = HandleOffMeshConnection(me, offMeshEnd, TripperNav.AreaType.Ground);
 							if (offMeshResult != null)
 								return offMeshResult.Value;
@@ -715,8 +726,18 @@ namespace Styx.Logic.Pathing
 					try { StuckHandler.Reset(); } catch { }
 
 					_currentPathIndex++;
+					if (_suppressDriftCheck && _currentPathIndex > _suppressDriftCheckIndex)
+					{
+						_suppressDriftCheck = false;
+						_suppressDriftCheckIndex = 0;
+					}
 					if (_currentPathIndex >= _currentPath.Count)
 					{
+						// HB 6.2.3 method_24: if we reached the end of a partial path,
+						// return Failed (not ReachedDestination) so the behavior tree
+						// knows the bot didn't actually arrive at the goal.
+						if (_isPartialPath)
+							return MoveResult.Failed;
 						return MoveResult.ReachedDestination;
 					}
 					nextPoint = _currentPath[_currentPathIndex];
@@ -727,6 +748,18 @@ namespace Styx.Logic.Pathing
 				// Validate with a single navmesh raycast (if extended point is off-mesh, use exact waypoint).
 				WoWPoint clickPoint = nextPoint;
 
+				// HB 4.3.4 method_6 / HB 6.2.3 method_25: add +2f to waypoint Z when
+				// traversing Water or Lava polygons. Without this, the bot tries to walk on
+				// the water surface mesh and can sink/drown or take lava damage.
+				if (_currentPolyTypes != null && _currentPathIndex < _currentPolyTypes.Length)
+				{
+					var polyType = _currentPolyTypes[_currentPathIndex];
+					if (polyType == TripperNav.AreaType.Water || polyType == TripperNav.AreaType.Lava)
+					{
+						clickPoint = new WoWPoint(clickPoint.X, clickPoint.Y, clickPoint.Z + 2f);
+					}
+				}
+
 				if (!isFinalPoint)
 				{
 					WoWPoint direction = nextPoint - me.Location;
@@ -736,8 +769,9 @@ namespace Styx.Logic.Pathing
 						direction = new WoWPoint(direction.X / length, direction.Y / length, direction.Z / length);
 						WoWPoint pushedPoint = nextPoint + direction * PathPrecision;
 
-						// Single raycast validation: check if pushed point is reachable on navmesh
-						if (!Raycast(nextPoint, pushedPoint, out _))
+						// Single raycast validation: ensure our direct line from the player to the pushed point
+						// remains on the navmesh. Validating only nextPoint->pushedPoint allows corner-cutting.
+						if (!Raycast(me.Location, pushedPoint, out _))
 						{
 							clickPoint = pushedPoint;
 						}
@@ -747,9 +781,6 @@ namespace Styx.Logic.Pathing
 				WoWMovement.ClickToMove(clickPoint);
 				return MoveResult.Moved;
 			}
-
-			Logging.WriteDebug("[Navigator] MoveTo: No path to follow (pathCount={0}, index={1}) — returning PathGenerationFailed",
-				_currentPath.Count, _currentPathIndex);
 			return MoveResult.PathGenerationFailed;
 		}
 
@@ -762,21 +793,23 @@ namespace Styx.Logic.Pathing
 			var startVec = new Vector3(start.X, start.Y, start.Z);
 			var endVec = new Vector3(destination.X, destination.Y, destination.Z);
 
-			// Ensure blackspots are marked before pathfinding
+			// Load tiles at both ends before pathfinding
+			try
+			{
+				TripperNavigator.EnsureTilesAroundPosition(mapId, startVec, LoadTilesAroundRadius);
+				TripperNavigator.EnsureTilesAroundPosition(mapId, endVec, LoadTilesAroundRadius);
+			}
+			catch { }
+
 			BlackspotManager.EnsureBlackspotsMarked();
 
-			Logging.WriteDebug("[Navigator] CanNavigateFully: ({0:F0},{1:F0},{2:F0}) -> ({3:F0},{4:F0},{5:F0})",
-				start.X, start.Y, start.Z, destination.X, destination.Y, destination.Z);
 			var result = TripperNavigator.FindPath(mapId, startVec, endVec, true);
-			Logging.WriteDebug("[Navigator] CanNavigateFully result: Succeeded={0}, Points={1}, Partial={2}",
-				result.Succeeded, result.Points?.Length ?? 0, result.IsPartialPath);
 			
-			// Check if path is complete (reached destination)
-			if (result.Status.Succeeded && result.Points != null && result.Points.Length > 0)
+			// HB 4.3.4 MeshNavigator.CanNavigateFully:
+			// path.Succeeded && !path.IsPartialPath
+			if (result.Status.Succeeded && !result.IsPartialPath)
 			{
-				var lastPoint = result.Points[^1];
-				float distToEnd = Vector3.Distance(lastPoint, endVec);
-				return distToEnd < PathPrecision;
+				return true;
 			}
 
 			return false;
@@ -798,7 +831,14 @@ namespace Styx.Logic.Pathing
 			var startVec = new Vector3(start.X, start.Y, start.Z);
 			var endVec = new Vector3(destination.X, destination.Y, destination.Z);
 
-			// Ensure blackspots are marked before pathfinding
+			// Load tiles at both ends before pathfinding
+			try
+			{
+				TripperNavigator.EnsureTilesAroundPosition(mapId, startVec, LoadTilesAroundRadius);
+				TripperNavigator.EnsureTilesAroundPosition(mapId, endVec, LoadTilesAroundRadius);
+			}
+			catch { }
+
 			BlackspotManager.EnsureBlackspotsMarked();
 
 			var result = TripperNavigator.FindPath(mapId, startVec, endVec, true);
@@ -1086,14 +1126,8 @@ namespace Styx.Logic.Pathing
 			float zDelta = Math.Abs(me.Z - targetPoint.Z);
 			if (zDelta > 10f)
 			{
-				Logging.WriteDebug("[Navigator] Off-mesh dispatch: AreaType={0}, Z-delta={1:F1} — treating as Elevator, target={2}",
-					(byte)areaType, zDelta, targetPoint);
 				return HandleElevator(me, targetPoint);
 			}
-
-			// Small Z-delta: dispatch by AreaType for HB-format meshes
-			Logging.WriteDebug("[Navigator] Off-mesh dispatch: AreaType={0}, Z-delta={1:F1}, target={2}",
-				(byte)areaType, zDelta, targetPoint);
 			switch (areaType)
 			{
 				case TripperNav.AreaType.Elevator:
@@ -1153,265 +1187,120 @@ namespace Styx.Logic.Pathing
 		}
 
 		/// <summary>
-		/// Elevator handling — based on HB 6.2.3 MeshNavigator.method_20.
+		/// Elevator handling — matches HB 4.3.4 MeshNavigator (AreaType.Elevator).
 		/// Called every tick while at an elevator offmesh connection.
-		/// Boat entries {20656, 20657, 205080} excluded (HB 6.2.3 uint_0 blacklist).
-		///
-		/// FIX: WoWGameObject.Location for Transport-type GOs reads the spawn/origin position
-		/// (offsets 0xE8/0xEC/0xF0), not the current interpolated position. This means
-		/// _isElevatorMoving is always false and |elevZ - playerZ| is always large.
-		/// Workaround: use IsOnTransport for boarding detection, player Z for ride tracking,
-		/// and a probe-walk approach for waiting instead of relying on transport Z.
-		/// NOTE: Ghosts ride elevators normally in WoW 3.3.5a — no ghost bypass needed.
-		/// ClickToMove cannot path through floors, so ghosts must take the elevator.
 		/// </summary>
 		private static MoveResult? HandleElevator(LocalPlayer me, WoWPoint targetPoint)
 		{
-			// HB 6.2.3 method_20 line 1: Reset stuck handler every tick.
+			static WoWPoint GetTransportWorldLocation(WoWGameObject transportGo)
+			{
+				if (transportGo.SubType == WoWGameObjectType.Transport
+				    || transportGo.SubType == WoWGameObjectType.MapObjectTransport)
+				{
+					try
+					{
+						Tripper.Tools.Math.Matrix worldMatrix = transportGo.GetWorldMatrix();
+						Matrix4x4 mat = worldMatrix;
+						Vector3 translation = mat.Translation;
+						return new WoWPoint(translation.X, translation.Y, translation.Z);
+					}
+					catch
+					{
+						// Fall back to base position if matrix read fails
+					}
+				}
+				return transportGo.Location;
+			}
+
+			// HB 4.3.4: reset stuck handler every tick
 			try { StuckHandler.Reset(); } catch { }
 			_stuckCheckTimer.Reset();
 
-			// Lock into elevator sequence (our equivalent of HB's areaType != Elevator check in method_18)
+			// HB 6.2.3-style lock: keep calling elevator handler every tick once entered
 			if (!_inElevatorSequence)
 			{
 				_inElevatorSequence = true;
 				_elevatorTarget = targetPoint;
-				_elevatorWaitStart = DateTime.Now;
+				_hbElevatorFlag = false;
 			}
 
 			WoWPoint playerPos = me.Location;
 
-			// HB 6.2.3 method_20: find closest Transport, exclude blacklist.
-			// Door transports excluded (UC/TB animated doors are Transport type but not elevators).
+			// HB 4.3.4: find nearest transport GO
 			var transport = ObjectManager.GetObjectsOfType<WoWGameObject>(false, false)
 				.Where(go => go.SubType == WoWGameObjectType.Transport
-				              && go.Entry != 20656 && go.Entry != 20657 && go.Entry != 205080
-				              && !go.Name.Contains("door", StringComparison.OrdinalIgnoreCase))
-				.OrderBy(go => go.Location.Distance2DSqr(playerPos))
+				              && go.Entry != 20657 && go.Entry != 20656)
+				.OrderBy(go => GetTransportWorldLocation(go).Distance2DSqr(playerPos))
 				.FirstOrDefault();
 
-			// HB: vector = path.Points[Index] (offmesh END), vector2 = path.Points[Index-1] (offmesh START)
-			WoWPoint endPoint = targetPoint;
-			WoWPoint startPoint = _currentPath[_currentPathIndex];
+			WoWPoint endPoint = targetPoint; // offmesh END
+			WoWPoint startPoint = (_currentPathIndex >= 0 && _currentPathIndex < _currentPath.Count)
+				? _currentPath[_currentPathIndex]
+				: playerPos; // offmesh START (waiting spot)
 
-			// HB: if (woWGameObject == null) → "There is no elevator around. Something is wrong" → Failed
 			if (transport == null)
 			{
-				// Timeout: don't wait forever if no transport found
-				if ((DateTime.Now - _elevatorWaitStart).TotalSeconds > 30)
-				{
-					Logging.Write("[Navigator] No elevator found after 30s — forcing path regeneration");
-					_ridingElevator = false;
-					_inElevatorSequence = false;
-					_elevatorTarget = WoWPoint.Zero;
-					_lastRideZ = 0f;
-					_elevatorHasMoved = false;
-					_elevatorExitRequested = false;
-					return null;
-				}
-				Logging.WriteDiagnostic("There is no elevator around — waiting...");
-				return MoveResult.Moved;
+				Logging.WriteDiagnostic("There is no elevator around. Something is wrong");
+				return MoveResult.Failed;
 			}
 
-			// HB: if at endPoint && !IsOnTransport && !IsFalling → advance path
-			if (playerPos.DistanceSqr(endPoint) < 4f && !me.IsOnTransport && !me.IsFalling)
-			{
-				_ridingElevator = false;
-				_lastRideZ = 0f;
-				_elevatorHasMoved = false;
-				_elevatorExitRequested = false;
-				Logging.WriteNavigator("Elevator ride complete — at end point.");
-				return null; // Advance past offmesh
-			}
+			WoWPoint transportWorldLocation = GetTransportWorldLocation(transport);
 
-			// mmap-extractor adaptation: offmesh endpoint Z can be far from the actual
-			// elevator stop level (e.g., endPoint.Z = -40.8 but elevator bottom is Z=16.4).
-			// If player is at destination Z level, off transport, and closer to end than start
-			// → consider the ride complete. Path will be regenerated from current position.
-			if (!me.IsOnTransport && !me.IsFalling
-			    && Math.Abs(playerPos.Z - endPoint.Z) <= 5f
-			    && Math.Abs(startPoint.Z - playerPos.Z) > Math.Abs(endPoint.Z - playerPos.Z))
+			// HB 4.3.4: if at endpoint, complete offmesh and reset flag
+			if (playerPos.DistanceSqr(endPoint) < 4f)
 			{
-				_ridingElevator = false;
-				Logging.WriteNavigator("Elevator ride complete — at destination level.");
+				_hbElevatorFlag = false;
 				return null;
 			}
 
-			// FIX: After successfully riding the elevator and stepping off the platform,
-			// consider the ride complete. The offmesh endpoint Z from mmap-extractor may
-			// be far from the actual elevator stop (e.g., -40.8 vs 16.4), so the Z-level
-			// checks above won't match. Instead, trust that the elevator brought us to the
-			// correct level and let the pathfinder regenerate from current position.
-			if (_ridingElevator && !me.IsOnTransport && !me.IsFalling)
-			{
-				Logging.WriteNavigator("Elevator ride complete — stepped off after riding (playerZ={0:F1}).",
-					playerPos.Z);
-				_ridingElevator = false;
-				_inElevatorSequence = false;
-				_elevatorTarget = WoWPoint.Zero;
-				_lastRideZ = 0f;
-				_elevatorHasMoved = false;
-				_elevatorExitRequested = false;
-				return null;
-			}
-
-			WoWPoint elevatorLoc = transport.Location;
-
-			// HB: poll elevator movement every 400ms (waitTimer_2)
-			// NOTE: For Transport-type GOs, Location may return spawn position (static).
-			// _isElevatorMoving will be false if transport position doesn't update in memory.
-			if (_elevatorPollTimer.IsFinished)
-			{
-				_isElevatorMoving = _lastElevatorPos != WoWPoint.Zero
-					&& _lastElevatorPos.DistanceSqr(elevatorLoc) > 0.0001f;
-				_lastElevatorPos = elevatorLoc;
-				_elevatorPollTimer.Reset();
-			}
-
-			// HB: if (activeMover.IsOnTransport)
 			if (me.IsOnTransport)
 			{
 				_ridingElevator = true;
-				_elevatorWaitStart = DateTime.Now; // Reset timeout while riding
-
-				// If we've already decided to exit, keep walking toward exit point
-				// until the bot steps off the platform (IsOnTransport becomes false).
-				if (_elevatorExitRequested)
+				if (Math.Abs(playerPos.Z - endPoint.Z) > 2f)
 				{
-					WoWPoint exitPoint = new WoWPoint(endPoint.X, endPoint.Y, playerPos.Z);
-					WoWMovement.ClickToMove(exitPoint);
-					Logging.WriteDebug("[Navigator] Walking off elevator (playerZ={0:F1})", playerPos.Z);
+					Styx.Logic.BehaviorTree.TreeRoot.StatusText = "Waiting for elevator to reach end point";
 					return MoveResult.Moved;
 				}
-
-				// Direction-reversal exit detection:
-				// The mmap-extractor offmesh endpoint Z is unreliable (may be far from the
-				// actual elevator stop). Instead, we track the player Z while riding:
-				// 1. Once playerZ changes significantly from boarding Z → _elevatorHasMoved
-				// 2. Detect the elevator reversing direction (was descending, now ascending
-				//    for a "going down" trip, or vice versa) → request exit
-				if (_lastRideZ == 0f)
-				{
-					// First tick on transport — initialize tracking
-					_lastRideZ = playerPos.Z;
-					_elevatorHasMoved = false;
-					Logging.WriteDebug("[Navigator] Riding elevator (playerZ={0:F1}, boarded)", playerPos.Z);
-					WoWMovement.MoveStop();
-					return MoveResult.Moved;
-				}
-
-				float deltaZ = playerPos.Z - _lastRideZ;
-
-				// Mark as having moved once Z changes significantly from where we boarded
-				if (Math.Abs(deltaZ) > 3f)
-					_elevatorHasMoved = true;
-
-				// Determine desired direction: if endPoint is below startPoint, we want bottom
-				bool goingDown = endPoint.Z < startPoint.Z;
-
-				// Detect direction reversal after the elevator has moved:
-				// Going down: deltaZ was negative (descending), now positive (ascending)
-				//   + playerZ is well below startPoint (we actually went down, not a jitter at top)
-				// Going up:   deltaZ was positive (ascending), now negative (descending)
-				//   + playerZ is well above startPoint
-				if (_elevatorHasMoved)
-				{
-					bool shouldExit = false;
-					if (goingDown && deltaZ > 3f && playerPos.Z < startPoint.Z - 10f)
-					{
-						// Was descending, now ascending — bottom reached
-						shouldExit = true;
-					}
-					else if (!goingDown && deltaZ < -3f && playerPos.Z > startPoint.Z + 10f)
-					{
-						// Was ascending, now descending — top reached
-						shouldExit = true;
-					}
-
-					if (shouldExit)
-					{
-						_elevatorExitRequested = true;
-						Logging.WriteDiagnostic("Elevator reached destination — walking off (playerZ={0:F1}, boardedZ={1:F1})",
-							playerPos.Z, startPoint.Z);
-						WoWPoint exitPoint = new WoWPoint(endPoint.X, endPoint.Y, playerPos.Z);
-						WoWMovement.ClickToMove(exitPoint);
-						_lastRideZ = playerPos.Z;
-						return MoveResult.Moved;
-					}
-				}
-
-				_lastRideZ = playerPos.Z;
-
-				// Riding — wait for elevator to reach destination level
-				Logging.WriteDebug("[Navigator] Riding elevator (playerZ={0:F1}, targetZ={1:F1}, moved={2})",
-					playerPos.Z, endPoint.Z, _elevatorHasMoved);
-				WoWMovement.MoveStop();
+				if (!_hbElevatorFlag)
+					_hbElevatorFlag = true;
+				Logging.WriteDiagnostic("Moving out of elevator");
+				WoWMovement.ClickToMove(endPoint);
 				return MoveResult.Moved;
 			}
 
 			// NOT on transport
-			bool closerToEnd = Math.Abs(startPoint.Z - playerPos.Z) > Math.Abs(endPoint.Z - playerPos.Z);
-
-			if (!closerToEnd)
+			_ridingElevator = false;
+			if (Math.Abs(transportWorldLocation.Z - playerPos.Z) > 2f)
 			{
-				_ridingElevator = false;
-
-				if (me.Mounted)
-					Mount.Dismount("Moving to transport.");
-
-				// Walk to the elevator shaft center and wait there for the platform.
-				// transport.Location gives the spawn/origin position — the XY is the
-				// physical shaft center. Use that XY at the player's current Z so
-				// ClickToMove can path there along the corridor/floor.
-				// When the elevator platform arrives, player steps on → IsOnTransport.
-				// If the platform isn't there, ClickToMove stops at the shaft edge
-				// (WoW's built-in pathfinding won't walk off ledges).
-				WoWPoint shaftTarget = new WoWPoint(elevatorLoc.X, elevatorLoc.Y, playerPos.Z);
-				float distToShaft = playerPos.Distance2D(shaftTarget);
-
-				if (distToShaft > 3f)
+				if (me.Location.DistanceSqr(startPoint) > 4f)
 				{
-					Logging.WriteDiagnostic("Walking toward elevator shaft (dist={0:F1})", distToShaft);
-					WoWMovement.ClickToMove(shaftTarget);
+					Logging.WriteDiagnostic("Woops, we are not in the waiting spot");
+					WoWMovement.ClickToMove(startPoint);
 					return MoveResult.Moved;
 				}
-
-				// Close to shaft center — stop and wait for elevator platform
-				WoWMovement.MoveStop();
-
-				// Timeout: after 60 seconds of waiting, force path regeneration.
-				if ((DateTime.Now - _elevatorWaitStart).TotalSeconds > 60)
-				{
-					Logging.Write("[Navigator] Elevator wait timeout (60s) — forcing path regeneration");
-					_ridingElevator = false;
-					_inElevatorSequence = false;
-					_elevatorTarget = WoWPoint.Zero;
-					_lastRideZ = 0f;
-					_elevatorHasMoved = false;
-					_elevatorExitRequested = false;
-					_currentPath.Clear();
-					_currentPathIndex = 0;
-					return MoveResult.Failed;
-				}
-
-				Logging.WriteDebug("[Navigator] Waiting for elevator at shaft (dist={0:F1}, playerZ={1:F1}, transport={2})",
-					distToShaft, playerPos.Z, transport.Name);
+				Styx.Logic.BehaviorTree.TreeRoot.StatusText = "Waiting for the elevator";
 				return MoveResult.Moved;
 			}
 
-			// closerToEnd — player already past start level (fell/jumped past start point)
-			_ridingElevator = true;
-			return MoveResult.Moved;
+			if (!_hbElevatorFlag)
+			{
+				Logging.WriteDiagnostic("Moving inside elevator");
+				if (me.Mounted)
+					Mount.Dismount();
+				// Center on the platform like HB: move toward transport.Location (world-space)
+				WoWMovement.ClickToMove(transportWorldLocation);
+				return MoveResult.Moved;
+			}
+
+			return MoveResult.Failed;
 		}
 
 		/// <summary>
 		/// Portal handling: find nearest Goober or SpellCaster game object and interact.
 		/// HB 4.3.4 pattern from MeshNavigator.method_4.
-		/// AUDIT FIX: Added 30-yard range limit to avoid interacting with distant random objects.
 		/// </summary>
 		private static MoveResult? HandlePortal(LocalPlayer me)
 		{
-			// Find nearest portal-type game object within 30 yards (Goober or SpellCaster)
 			const float maxSearchDistSqr = 900f; // 30 yards squared
 			WoWGameObject? bestPortal = null;
 			float bestDistSqr = maxSearchDistSqr;
@@ -1431,18 +1320,17 @@ namespace Styx.Logic.Pathing
 
 			if (bestPortal == null)
 			{
-				Logging.WriteNavigator("Could not find portal to interact with.");
+				Logging.WriteDiagnostic("Could not find portal to take.");
 				return MoveResult.Failed;
 			}
 
 			if (bestPortal.WithinInteractRange)
 			{
-				Logging.WriteDebug("[Navigator] Interacting with portal: {0}", bestPortal.Name);
+				Logging.WriteDiagnostic("Interacting with:{0}", bestPortal.Name);
 				bestPortal.Interact();
 				return MoveResult.Moved;
 			}
 
-			// Move closer to the portal
 			WoWMovement.ClickToMove(bestPortal.Location);
 			return MoveResult.Moved;
 		}
@@ -1465,7 +1353,6 @@ namespace Styx.Logic.Pathing
 
 			if (unit == null)
 			{
-				Logging.WriteNavigator("Could not find unit to interact with.");
 				return MoveResult.Failed;
 			}
 
@@ -1518,33 +1405,10 @@ namespace Styx.Logic.Pathing
 		/// </summary>
 		private static void LogPathResult(Tripper.Navigation.PathFindResult result, WoWPoint start, WoWPoint end, uint mapId)
 		{
-			if (!result.Succeeded)
-			{
-				if (result.Aborted)
-				{
-					Logging.Write("[Navigator] Path search from {0} to {1} was aborted due to {2} (time used: {3:F0}ms)",
-						start, end,
-						Styx.Logic.BehaviorTree.TreeRoot.IsRunning ? "combat" : "bot stopping",
-						result.Elapsed.TotalMilliseconds);
-					return;
-				}
-				Logging.Write("[Navigator] Could not generate path from {0} to {1} on map {2} (time used: {3:F0}ms) @ {4}",
-					start, end, mapId, result.Elapsed.TotalMilliseconds, result.FailStep);
-				return;
-			}
-
-			if (result.IsPartialPath)
-			{
-				Logging.Write("[Navigator] Could not generate full path from {0} to {1} (time used: {2:F0}ms)",
-					start, end, result.Elapsed.TotalMilliseconds);
-				return;
-			}
-
-			if (result.Elapsed.TotalMilliseconds > 50.0)
-			{
-				Logging.WriteDebug("[Navigator] Successfully generated path from {0} to {1} in {2:F0}ms ({3} points)",
-					start, end, result.Elapsed.TotalMilliseconds, result.PathLength);
-			}
+			_ = result;
+			_ = start;
+			_ = end;
+			_ = mapId;
 		}
 
 		/// <summary>
@@ -1634,7 +1498,6 @@ namespace Styx.Logic.Pathing
 			}
 
 			// Interact to open the door
-			Logging.WriteDebug("[Navigator] Opening door: {0} (Entry: {1})", closestDoor.Name, closestDoor.Entry);
 			closestDoor.Interact();
 			_doorInteractTimer.Reset();
 			
