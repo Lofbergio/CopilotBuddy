@@ -334,18 +334,51 @@ namespace Styx.Logic.Combat
 			CastSpellById(spellId, 0UL);
 		}
 
+		/// <summary>
+		/// Casts a spell by ID on a specific target via native Spell_C::CastSpell.
+		/// HB 4.3.4: LegacySpellManager.smethod_1(spellId, 0, targetGuid, 0)
+		/// Pushes 8 args onto stack (cdecl, 0x20 cleanup).
+		/// </summary>
 		public static void CastSpellById(int spellId, ulong targetGuid)
 		{
 			StyxWoW.ResetAfk();
-			// Use Lua to cast spell for now
-			if (targetGuid == 0UL || targetGuid == StyxWoW.Me?.Guid)
+
+			ExecutorRand? executor = ObjectManager.Executor;
+			if (executor == null)
 			{
-				Lua.DoString(string.Format("CastSpellByID({0})", spellId));
+				Logging.WriteDebug("[SpellManager] Invalid executor for CastSpellById");
+				return;
 			}
-			else
+
+			// Split 64-bit GUID into two 32-bit halves (HB 4.3.4: Struct72.smethod_4)
+			uint guidLow = (uint)(targetGuid & 0xFFFFFFFF);
+			uint guidHigh = (uint)(targetGuid >> 32);
+
+			Logging.WriteDebug("Spell_C::CastSpell({0}, 0, 0x{1:X}, 0)", spellId, targetGuid);
+
+			try
 			{
-				// Target the unit first, then cast
-				Lua.DoString(string.Format("CastSpellByID({0})", spellId));
+				lock (executor.AssemblyLock)
+				{
+					executor.Clear();
+					// HB 4.3.4 exact push order (8 args, right-to-left):
+					executor.AddLine("push 0");                // arg8: unk3
+					executor.AddLine("push 0");                // arg7: unk2
+					executor.AddLine("push 0");                // arg6: unk1
+					executor.AddLine("push 0");                // arg5: targetFlags
+					executor.AddLine("push {0}", guidHigh);    // arg4: GUID high 32 bits
+					executor.AddLine("push {0}", guidLow);     // arg3: GUID low 32 bits
+					executor.AddLine("push 0");                // arg2: itemIndex (0 = no item)
+					executor.AddLine("push {0}", spellId);     // arg1: spellId
+					executor.AddLine("call {0}", (uint)Patchables.GlobalOffsets.Spell_C__CastSpell);
+					executor.AddLine("add esp, 0x20");         // cdecl cleanup: 8 * 4 = 32 = 0x20
+					executor.AddLine("retn");
+					executor.Execute();
+				}
+			}
+			catch (Exception ex)
+			{
+				Logging.WriteException(ex);
 			}
 		}
 

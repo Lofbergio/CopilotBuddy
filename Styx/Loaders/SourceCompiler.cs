@@ -42,7 +42,7 @@ namespace Styx.Loaders
                 GenerateExecutable = false,
                 GenerateInMemory = true,
                 IncludeDebugInformation = true,
-                CompilerOptions = "/d:HB2",
+                CompilerOptions = "/d:COPILOTBUDDY",
                 TempFiles = new TempFileCollection(Path.GetTempPath()),
                 OutputAssembly = Path.Combine(Path.GetTempPath(), AssemblyName)
             };

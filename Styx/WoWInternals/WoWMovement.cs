@@ -164,6 +164,10 @@ namespace Styx.WoWInternals
 				Lua.DoString("StrafeLeftStop()");
 			if ((direction & MovementDirection.StrafeRight) != 0)
 				Lua.DoString("StrafeRightStop()");
+			if ((direction & MovementDirection.JumpAscend) != 0)
+				Lua.DoString("AscendStop()");
+			if ((direction & MovementDirection.Descend) != 0)
+				Lua.DoString("DescendStop()");
 		}
 
 		public static void StopFace()
@@ -347,6 +351,13 @@ namespace Styx.WoWInternals
 				else
 					Lua.DoString("AscendStop()");
 			}
+			if ((direction & MovementDirection.Descend) != 0)
+			{
+				if (start)
+					Lua.DoString("SitStandOrDescendStart()");
+				else
+					Lua.DoString("DescendStop()");
+			}
 		}
 
 		public static void Jump()
@@ -364,7 +375,13 @@ namespace Styx.WoWInternals
 		public static void Descend()
 		{
 			StyxWoW.ResetAfk();
-			Lua.DoString("DescendStop()");  // There's no DescendStart in WoW 3.3.5
+			Move(MovementDirection.Descend);
+		}
+
+		public static void DescendStop()
+		{
+			StyxWoW.ResetAfk();
+			MoveStop(MovementDirection.Descend);
 		}
 
 		public static void ConstantFace(float angle)

@@ -106,7 +106,7 @@ namespace Styx.Patchables
         // Spells
         Spell_C__GetSpellCooldown = 8419712,        // 0x806A80
         Spell_C__HandleTerrainClick = 8438592,      // 0x80B340
-        Spell_C__CastSpell = 8444480,               // 0x80CA40
+        Spell_C__CastSpell = 8444480,               // 0x80DA40
         
         // Lua
         LuaState = 0x00D3F78C,                      // Static pointer to Lua state

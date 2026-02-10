@@ -38,8 +38,6 @@ namespace Styx.Helpers
             Logging.LoggingLevel = _loggingLevel;
         }
 
-        private string _username = "test";
-        private string _password = "t3st";
         private string _meshesFolderPath = "";
         private string[]? _enabledPlugins;
         private int _formLocationX = 20;
@@ -50,28 +48,6 @@ namespace Styx.Helpers
         private int _logoutInactivityTimer = 10;
         private bool _logoutInactivityUseForceQuit = false;
         private bool _profileDebuggingMode = false;
-
-        /// <summary>
-        /// Username for login.
-        /// </summary>
-        [DefaultValue("test")]
-        [Setting]
-        public string Username
-        {
-            get { return _username; }
-            set { _username = value; }
-        }
-
-        /// <summary>
-        /// Password for login.
-        /// </summary>
-        [DefaultValue("t3st")]
-        [Setting]
-        public string Password
-        {
-            get { return _password; }
-            set { _password = value; }
-        }
 
         /// <summary>
         /// Path to meshes folder.
