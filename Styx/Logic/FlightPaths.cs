@@ -327,7 +327,10 @@ namespace Styx.Logic
         }
 
         /// <summary>
-        /// Find closest flight nodes for start and end points
+        /// Find closest flight nodes for start and end points.
+        /// Ported from HB 4.3.4 smethod_1: finds nearest node to 'from' as start,
+        /// then among start's connected nodes, picks the one nearest to 'to' as end.
+        /// Also guards against flight "going backwards" (start closer to dest than end).
         /// </summary>
         private static void FindClosestFlightNodes(WoWPoint from, WoWPoint to, out XmlFlightNode startNode, out XmlFlightNode endNode)
         {
@@ -347,12 +350,39 @@ namespace Styx.Logic
                 return;
             }
 
-            startNode = continentNodes.OrderBy(n => n.Location.Distance(from)).First();
-            endNode = continentNodes.OrderBy(n => n.Location.Distance(to)).First();
+            // HB 4.3.4: nearest node to player = start
+            XmlFlightNode sNode = continentNodes.OrderBy(n => n.Location.DistanceSqr(from)).First();
 
-            // Check if nodes are connected
-            if (!startNode.Connections.Contains(endNode.Name))
+            // HB 4.3.4: among start's connected nodes, pick nearest to destination
+            if (sNode.Connections == null || sNode.Connections.Count == 0)
+            {
                 startNode = endNode = null;
+                return;
+            }
+
+            // Filter to only connected nodes and pick nearest to destination
+            var connections = sNode.Connections;
+            XmlFlightNode? eNode = continentNodes
+                .Where(n => connections.Contains(n.Name))
+                .OrderBy(n => n.Location.DistanceSqr(to))
+                .FirstOrDefault();
+
+            if (eNode == null || eNode.Name == sNode.Name)
+            {
+                startNode = endNode = null;
+                return;
+            }
+
+            // HB 6.2.3 guard: if the start node is actually closer to destination
+            // than the end node, the flight would go backwards — cancel.
+            if (sNode.Location.DistanceSqr(to) < eNode.Location.DistanceSqr(to))
+            {
+                startNode = endNode = null;
+                return;
+            }
+
+            startNode = sNode;
+            endNode = eNode;
         }
 
         /// <summary>
