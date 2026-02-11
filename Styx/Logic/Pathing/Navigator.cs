@@ -433,25 +433,26 @@ namespace Styx.Logic.Pathing
 					// a long detour path or return a partial path.
 					// NOTE: HB's WowNavigator loads tiles on-demand during A* via MeshProvider.
 					// We can't do that, so we pre-load tiles explicitly instead.
-					try
-					{
-						TripperNavigator.EnsureTilesAroundPosition(mapId, start, LoadTilesAroundRadius);
-						TripperNavigator.EnsureTilesAroundPosition(mapId, end, LoadTilesAroundRadius);
-
-						// COPILOTBUDDY ENHANCEMENT (not in HB): also load tiles at the midpoint
-						// to bridge large gaps. HB doesn't need this because it loads tiles
-						// on-demand during A*; we pre-load so need to cover the corridor.
-						float distSqr = Vector3.DistanceSquared(start, end);
-						if (distSqr > 40000f) // > 200 yards
-						{
-							var mid = (start + end) * 0.5f;
-							TripperNavigator.EnsureTilesAroundPosition(mapId, mid, LoadTilesAroundRadius);
-						}
-					}
-					catch
-					{
-						// Non-fatal: pathfinding still works with whatever tiles are loaded
-					}
+					// TEST: Commenté pour isoler crash - EnsureTilesAroundPosition suspect
+					// try
+					// {
+					// 	TripperNavigator.EnsureTilesAroundPosition(mapId, start, LoadTilesAroundRadius);
+					// 	TripperNavigator.EnsureTilesAroundPosition(mapId, end, LoadTilesAroundRadius);
+					// 
+					// 	// COPILOTBUDDY ENHANCEMENT (not in HB): also load tiles at the midpoint
+					// 	// to bridge large gaps. HB doesn't need this because it loads tiles
+					// 	// on-demand during A*; we pre-load so need to cover the corridor.
+					// 	float distSqr = Vector3.DistanceSquared(start, end);
+					// 	if (distSqr > 40000f) // > 200 yards
+					// 	{
+					// 		var mid = (start + end) * 0.5f;
+					// 		TripperNavigator.EnsureTilesAroundPosition(mapId, mid, LoadTilesAroundRadius);
+					// 	}
+					// }
+					// catch
+					// {
+					// 	// Non-fatal: pathfinding still works with whatever tiles are loaded
+					// }
 
 					// Ensure blackspots are marked on navmesh before pathfinding
 					// This is HB 4.3.4's OnTileLoaded workaround
@@ -793,13 +794,13 @@ namespace Styx.Logic.Pathing
 			var startVec = new Vector3(start.X, start.Y, start.Z);
 			var endVec = new Vector3(destination.X, destination.Y, destination.Z);
 
-			// Load tiles at both ends before pathfinding
-			try
-			{
-				TripperNavigator.EnsureTilesAroundPosition(mapId, startVec, LoadTilesAroundRadius);
-				TripperNavigator.EnsureTilesAroundPosition(mapId, endVec, LoadTilesAroundRadius);
-			}
-			catch { }
+			// TEST: Commenté pour isoler crash - EnsureTilesAroundPosition suspect
+			// try
+			// {
+			// 	TripperNavigator.EnsureTilesAroundPosition(mapId, startVec, LoadTilesAroundRadius);
+			// 	TripperNavigator.EnsureTilesAroundPosition(mapId, endVec, LoadTilesAroundRadius);
+			// }
+			// catch { }
 
 			BlackspotManager.EnsureBlackspotsMarked();
 
@@ -831,13 +832,13 @@ namespace Styx.Logic.Pathing
 			var startVec = new Vector3(start.X, start.Y, start.Z);
 			var endVec = new Vector3(destination.X, destination.Y, destination.Z);
 
-			// Load tiles at both ends before pathfinding
-			try
-			{
-				TripperNavigator.EnsureTilesAroundPosition(mapId, startVec, LoadTilesAroundRadius);
-				TripperNavigator.EnsureTilesAroundPosition(mapId, endVec, LoadTilesAroundRadius);
-			}
-			catch { }
+			// TEST: Commenté pour isoler crash - EnsureTilesAroundPosition suspect
+			// try
+			// {
+			// 	TripperNavigator.EnsureTilesAroundPosition(mapId, startVec, LoadTilesAroundRadius);
+			// 	TripperNavigator.EnsureTilesAroundPosition(mapId, endVec, LoadTilesAroundRadius);
+			// }
+			// catch { }
 
 			BlackspotManager.EnsureBlackspotsMarked();
 
