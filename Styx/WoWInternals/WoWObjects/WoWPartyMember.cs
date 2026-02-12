@@ -308,6 +308,13 @@ namespace Styx.WoWInternals.WoWObjects
         /// <summary>
         /// Gets the member's location.
         /// </summary>
+        /// <summary>
+        /// HB 4.3.4 compat — Location3D returned WoWPoint while Location returned Vector2.
+        /// In CopilotBuddy, Location already returns WoWPoint, so this is an alias.
+        /// External bots (LazyRaider etc.) reference this.
+        /// </summary>
+        public WoWPoint Location3D => Location;
+
         public WoWPoint Location
         {
             get

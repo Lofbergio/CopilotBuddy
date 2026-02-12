@@ -309,6 +309,12 @@ namespace Styx.WoWInternals.WoWObjects
                 return zDiff < 50f; // Reasonable vertical difference
             }
         }
+
+        /// <summary>
+        /// HB 4.3.4 compat — was marked [Obsolete], just delegates to InLineOfSight.
+        /// External bots (LazyRaider etc.) reference this.
+        /// </summary>
+        public bool InLineOfSightOCD => InLineOfSight;
         
         #endregion
         

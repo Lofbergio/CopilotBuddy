@@ -566,6 +566,11 @@ namespace CopilotBuddy.UI
                 window.Owner = this;
                 window.ShowDialog();
             }
+            else if (configForm is System.Windows.Forms.Form winForm)
+            {
+                // WinForms support — external bots (LazyRaider etc.) use WinForms config dialogs
+                winForm.ShowDialog();
+            }
             else
             {
                 Logging.Write("[{0}] ConfigurationForm type not supported: {1}",

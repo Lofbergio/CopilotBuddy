@@ -168,8 +168,34 @@ namespace Styx
                 }
             }
 
-            // Compile and load each source file
+            // Group source files by directory so multi-file bots compile together.
+            // Files in the root Bots/ folder compile individually.
+            // Files in a subdirectory (e.g. Bots/LazyRaider/) compile as a batch.
+            var rootFiles = new List<string>();
+            var dirGroups = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
             foreach (string sourceFile in sourceFiles)
+            {
+                string? dir = Path.GetDirectoryName(sourceFile);
+                // Files directly in the root bots folder → compile individually
+                if (dir != null && string.Equals(Path.GetFullPath(dir), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase))
+                {
+                    rootFiles.Add(sourceFile);
+                }
+                else if (dir != null)
+                {
+                    // Find the immediate subdirectory under path
+                    string relative = Path.GetRelativePath(path, dir);
+                    string topDir = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)[0];
+                    string groupKey = Path.Combine(path, topDir);
+                    if (!dirGroups.ContainsKey(groupKey))
+                        dirGroups[groupKey] = new List<string>();
+                    dirGroups[groupKey].Add(sourceFile);
+                }
+            }
+
+            // Compile root-level files individually
+            foreach (string sourceFile in rootFiles)
             {
                 Logging.Write("Compiling: {0}", Path.GetFileName(sourceFile));
                 CompilerResults compilerResults;
@@ -183,6 +209,26 @@ namespace Styx
                 else if (compilerResults != null)
                 {
                     Logging.Write("Compiled successfully: {0}", Path.GetFileName(sourceFile));
+                }
+            }
+
+            // Compile subdirectory groups as a batch (pass directory path to SourceCompiler)
+            foreach (var kvp in dirGroups)
+            {
+                string dirPath = kvp.Key;
+                string dirName = Path.GetFileName(dirPath);
+                Logging.Write("Compiling directory: {0}/ ({1} files)", dirName, kvp.Value.Count);
+                CompilerResults compilerResults;
+                classCollection.CompileAndLoadFrom(dirPath, out compilerResults);
+
+                if (compilerResults != null && compilerResults.Errors.HasErrors)
+                {
+                    Logging.Write("Could not compile bot directory: {0}/", dirName);
+                    Logging.Write(Utilities.FormatCompilerErrors(compilerResults));
+                }
+                else if (compilerResults != null)
+                {
+                    Logging.Write("Compiled successfully: {0}/", dirName);
                 }
             }
 
