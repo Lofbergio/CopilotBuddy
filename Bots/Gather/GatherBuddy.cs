@@ -9,6 +9,7 @@ using Styx.Helpers;
 using Styx.Logic;
 using Styx.Logic.BehaviorTree;
 using Styx.Logic.Combat;
+using Styx.Logic.Inventory.Frames;
 using Styx.Logic.Pathing;
 using Styx.Logic.Profiles;
 using Styx.WoWInternals;
@@ -41,15 +42,45 @@ namespace Bots.Gather
         private readonly Stopwatch _cleanupTimer = new();
         private static CombatRoutine? Routine => RoutineManager.Current;
 
+        // FEAT-40: Stats tracking
+        private int _nodesGathered;
+        private int _herbsGathered;
+        private int _mineralsGathered;
+        private readonly Stopwatch _sessionTimer = new();
+        private WoWPoint _vendorLocation = WoWPoint.Empty;
+
         public override Composite Root => _root ??= CreateRootBehavior();
+
+        /// <summary>
+        /// FEAT-40: Session statistics.
+        /// </summary>
+        public int NodesGathered => _nodesGathered;
+        public int HerbsGathered => _herbsGathered;
+        public int MineralsGathered => _mineralsGathered;
+        public TimeSpan SessionTime => _sessionTimer.Elapsed;
 
         // ═══════════════════════════════════════════════════════════
         // LIFECYCLE
         // ═══════════════════════════════════════════════════════════
 
+        /// <summary>
+        /// FEAT-40: Called once when bot is first loaded. Loads persisted blacklist.
+        /// </summary>
+        public override void Initialize()
+        {
+            NodeTracker.LoadBlacklist();
+            Logging.Write("[GatherBuddy] Initialized (blacklist loaded)");
+        }
+
         public override void Start()
         {
             Logging.Write("[GatherBuddy] Starting...");
+
+            // FEAT-40: Reset stats
+            _nodesGathered = 0;
+            _herbsGathered = 0;
+            _mineralsGathered = 0;
+            _sessionTimer.Restart();
 
             // Load waypoints from ProfileManager (loaded via UI "Load Profile" button)
             if (ProfileManager.CurrentProfile == null)
@@ -124,6 +155,11 @@ namespace Bots.Gather
                 _waypointQueue.OnEndOfQueue -= OnQueueCycle;
             }
 
+            // FEAT-40: Save blacklist + print stats
+            NodeTracker.SaveBlacklist();
+            _sessionTimer.Stop();
+            Logging.Write($"[GatherBuddy] Session stats: {_nodesGathered} nodes ({_herbsGathered} herbs, {_mineralsGathered} minerals) in {SessionTime:hh\\:mm\\:ss}");
+
             NodeTracker.Reset();
             _cleanupTimer.Stop();
         }
@@ -167,13 +203,19 @@ namespace Bots.Gather
                     CreateLootBehavior()
                 ),
 
-                // 4. Node gathering
+                // 4. FEAT-40: Vendor/Repair when bags full or durability low
+                new Decorator(
+                    ctx => NeedsVendorOrRepair(),
+                    CreateVendorBehavior()
+                ),
+
+                // 5. Node gathering
                 CreateGatherBehavior(),
 
-                // 5. Movement to next waypoint
+                // 6. Movement to next waypoint
                 CreateMovementBehavior(),
 
-                // 6. Idle
+                // 7. Idle
                 new ActionIdle()
             );
         }
@@ -311,11 +353,11 @@ namespace Bots.Gather
                     }),
 
                     new PrioritySelector(
-                        // Too far - move closer
+                        // Too far - move closer (FEAT-40: use Flightor if flying)
                         new Decorator(
                             ctx => _currentNode != null && _currentNode.DistanceSqr > 5 * 5,
                             new Sequence(
-                                // Dismount if getting close
+                                // Dismount if getting close (ground or descend if flying)
                                 new DecoratorContinue(
                                     ctx => StyxWoW.Me != null && StyxWoW.Me.Mounted && _currentNode!.DistanceSqr < 15 * 15,
                                     new Action(ctx =>
@@ -326,7 +368,15 @@ namespace Bots.Gather
                                 ),
                                 new Action(ctx =>
                                 {
-                                    Navigator.MoveTo(_currentNode!.Location);
+                                    if (GatherBuddySettings.Instance.UseFlying && Flightor.MountHelper.CanMount)
+                                    {
+                                        // Use Flightor for flying navigation to node
+                                        Flightor.MoveTo(_currentNode!.Location);
+                                    }
+                                    else
+                                    {
+                                        Navigator.MoveTo(_currentNode!.Location);
+                                    }
                                     return RunStatus.Running;
                                 })
                             )
@@ -360,7 +410,13 @@ namespace Bots.Gather
                                     new Action(ctx =>
                                     {
                                         if (_currentNode != null)
+                                        {
+                                            // FEAT-40: Track stats
+                                            _nodesGathered++;
+                                            if (_currentNode.IsHerb) _herbsGathered++;
+                                            if (_currentNode.IsMineral) _mineralsGathered++;
                                             NodeTracker.MarkHarvested(_currentNode);
+                                        }
                                         _currentNode = null;
                                         return RunStatus.Success;
                                     })
@@ -400,12 +456,21 @@ namespace Bots.Gather
                     })
                 ),
 
-                // Move to current waypoint
+                // Move to current waypoint (FEAT-40: use Flightor if flying)
                 new Action(ctx =>
                 {
                     var targetWaypoint = _waypointQueue!.Peek();
 
-                    // Mount if possible and far away
+                    if (GatherBuddySettings.Instance.UseFlying && Flightor.MountHelper.CanMount)
+                    {
+                        // Flying navigation via Flightor
+                        float alt = GatherBuddySettings.Instance.FlyingAltitude;
+                        var flyDest = new WoWPoint(targetWaypoint.X, targetWaypoint.Y, targetWaypoint.Z + alt);
+                        Flightor.MoveTo(flyDest);
+                        return RunStatus.Running;
+                    }
+
+                    // Ground mount if possible and far away
                     if (StyxWoW.Me != null && !StyxWoW.Me.Mounted &&
                         Mount.CanMount() &&
                         StyxWoW.Me.Location.DistanceSqr(targetWaypoint) > 50 * 50)
@@ -491,6 +556,127 @@ namespace Bots.Gather
                         outgoing.Add(obj);
                 }
             }
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        // VENDOR/REPAIR — FEAT-40
+        // ═══════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Checks whether the bot should go to a vendor/repair NPC.
+        /// </summary>
+        private bool NeedsVendorOrRepair()
+        {
+            if (StyxWoW.Me == null || StyxWoW.Me.Combat)
+                return false;
+
+            var settings = GatherBuddySettings.Instance;
+
+            // Check free bag slots
+            if (settings.VendorWhenFull)
+            {
+                int freeSlots = GetFreeBagSlots();
+                if (freeSlots <= settings.MinFreeBagSlots)
+                    return true;
+            }
+
+            // Check durability
+            if (settings.RepairAtVendor)
+            {
+                float durability = GetDurabilityPercent();
+                if (durability > 0f && durability < settings.RepairDurabilityPercent)
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Creates the vendor/repair composite behavior.
+        /// If no vendor is known, logs a warning and skips.
+        /// </summary>
+        private Composite CreateVendorBehavior()
+        {
+            return new PrioritySelector(
+                new Action(ctx =>
+                {
+                    // Use nearest vendor NPC if available
+                    var vendor = ObjectManager.GetObjectsOfType<WoWUnit>()
+                        .Where(u => u.IsVendor && u.IsAlive && !u.IsHostile)
+                        .OrderBy(u => u.DistanceSqr)
+                        .FirstOrDefault();
+
+                    if (vendor == null)
+                    {
+                        Logging.WriteDebug("[GatherBuddy] Bags full/durability low but no vendor found nearby");
+                        return RunStatus.Failure;
+                    }
+
+                    if (vendor.DistanceSqr > 5 * 5)
+                    {
+                        TreeRoot.StatusText = $"Moving to vendor {vendor.Name}";
+                        Navigator.MoveTo(vendor.Location);
+                        return RunStatus.Running;
+                    }
+
+                    // Interact with vendor
+                    WoWMovement.MoveStop();
+                    vendor.Interact();
+                    TreeRoot.StatusText = $"Vendoring at {vendor.Name}";
+
+                    // Sell greys/whites after a small delay
+                    Lua.DoString(
+                        "for bag=0,4 do " +
+                        "  for slot=1,GetContainerNumSlots(bag) do " +
+                        "    local _,_,_,_,_,_,_,_,_,_,price = GetContainerItemInfo(bag,slot); " +
+                        "    local link = GetContainerItemLink(bag,slot); " +
+                        "    if link then " +
+                        "      local _,_,quality = GetItemInfo(link); " +
+                        "      if quality and quality <= 1 then UseContainerItem(bag,slot); end " +
+                        "    end " +
+                        "  end " +
+                        "end");
+
+                    // Repair if vendor can repair
+                    if (GatherBuddySettings.Instance.RepairAtVendor && vendor.IsRepairMerchant)
+                    {
+                        Lua.DoString("RepairAllItems()");
+                        Logging.Write("[GatherBuddy] Repaired equipment");
+                    }
+
+                    Logging.Write("[GatherBuddy] Vendored junk items");
+                    return RunStatus.Success;
+                })
+            );
+        }
+
+        /// <summary>
+        /// Returns the number of free bag slots via Lua.
+        /// </summary>
+        private static int GetFreeBagSlots()
+        {
+            var results = Lua.GetReturnValues("local free=0; for i=0,4 do free=free+GetContainerNumFreeSlots(i) end; return free");
+            if (results != null && results.Count > 0 && int.TryParse(results[0], out int free))
+                return free;
+            return 999; // Assume plenty if we can't read
+        }
+
+        /// <summary>
+        /// Returns average durability percentage (0-100) across equipped items.
+        /// </summary>
+        private static float GetDurabilityPercent()
+        {
+            var results = Lua.GetReturnValues(
+                "local total,current=0,0; " +
+                "for slot=1,18 do " +
+                "  local cur,mx=GetInventoryItemDurability(slot); " +
+                "  if cur and mx and mx>0 then total=total+mx; current=current+cur end " +
+                "end; " +
+                "if total==0 then return 100 end; " +
+                "return math.floor(current/total*100)");
+            if (results != null && results.Count > 0 && float.TryParse(results[0], out float pct))
+                return pct;
+            return 100f;
         }
     }
 }
