@@ -1,5 +1,6 @@
 using System;
 using System.Text;
+using Styx.WoWInternals;
 using Styx.WoWInternals.WoWCache;
 
 namespace Styx.Logic.Questing
@@ -187,12 +188,55 @@ namespace Styx.Logic.Questing
 		}
 
 		/// <summary>
-		/// Gets descriptor data for this quest.
+		/// STUB-03: Gets descriptor data for this quest from the player's quest log.
+		/// Reads the 25 quest log slots in the player descriptor table.
+		/// Layout per slot (5 descriptor indices each, starting at 0x9E):
+		///   +0: Quest ID (uint)
+		///   +1: State flags (uint → WoWDescriptorQuestFlags)
+		///   +2: Objective counts low (2 packed ushorts: objectives 0,1)
+		///   +3: Objective counts high (2 packed ushorts: objectives 2,3)
+		///   +4: Timer (uint, seconds before failed)
 		/// </summary>
 		public bool GetData(out QuestDescriptorData data)
 		{
 			data = default;
-			// TODO: Implement by reading from player quest log descriptors
+
+			var me = StyxWoW.Me;
+			if (me == null || me.BaseAddress == 0U)
+				return false;
+
+			const uint QUEST_LOG_BASE = 0x9E; // PLAYER_QUEST_LOG_1_1 (absolute descriptor index)
+			const int QUEST_LOG_SLOTS = 25;
+			const int FIELDS_PER_SLOT = 5;
+
+			uint questId = Id;
+
+			for (int slot = 0; slot < QUEST_LOG_SLOTS; slot++)
+			{
+				uint slotBase = QUEST_LOG_BASE + (uint)(slot * FIELDS_PER_SLOT);
+				uint slotQuestId = me.ReadDescriptor<uint>(slotBase);
+
+				if (slotQuestId != questId)
+					continue;
+
+				// Found the quest in this slot — read all fields
+				data.Id = slotQuestId;
+				data.Flags = (WoWDescriptorQuestFlags)me.ReadDescriptor<uint>(slotBase + 1);
+
+				uint objectivesLow = me.ReadDescriptor<uint>(slotBase + 2);
+				uint objectivesHigh = me.ReadDescriptor<uint>(slotBase + 3);
+
+				data.ObjectivesDone = new ushort[4];
+				data.ObjectivesDone[0] = (ushort)(objectivesLow & 0xFFFF);
+				data.ObjectivesDone[1] = (ushort)((objectivesLow >> 16) & 0xFFFF);
+				data.ObjectivesDone[2] = (ushort)(objectivesHigh & 0xFFFF);
+				data.ObjectivesDone[3] = (ushort)((objectivesHigh >> 16) & 0xFFFF);
+
+				data.SecondsBeforeFailed = me.ReadDescriptor<uint>(slotBase + 4);
+
+				return true;
+			}
+
 			return false;
 		}
 
