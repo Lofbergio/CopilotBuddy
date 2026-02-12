@@ -10,13 +10,22 @@ namespace Styx.Logic.AreaManagement
 		private readonly List<Area> _areas = new List<Area>();
 		private GrindArea? _currentGrindArea;
 
+		/// <summary>
+		/// FEAT-41: Sets the current active area by list index.
+		/// If the area has a GrindArea, sets it as the current grind area.
+		/// </summary>
 		public void SetAreaByIndex(int index)
 		{
-			if (index > _areas.Count)
+			if (index < 0 || index >= _areas.Count)
 			{
 				throw new IndexOutOfRangeException("Index out of range for area list.");
 			}
-			// TODO: Implement polygon area handling
+
+			Area area = _areas[index];
+			if (area is GrindArea grindArea)
+			{
+				_currentGrindArea = grindArea;
+			}
 		}
 
 		public void SetArea(GrindArea area)
