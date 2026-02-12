@@ -43,5 +43,11 @@ namespace Styx.Combat.CombatRoutine
 		string ButtonText { get; }
 
 		void Pulse();
+
+		/// <summary>
+		/// Called when the combat routine is shutting down.
+		/// Used for cleanup (timers, event handlers, etc.).
+		/// </summary>
+		void ShutDown();
 	}
 }
