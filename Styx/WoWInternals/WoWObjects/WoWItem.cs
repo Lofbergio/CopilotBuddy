@@ -52,27 +52,30 @@ namespace Styx.WoWInternals.WoWObjects
         private enum ItemFlagValues : uint
         {
             None = 0x0,
-            Soulbound = 0x1,
-            Conjured = 0x2,
-            Openable = 0x4,
-            GiftWrapped = 0x8,
-            Totem = 0x10,
-            TriggersSpell = 0x20,
-            NoEquipCooldown = 0x40,
-            MultiLootQuest = 0x80,
-            BindOnEquip = 0x100,
-            IsWand = 0x200,
-            IsWrappingPaper = 0x400,
-            IsCharter = 0x2000,
-            IsReadable = 0x4000,
-            IsPvPItem = 0x8000,
-            CanExpire = 0x10000,
-            CanProspect = 0x20000,
-            IsUniqueEquipped = 0x40000,
-            IsThrownWeapon = 0x80000,
-            IsAccountBound = 0x100000,
-            IsEnchantScroll = 0x200000,
-            IsMillable = 0x400000
+            Soulbound = 0x1,         // flag_1
+            Conjured = 0x2,          // flag_2
+            Openable = 0x4,          // flag_3
+            GiftWrapped = 0x8,       // flag_4
+            // 0x10 unused (bit 4 skipped in WoW item flags)
+            Totem = 0x20,            // flag_5 — was 0x10 (WRONG)
+            TriggersSpell = 0x40,    // flag_6 — was 0x20 (WRONG)
+            NoEquipCooldown = 0x80,  // flag_7 — was 0x40 (WRONG)
+            IsWand = 0x100,          // flag_8 — was 0x200 (WRONG)
+            IsWrappingPaper = 0x200, // flag_9 — was 0x400 (WRONG)
+            // flags 10-12 (0x400, 0x800, 0x1000) unused
+            IsCharter = 0x2000,      // flag_13
+            IsReadable = 0x4000,     // flag_14
+            IsPvPItem = 0x8000,      // flag_15
+            CanExpire = 0x10000,     // flag_16
+            // 0x20000 unused (bit 17 skipped)
+            CanProspect = 0x40000,   // flag_17 — was 0x20000 (WRONG)
+            IsUniqueEquipped = 0x80000, // flag_18 — was 0x40000 (WRONG)
+            // flags 20-22 (0x100000-0x200000) unused
+            IsThrownWeapon = 0x400000,  // flag_19 — was 0x80000 (WRONG)
+            // flags 24-26 unused
+            IsAccountBound = 0x8000000,  // flag_20 — was 0x100000 (WRONG)
+            IsEnchantScroll = 0x10000000, // flag_21 — was 0x200000 (WRONG)
+            IsMillable = 0x20000000      // flag_22 — was 0x400000 (WRONG)
         }
 
         #endregion
@@ -531,8 +534,6 @@ namespace Styx.WoWInternals.WoWObjects
 
         public bool IsGift => HasFlag(ItemFlagValues.GiftWrapped);
 
-        public bool IsBoundToEquipOnAcquire => HasFlag(ItemFlagValues.BindOnEquip);
-
         #endregion
 
         #region Additional Properties
@@ -542,6 +543,30 @@ namespace Styx.WoWInternals.WoWObjects
             get
             {
                 return Lua.GetReturnVal<float>("return GetItemCooldown(" + Entry + ")", 0);
+            }
+        }
+
+        /// <summary>
+        /// FEAT-43: Gets the remaining cooldown as a TimeSpan.
+        /// Uses Lua GetItemCooldown which returns (startTime, duration, isEnabled).
+        /// </summary>
+        public TimeSpan CooldownTimeLeft
+        {
+            get
+            {
+                try
+                {
+                    var results = Lua.GetReturnValues(
+                        $"local s,d,e = GetItemCooldown({Entry}); if s > 0 then return d - (GetTime() - s) else return 0 end");
+                    if (results != null && results.Count > 0)
+                    {
+                        float seconds = Lua.ParseLuaValue<float>(results[0]);
+                        if (seconds > 0)
+                            return TimeSpan.FromSeconds(seconds);
+                    }
+                }
+                catch { }
+                return TimeSpan.Zero;
             }
         }
 
