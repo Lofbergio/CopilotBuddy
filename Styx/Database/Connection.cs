@@ -179,8 +179,32 @@ namespace Styx.Database
             double y2 = Convert.ToDouble(args[4]);
             double z2 = Convert.ToDouble(args[5]);
 
-            // For now, use Euclidean distance squared
-            // TODO: Integrate with Navigator.PathDistance when available
+            // FEAT-41: Try mesh-based path distance first; fall back to Euclidean
+            try
+            {
+                var from = new Styx.Logic.Pathing.WoWPoint((float)x1, (float)y1, (float)z1);
+                var to = new Styx.Logic.Pathing.WoWPoint((float)x2, (float)y2, (float)z2);
+                var path = Styx.Logic.Pathing.Navigator.GeneratePath(from, to);
+                if (path != null && path.Length > 1)
+                {
+                    double totalDist = 0;
+                    for (int i = 1; i < path.Length; i++)
+                    {
+                        double sdx = path[i].X - path[i - 1].X;
+                        double sdy = path[i].Y - path[i - 1].Y;
+                        double sdz = path[i].Z - path[i - 1].Z;
+                        totalDist += Math.Sqrt(sdx * sdx + sdy * sdy + sdz * sdz);
+                    }
+                    if (totalDist > 0)
+                        return totalDist * totalDist; // Return squared for consistency
+                }
+            }
+            catch
+            {
+                // Navigator not initialized or mesh not loaded — fall back
+            }
+
+            // Euclidean distance squared fallback
             double dx = x2 - x1;
             double dy = y2 - y1;
             double dz = z2 - z1;
