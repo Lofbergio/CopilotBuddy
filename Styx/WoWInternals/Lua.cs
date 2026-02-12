@@ -261,6 +261,32 @@ namespace Styx.WoWInternals
             DoString(lua, "CopilotBuddy", 0);
         }
 
+        /// <summary>
+        /// FEAT-30: Parses a Lua string value to a typed C# value.
+        /// Handles nil, empty, bool, and numeric/string conversion.
+        /// Ported from HB 5.4.8.
+        /// </summary>
+        public static T ParseLuaValue<T>(string val)
+        {
+            if (string.IsNullOrEmpty(val) || val == "nil")
+                return default(T)!;
+
+            if (typeof(T) == typeof(bool))
+            {
+                string lower = val.ToLower();
+                return (T)(object)(lower != "false" && lower != "0");
+            }
+
+            try
+            {
+                return (T)Convert.ChangeType(val, typeof(T), System.Globalization.CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                return default(T)!;
+            }
+        }
+
         public static void DoString(string lua, string luaFile, uint pState)
         {
             var executor = ObjectManager.Executor;
@@ -394,17 +420,20 @@ namespace Styx.WoWInternals
             }
         }
 
+        [Obsolete("GetLocalizedText is deprecated. Use GetReturnValues instead.")]
         public static T GetLocalizedText<T>(string szLuaVariable)
         {
             string text = GetLocalizedText(szLuaVariable, StyxWoW.Me?.BaseAddress ?? 0);
             return (T)Convert.ChangeType(text, typeof(T), CultureInfo.InvariantCulture);
         }
 
+        [Obsolete("GetLocalizedText is deprecated. Use GetReturnValues instead.")]
         public static string GetLocalizedText(string szLuaVariable)
         {
             return GetLocalizedText(szLuaVariable, StyxWoW.Me?.BaseAddress ?? 0);
         }
 
+        [Obsolete("GetLocalizedText is deprecated. Use GetReturnValues instead.")]
         public static string GetLocalizedText(string szLuaVariable, uint lpLocalPlayer)
         {
             var executor = ObjectManager.Executor;
@@ -448,6 +477,7 @@ namespace Styx.WoWInternals
             }
         }
 
+        [Obsolete("GetLocalizedText is deprecated. Use GetReturnValues instead.")]
         public static int GetLocalizedInt32(string szLuaVariable, uint lpLocalPlayer)
         {
             string text = GetLocalizedText(szLuaVariable, lpLocalPlayer);
@@ -456,6 +486,7 @@ namespace Styx.WoWInternals
             return int.TryParse(text, out int result) ? result : 0;
         }
 
+        [Obsolete("GetLocalizedText is deprecated. Use GetReturnValues instead.")]
         public static uint GetLocalizedUInt32(string szLuaVariable, uint lpLocalPlayer)
         {
             string text = GetLocalizedText(szLuaVariable, lpLocalPlayer);
@@ -464,6 +495,7 @@ namespace Styx.WoWInternals
             return uint.TryParse(text, out uint result) ? result : 0;
         }
 
+        [Obsolete("GetLocalizedText is deprecated. Use GetReturnValues instead.")]
         public static long GetLocalizedInt64(string szLuaVariable, uint lpLocalPlayer)
         {
             string text = GetLocalizedText(szLuaVariable, lpLocalPlayer);
@@ -472,6 +504,7 @@ namespace Styx.WoWInternals
             return long.TryParse(text, out long result) ? result : 0;
         }
 
+        [Obsolete("GetLocalizedText is deprecated. Use GetReturnValues instead.")]
         public static ulong GetLocalizedUInt64(string szLuaVariable, uint lpLocalPlayer)
         {
             string text = GetLocalizedText(szLuaVariable, lpLocalPlayer);
@@ -480,6 +513,7 @@ namespace Styx.WoWInternals
             return ulong.TryParse(text, out ulong result) ? result : 0;
         }
 
+        [Obsolete("GetLocalizedText is deprecated. Use GetReturnValues instead.")]
         public static bool GetLocalizedBool(string szLuaVariable, uint lpLocalPlayer)
         {
             string text = GetLocalizedText(szLuaVariable, lpLocalPlayer);
