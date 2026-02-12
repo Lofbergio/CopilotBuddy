@@ -67,6 +67,49 @@ namespace Styx
 
         public static bool IsInGame => ObjectManager.IsInGame;
 
+        /// <summary>
+        /// FEAT-07: Gets the current game state from memory.
+        /// WotLK 3.3.5a offset: 0x00B6A9E0
+        /// </summary>
+        public static GameState GameState
+        {
+            get
+            {
+                try
+                {
+                    return (GameState)ObjectManager.Wow.Read<uint>(0x00B6A9E0);
+                }
+                catch
+                {
+                    return GameState.Unknown;
+                }
+            }
+        }
+
+        /// <summary>
+        /// FEAT-07: Returns true if the player is in the game world and not zoning.
+        /// HB 4.3.4: IsInGame && GameState != GameState.Zoning
+        /// </summary>
+        public static bool IsInWorld => IsInGame && GameState != GameState.Zoning;
+
+        /// <summary>
+        /// FEAT-19: Gets the current glue (login) screen state.
+        /// Returns GlueScreen.Unknown when in-game.
+        /// </summary>
+        public static GlueScreen GlueState
+        {
+            get
+            {
+                if (IsInGame) return GlueScreen.Unknown;
+                return GlueScreen.Login;
+            }
+        }
+
+        /// <summary>
+        /// FEAT-44: Provides access to the WoW camera.
+        /// </summary>
+        public static WoWCamera Camera { get; } = new WoWCamera();
+
         [Obsolete("Use TreeRoot.StatusText instead. This property has been deprecated, and will be removed in a future release.")]
         public static string StatusText
         {
@@ -97,7 +140,8 @@ namespace Styx
 
         public static void SleepForLagDuration()
         {
-            System.Threading.Thread.Sleep((int)(WoWClient.Latency * 2 + 50));
+            // BUG-17 fix: Base 150ms (was 50ms) — matches HB 4.3.4
+            System.Threading.Thread.Sleep((int)(WoWClient.Latency * 2 + 150));
         }
 
         public static void ResetAfk()
