@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using GreenMagic;
 using Styx.Helpers;
@@ -22,6 +23,44 @@ namespace Styx.WoWInternals
 		// GetActivePlayerObject - FROM 335offsetsall.txt
 		private const uint GetActivePlayerObject_Function = 0x004038F0;  // 4208880 decimal
 
+
+		#endregion
+
+		#region FEAT-01: Timed movement queue
+
+		private class TimedMovementEntry
+		{
+			public MovementDirection Direction;
+			public DateTime StopTime;
+		}
+
+		private static readonly List<TimedMovementEntry> _timedMovements = new List<TimedMovementEntry>();
+
+		/// <summary>
+		/// FEAT-01: Pulse processes timed movement entries, stopping directions whose timer has expired.
+		/// Called from WoWPulsator on each tick.
+		/// </summary>
+		public static void Pulse()
+		{
+			if (_timedMovements.Count == 0)
+				return;
+
+			DateTime now = DateTime.Now;
+			MovementDirection expired = MovementDirection.None;
+			for (int i = _timedMovements.Count - 1; i >= 0; i--)
+			{
+				if (_timedMovements[i].StopTime <= now)
+				{
+					Logging.WriteDebug("Flushing timed movement. Direction: {0}", _timedMovements[i].Direction);
+					expired |= _timedMovements[i].Direction;
+					_timedMovements.RemoveAt(i);
+				}
+			}
+			if (expired != MovementDirection.None)
+			{
+				MoveStop(expired);
+			}
+		}
 
 		#endregion
 
@@ -123,12 +162,35 @@ namespace Styx.WoWInternals
 			}
 		}
 
-		public static WoWPoint ActiveMover
+		/// <summary>
+		/// FEAT-02: GUID of the active mover (player, or vehicle/possession target).
+		/// </summary>
+		public static ulong ActiveMoverGuid
 		{
 			get
 			{
-				LocalPlayer? me = ObjectManager.Me;
-				return me?.Location ?? WoWPoint.Zero;
+				Memory? memory = ObjectManager.Wow;
+				if (memory == null) return 0UL;
+				return memory.Read<ulong>(Styx.Offsets.GlobalOffsets.ActiveMoverGuid);
+			}
+		}
+
+		/// <summary>
+		/// BUG-02: Returns the active mover as WoWUnit (not WoWPoint).
+		/// Falls back to LocalPlayer if the guid resolves to null.
+		/// </summary>
+		public static WoWUnit? ActiveMover
+		{
+			get
+			{
+				ulong guid = ActiveMoverGuid;
+				if (guid != 0UL)
+				{
+					var unit = ObjectManager.GetObjectByGuid<WoWUnit>(guid);
+					if (unit != null)
+						return unit;
+				}
+				return ObjectManager.Me;
 			}
 		}
 
@@ -278,6 +340,16 @@ namespace Styx.WoWInternals
 			Face(target.Location);
 		}
 
+		/// <summary>FEAT-03: Face with no args — faces current target.</summary>
+		public static void Face()
+		{
+			LocalPlayer? me = ObjectManager.Me;
+			if (me == null) return;
+			ulong targetGuid = me.CurrentTargetGuid;
+			if (targetGuid != 0UL)
+				Face(targetGuid);
+		}
+
 		/// <summary>HB 4.3.4+ compatibility: Face an object by its GUID.</summary>
 		public static void Face(ulong guid)
 		{
@@ -400,6 +472,16 @@ namespace Styx.WoWInternals
 			}
 		}
 
+		/// <summary>FEAT-04: Stop constant-facing a specific target GUID.</summary>
+		public static void ConstantFaceStop(ulong guid)
+		{
+			LocalPlayer? me = ObjectManager.Me;
+			if (me == null) return;
+			// Only stop if we're currently facing that guid
+			if (ClickToMoveInfo.InteractGuid == guid || guid == 0UL)
+				StopFace();
+		}
+
 		public static void ConstantFaceStop()
 		{
 			StopFace();
@@ -459,10 +541,17 @@ namespace Styx.WoWInternals
 			}
 		}
 
+		/// <summary>FEAT-42: InputControl with Flags field matching HB 4.3.4 layout.</summary>
 		public struct InputControl
 		{
 			public uint Time;
+			[System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.U4)]
+			public MovementDirection Flags;
+			[System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValArray, SizeConst = 5)]
+			private uint[] _reserved1;
 			public MovementControl MovementControl;
+			[System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValArray, SizeConst = 11)]
+			private uint[] _reserved2;
 		}
 
 		[Flags]
