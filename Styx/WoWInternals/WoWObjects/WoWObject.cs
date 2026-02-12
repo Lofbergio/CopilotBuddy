@@ -236,6 +236,17 @@ namespace Styx.WoWInternals.WoWObjects
         
         #region Interaction Properties
         public virtual float InteractRange => 4f;
+
+        /// <summary>FEAT-28: Squared interact range for faster distance checks (avoids sqrt).</summary>
+        public float InteractRangeSqr
+        {
+            get
+            {
+                float range = InteractRange;
+                return range * range;
+            }
+        }
+
         public bool WithinInteractRange
         {
             get
@@ -250,12 +261,14 @@ namespace Styx.WoWInternals.WoWObjects
         
         #region Location Checks
         public bool IsUnderground => Z < -500f;
-        public bool IsIndoors
+        /// <summary>
+        /// Whether this object is indoors. Override on LocalPlayer uses Lua for accuracy.
+        /// FEAT-45: Made virtual so LocalPlayer can override.
+        /// </summary>
+        public virtual bool IsIndoors
         {
             get
             {
-                // Basic implementation: check if we're in an instance or using Lua
-                // Full zone flag implementation would require reading AreaTable.dbc
                 try
                 {
                     string result = Lua.GetReturnVal<string>("return IsIndoors() and '1' or '0'", 0);
@@ -267,7 +280,11 @@ namespace Styx.WoWInternals.WoWObjects
                 }
             }
         }
-        public bool IsOutdoors => !IsIndoors;
+        /// <summary>
+        /// Whether this object is outdoors. Override on LocalPlayer uses Lua for accuracy.
+        /// FEAT-45: Made virtual so LocalPlayer can override.
+        /// </summary>
+        public virtual bool IsOutdoors => !IsIndoors;
         public bool InLineOfSight
         {
             get
@@ -432,6 +449,15 @@ namespace Styx.WoWInternals.WoWObjects
             if (this is WoWGameObject gameObject) return gameObject;
             if (Type == WoWObjectType.GameObject)
                 return new WoWGameObject(BaseAddress);
+            return null;
+        }
+
+        /// <summary>FEAT-28: Cast this object to WoWDynamicObject (e.g., Blizzard, Rain of Fire ground effects).</summary>
+        public WoWDynamicObject? ToDynamicObject()
+        {
+            if (this is WoWDynamicObject dynObj) return dynObj;
+            if (Type == WoWObjectType.DynamicObject)
+                return new WoWDynamicObject(BaseAddress);
             return null;
         }
         
