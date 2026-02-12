@@ -5,23 +5,17 @@ namespace Styx.Helpers
 {
 	/// <summary>
 	/// Combat assist settings for RAF/party following.
+	/// Path: Settings/CombatAssistSettings_{Name}.xml
+	/// Pattern from HB 3.3.5a.
 	/// </summary>
-	// TODO: Uncomment when UI is ready
-	// [Serializable]
 	public class CombatAssistSettings : Settings
 	{
-		private static CombatAssistSettings? _instance;
+		public static readonly CombatAssistSettings Instance = new CombatAssistSettings();
 
-		/// <summary>
-		/// Gets the singleton instance.
-		/// </summary>
-		public static CombatAssistSettings Instance => _instance ??= new CombatAssistSettings();
-
-		/// <summary>
-		/// Creates a new instance of combat assist settings.
-		/// </summary>
 		public CombatAssistSettings()
-			: base(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"Settings\\CombatAssistSettings_{StyxWoW.Me?.Name ?? ""}.xml"))
+			: base(Path.Combine(Logging.ApplicationPath,
+				string.Format("Settings\\CombatAssistSettings_{0}.xml",
+				(StyxWoW.Me != null) ? StyxWoW.Me.Name : "")))
 		{
 		}
 

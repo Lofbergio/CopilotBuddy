@@ -6,13 +6,15 @@ namespace Styx.Helpers
 {
     /// <summary>
     /// Settings for UI window positions and sizes.
+    /// Global (not per-character) — stored in Settings/UISettings.xml.
+    /// Pattern from HB 5.4.8.
     /// </summary>
     public class UISettings : Settings
     {
         public static readonly UISettings Instance = new UISettings();
 
         public UISettings()
-            : base(Path.Combine(Logging.ApplicationPath, "Settings", "UISettings.xml"))
+            : base(Path.Combine(SettingsDirectory, "UISettings.xml"))
         {
         }
 

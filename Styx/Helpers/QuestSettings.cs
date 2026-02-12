@@ -5,23 +5,17 @@ namespace Styx.Helpers
 {
 	/// <summary>
 	/// Quest bot settings.
+	/// Path: Settings/QuestSettings_{Name}.xml
+	/// Pattern from HB 3.3.5a.
 	/// </summary>
-	// TODO: Uncomment when UI is ready
-	// [Serializable]
 	public class QuestSettings : Settings
 	{
-		private static QuestSettings? _instance;
+		public static readonly QuestSettings Instance = new QuestSettings();
 
-		/// <summary>
-		/// Gets the singleton instance.
-		/// </summary>
-		public static QuestSettings Instance => _instance ??= new QuestSettings();
-
-		/// <summary>
-		/// Creates a new instance of quest settings.
-		/// </summary>
 		public QuestSettings()
-			: base(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"Settings\\QuestSettings_{StyxWoW.Me?.Name ?? ""}.xml"))
+			: base(Path.Combine(Logging.ApplicationPath,
+				string.Format("Settings\\QuestSettings_{0}.xml",
+				(StyxWoW.Me != null) ? StyxWoW.Me.Name : "")))
 		{
 		}
 

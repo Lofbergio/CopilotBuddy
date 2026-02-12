@@ -1,19 +1,15 @@
-using System;
 using System.ComponentModel;
 using System.IO;
-using System.Reflection;
 
 namespace Styx.Helpers
 {
     /// <summary>
-    /// Main bot settings for WoW 3.3.5a build 12340.
-    /// Singleton pattern with Instance property.
+    /// Global bot settings (not per-character).
+    /// Stored in Settings/StyxSettings.xml.
+    /// Pattern from HB 5.4.8 GlobalSettings.
     /// </summary>
     public class StyxSettings : Settings
     {
-        /// <summary>
-        /// Singleton instance of StyxSettings.
-        /// </summary>
         public static readonly StyxSettings Instance;
 
         static StyxSettings()
@@ -21,18 +17,8 @@ namespace Styx.Helpers
             Instance = new StyxSettings();
         }
 
-        private static string GetAppPath()
-        {
-            string? location = Assembly.GetExecutingAssembly().Location;
-            if (string.IsNullOrEmpty(location))
-            {
-                location = AppDomain.CurrentDomain.BaseDirectory;
-            }
-            return Path.GetDirectoryName(location) ?? ".";
-        }
-
         public StyxSettings()
-            : base(Path.Combine(GetAppPath(), "Settings\\StyxSettings.xml"))
+            : base(Path.Combine(SettingsDirectory, "StyxSettings.xml"))
         {
             // Sync LoggingLevel with Logging class after loading settings
             Logging.LoggingLevel = _loggingLevel;

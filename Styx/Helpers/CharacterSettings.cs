@@ -7,12 +7,17 @@ using System.IO;
 namespace Styx.Helpers
 {
     /// <summary>
-    /// Character-specific settings for HB 3.3.5a
-    /// Ported from HB 4.3.4 CharacterSettings.cs
+    /// Character-specific settings.
+    /// Ported from HB 3.3.5a CharacterSettings.cs.
+    /// Settings stored in: Settings/CharacterSettings_{Name}.xml
+    /// Instance is created via Initialize() after game attachment.
     /// </summary>
     public class CharacterSettings : Settings, INotifyPropertyChanged
     {
-        public static readonly CharacterSettings Instance = new CharacterSettings();
+        /// <summary>
+        /// Singleton instance. Set via Initialize() after game attachment.
+        /// </summary>
+        public static CharacterSettings Instance { get; private set; }
 
         private int _foodAmount;
         private int _drinkAmount;
@@ -42,11 +47,24 @@ namespace Styx.Helpers
         private string _lastUsedPath;
         private PropertyChangedEventHandler _propertyChangedHandler;
 
+        /// <summary>
+        /// Constructor. Path: Settings/CharacterSettings_{Name}.xml
+        /// Exact pattern from HB 3.3.5a.
+        /// </summary>
         public CharacterSettings()
-            : base(Path.Combine(Logging.ApplicationPath, 
-                   string.Format("Settings\\CharacterSettings_{0}.xml", 
-                   StyxWoW.Me != null ? StyxWoW.Me.Name : "")))
+            : base(Path.Combine(Logging.ApplicationPath,
+                   string.Format("Settings\\CharacterSettings_{0}.xml",
+                   (StyxWoW.Me != null) ? StyxWoW.Me.Name : "")))
         {
+        }
+
+        /// <summary>
+        /// Creates the singleton instance. Must be called after game attachment
+        /// when StyxWoW.Me is available.
+        /// </summary>
+        public static void Initialize()
+        {
+            Instance = new CharacterSettings();
         }
 
         [DefaultValue(0)]
@@ -373,26 +391,6 @@ namespace Styx.Helpers
         private void OnPropertyChanged(string propertyName)
         {
             _propertyChangedHandler?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        }
-
-        /// <summary>
-        /// Reinitializes settings for the current character after game attachment.
-        /// Must be called after StyxWoW.Me is available.
-        /// Pattern from HB 4.3.4.
-        /// </summary>
-        public void ReinitializeForCharacter()
-        {
-            if (StyxWoW.Me == null || string.IsNullOrEmpty(StyxWoW.Me.Name))
-            {
-                Logging.WriteDebug("[CharacterSettings] Cannot reinitialize - character not available");
-                return;
-            }
-
-            string newPath = Path.Combine(Logging.ApplicationPath, 
-                string.Format("Settings\\CharacterSettings_{0}.xml", StyxWoW.Me.Name));
-            
-            Logging.WriteDebug("[CharacterSettings] Reinitializing for character: {0}", StyxWoW.Me.Name);
-            Reinitialize(newPath);
         }
     }
 }

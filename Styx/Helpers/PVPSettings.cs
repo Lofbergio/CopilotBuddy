@@ -1,4 +1,3 @@
-using System;
 using System.ComponentModel;
 using System.IO;
 
@@ -6,23 +5,17 @@ namespace Styx.Helpers
 {
 	/// <summary>
 	/// PVP/Battleground settings.
+	/// Path: Settings/PVPSettings_{Name}.xml
+	/// Pattern from HB 3.3.5a.
 	/// </summary>
-	// TODO: Uncomment when UI is ready
-	// [Serializable]
 	public class PVPSettings : Settings
 	{
-		private static PVPSettings? _instance;
+		public static readonly PVPSettings Instance = new PVPSettings();
 
-		/// <summary>
-		/// Gets the singleton instance.
-		/// </summary>
-		public static PVPSettings Instance => _instance ??= new PVPSettings();
-
-		/// <summary>
-		/// Creates a new instance of PVP settings.
-		/// </summary>
 		public PVPSettings()
-			: base(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"Settings\\PVPSettings_{StyxWoW.Me?.Name ?? ""}.xml"))
+			: base(Path.Combine(Logging.ApplicationPath,
+				string.Format("Settings\\PVPSettings_{0}.xml",
+				(StyxWoW.Me != null) ? StyxWoW.Me.Name : "")))
 		{
 		}
 

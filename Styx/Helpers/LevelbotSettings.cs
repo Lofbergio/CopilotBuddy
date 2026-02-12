@@ -1,25 +1,18 @@
-using System;
 using System.IO;
-using System.Reflection;
 
 namespace Styx.Helpers
 {
 	/// <summary>
 	/// LevelbotSettings delegates all UI-visible settings to CharacterSettings.
-	/// This ensures that when the code reads LevelbotSettings.Instance.X,
-	/// it actually reads CharacterSettings.Instance.X which is bound to the UI.
-	/// This pattern matches HonorBuddy 4.3.4 architecture.
+	/// Path: Settings/LevelbotSettings_{Name}.xml
+	/// Pattern from HB 3.3.5a.
 	/// </summary>
 	public class LevelbotSettings : Settings
 	{
-		private static string GetSettingsPath()
-		{
-			string startupPath = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? Environment.CurrentDirectory;
-			return Path.Combine(startupPath, string.Format("Settings\\LevelbotSettings_{0}.xml", (StyxWoW.Me != null) ? StyxWoW.Me.Name : ""));
-		}
-
 		public LevelbotSettings()
-			: base(GetSettingsPath())
+			: base(Path.Combine(Logging.ApplicationPath,
+				string.Format("Settings\\LevelbotSettings_{0}.xml",
+				(StyxWoW.Me != null) ? StyxWoW.Me.Name : "")))
 		{
 		}
 
