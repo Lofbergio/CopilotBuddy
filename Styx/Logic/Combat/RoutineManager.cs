@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Styx.Combat.CombatRoutine;
 using Styx.Helpers;
 using Styx.Loaders;
@@ -11,12 +12,14 @@ namespace Styx.Logic.Combat
 	/// <summary>
 	/// Manages combat routines - loads, compiles, and selects the appropriate routine.
 	/// Follows HB pattern: Init() is called after WoW attachment when ObjectManager.Me is available.
+	/// FEAT-37: Added CLI parsing, locking, improved selection.
 	/// </summary>
 	public static class RoutineManager
 	{
 		private static readonly List<CombatRoutine> _routines = new List<CombatRoutine>();
 		private static CombatRoutine _current;
 		private static bool _initialized;
+		private static readonly object _initLock = new object();
 
 		/// <summary>
 		/// Initializes the RoutineManager. Called after WoW is attached and ObjectManager.Me is available.
@@ -24,18 +27,45 @@ namespace Styx.Logic.Combat
 		/// </summary>
 		public static void Init()
 		{
-			if (_initialized)
-				return;
+			lock (_initLock)
+			{
+				if (_initialized)
+					return;
 
-			_initialized = true;
+				_initialized = true;
+			}
 			
 			Logging.Write("Initializing Combat Routines...");
 			
 			// Load and compile routines
 			LoadCombatRoutines();
 			
+			// FEAT-37: Check CLI arg /customclass=ClassName
+			string? cliRoutine = GetCliRoutineName();
+			if (cliRoutine != null)
+			{
+				Logging.Write("CLI: /customclass={0}", cliRoutine);
+				if (SetCurrent(cliRoutine))
+					return;
+				Logging.Write("CLI routine '{0}' not found, falling back to auto-select.", cliRoutine);
+			}
+
 			// Auto-select routine for current class
 			SelectRoutineForCurrentClass();
+		}
+
+		/// <summary>
+		/// FEAT-37: Parses /customclass=ClassName from command line arguments.
+		/// </summary>
+		private static string? GetCliRoutineName()
+		{
+			string[] args = Environment.GetCommandLineArgs();
+			foreach (string arg in args)
+			{
+				if (arg.StartsWith("/customclass=", StringComparison.OrdinalIgnoreCase))
+					return arg.Substring("/customclass=".Length).Trim();
+			}
+			return null;
 		}
 
 		private static void LoadCombatRoutines()
@@ -156,20 +186,24 @@ namespace Styx.Logic.Combat
 		public static IReadOnlyList<CombatRoutine> Routines => _routines;
 
 		/// <summary>
-		/// Sets the current routine by name.
+		/// Sets the current routine by name. Returns true if found.
+		/// FEAT-37: Added return value and LegacySpellManager refresh.
 		/// </summary>
-		public static void SetCurrent(string routineName)
+		public static bool SetCurrent(string routineName)
 		{
 			foreach (var routine in _routines)
 			{
-				if (routine.Name == routineName)
+				if (string.Equals(routine.Name, routineName, StringComparison.OrdinalIgnoreCase))
 				{
 					_current = routine;
 					routine.Initialize();
+					// Refresh spell manager when routine changes (HB 3.3.5a + 4.3.4 pattern)
+					try { LegacySpellManager.Refresh(); } catch { }
 					Logging.Write("Combat Routine changed to: {0}", routineName);
-					return;
+					return true;
 				}
 			}
+			return false;
 		}
 
 		private sealed class DefaultCombatRoutine : CombatRoutine
