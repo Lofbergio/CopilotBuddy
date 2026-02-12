@@ -15,12 +15,14 @@ namespace Styx.WoWInternals
         private static readonly char[] _validChars;
         private readonly Dictionary<string, LuaEventHandlerDelegate> _eventHandlers = new Dictionary<string, LuaEventHandlerDelegate>();
         private readonly Dictionary<string, string> _eventFilters = new Dictionary<string, string>();
+        private readonly object _eventLock = new object(); // ARCH-04: Thread safety lock
         private readonly WaitTimer _refreshTimer;
         private string _eventTableName;
         private string _frameName;
         private string _filterTableName;
         private int _registeredEventCount;
         private static bool _initialized;
+        private static bool _printAllEvents;
         private static Func<object, string> _toStringFunc;
 
         internal LuaEvents()
@@ -53,20 +55,26 @@ namespace Styx.WoWInternals
 
         public void AttachEvent(string eventName, LuaEventHandlerDelegate handler)
         {
-            if (!this._eventHandlers.ContainsKey(eventName))
+            lock (_eventLock) // ARCH-04: Thread safety
             {
-                this._eventHandlers[eventName] = null;
+                if (!this._eventHandlers.ContainsKey(eventName))
+                {
+                    this._eventHandlers[eventName] = null;
+                }
+                Dictionary<string, LuaEventHandlerDelegate> dictionary;
+                (dictionary = this._eventHandlers)[eventName] = (LuaEventHandlerDelegate)Delegate.Combine(dictionary[eventName], handler);
             }
-            Dictionary<string, LuaEventHandlerDelegate> dictionary;
-            (dictionary = this._eventHandlers)[eventName] = (LuaEventHandlerDelegate)Delegate.Combine(dictionary[eventName], handler);
         }
 
         public void DetachEvent(string eventName, LuaEventHandlerDelegate handler)
         {
-            if (this._eventHandlers.ContainsKey(eventName))
+            lock (_eventLock) // ARCH-04: Thread safety
             {
-                Dictionary<string, LuaEventHandlerDelegate> dictionary;
-                (dictionary = this._eventHandlers)[eventName] = (LuaEventHandlerDelegate)Delegate.Remove(dictionary[eventName], handler);
+                if (this._eventHandlers.ContainsKey(eventName))
+                {
+                    Dictionary<string, LuaEventHandlerDelegate> dictionary;
+                    (dictionary = this._eventHandlers)[eventName] = (LuaEventHandlerDelegate)Delegate.Remove(dictionary[eventName], handler);
+                }
             }
         }
 
@@ -181,7 +189,12 @@ namespace Styx.WoWInternals
                     object[] args = ReadArgsFromTable(argsTable, argsCount);
 
                     // Apply C#-side filter if one exists for this event (WoW 3.3.5a compatibility)
-                    if (this._eventFilters.ContainsKey(eventName))
+                    bool hasFilter;
+                    lock (_eventLock)
+                    {
+                        hasFilter = this._eventFilters.ContainsKey(eventName);
+                    }
+                    if (hasFilter)
                     {
                         if (!ApplyFilter(eventName, args))
                         {
@@ -191,9 +204,13 @@ namespace Styx.WoWInternals
                         }
                     }
 
-                    // Invoke handler if registered
+                    // Invoke handler if registered (ARCH-04: lock for thread safety)
                     LuaEventHandlerDelegate handler;
-                    if (this._eventHandlers.TryGetValue(eventName, out handler) && handler != null)
+                    lock (_eventLock)
+                    {
+                        this._eventHandlers.TryGetValue(eventName, out handler);
+                    }
+                    if (handler != null)
                     {
                         InvokeDelegate(handler, this, new LuaEventArgs(eventName, fireTimeStamp, args));
                     }
@@ -252,9 +269,14 @@ namespace Styx.WoWInternals
 
         public static bool PrintAllEvents
         {
-            get { return LuaEvents._initialized; }
-            set { LuaEvents._initialized = value; }
+            get { return LuaEvents._printAllEvents; }
+            set { LuaEvents._printAllEvents = value; }
         }
+
+        /// <summary>
+        /// FEAT-20: Whether the Lua event frame has been initialized.
+        /// </summary>
+        public static bool IsInitialized => LuaEvents._initialized;
 
         private static void InvokeDelegate(Delegate d, params object[] args)
         {
@@ -288,6 +310,7 @@ namespace Styx.WoWInternals
                 "end); {1}:RegisterAllEvents();", 
                 this._eventTableName, this._frameName);
             Lua.DoString(text);
+            _initialized = true;
         }
 
         private static string GenerateRandomString(int minLength, int maxLength)
