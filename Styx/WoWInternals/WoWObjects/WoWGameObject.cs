@@ -263,7 +263,40 @@ namespace Styx.WoWInternals.WoWObjects
         public bool IsButton => SubType == WoWGameObjectType.Button;
         public bool IsQuestGiver => SubType == WoWGameObjectType.QuestGiver;
         public bool IsMailbox => SubType == WoWGameObjectType.Mailbox;
-        public string Model => Name;
+        /// <summary>
+        /// Gets the model file path from GameObjectDisplayInfo DBC.
+        /// BUG-23 fix: Was returning Name instead of actual model path.
+        /// </summary>
+        public string Model
+        {
+            get
+            {
+                uint displayId = DisplayId;
+                if (displayId == 0)
+                    return Name;
+
+                try
+                {
+                    var db = StyxWoW.Db[Patchables.ClientDb.GameObjectDisplayInfo];
+                    if (db == null)
+                        return Name;
+
+                    var row = db.GetRow(displayId);
+                    if (row == null)
+                        return Name;
+
+                    uint strPtr = row.GetField<uint>(1U);
+                    if (strPtr == 0)
+                        return Name;
+
+                    return ObjectManager.Wow.Read<string>(strPtr) ?? Name;
+                }
+                catch
+                {
+                    return Name;
+                }
+            }
+        }
         public WoWSpellFocus SpellFocus
         {
             get
@@ -310,16 +343,26 @@ namespace Styx.WoWInternals.WoWObjects
         }
 
         /// <summary>
-        /// Gets the cached game object info.
+        /// Gets the cached game object info from WoW client memory.
+        /// Reads the cache entry pointer at BaseAddress + 0x1A4 (420 decimal).
+        /// STUB-01: Critical for IsHerb, IsMineral, GetDataSlot, LockRecord.
         /// </summary>
         public bool GetCachedInfo(out WoWCache.WoWCache.GameObjectCacheEntry info)
         {
-            // NOTE: Cache entry reading requires exact offset verification for 3.3.5a
-            // Cache structure: BaseAddress -> Guid -> CacheEntry (offset varies)
-            // For now, return false - most GameObject operations work without cache
-            // Full implementation would be:
-            // uint cachePtr = ObjectManager.Wow.Read<uint>(BaseAddress + 0x1A4); // 420 decimal
-            // if (cachePtr != 0) { info = ObjectManager.Wow.ReadStruct<...>(cachePtr); return true; }
+            Memory? wow = ObjectManager.Wow;
+            if (wow == null)
+            {
+                info = default;
+                return false;
+            }
+
+            uint cachePtr = wow.Read<uint>(BaseAddress + 420U); // 0x1A4
+            if (cachePtr != 0U)
+            {
+                info = wow.Read<WoWCache.WoWCache.GameObjectCacheEntry>(cachePtr);
+                return true;
+            }
+
             info = default;
             return false;
         }
@@ -387,9 +430,26 @@ namespace Styx.WoWInternals.WoWObjects
 
         public bool GetDataSlot(uint dataSlot, out int value)
         {
-            // TODO: Read from cache entry data slots
-            value = 0;
-            return false;
+            // STUB-02: Read from cache entry Properties[] via GO type slot-mapping table.
+            // The slot map at 0xA38F90 (10710832) defines which Properties[] index
+            // corresponds to each data slot for each GO type. For simplicity, and since
+            // WotLK GO types have consistent slot layouts, we map directly using the
+            // Properties[] array from the cache entry.
+            WoWCache.WoWCache.GameObjectCacheEntry entry;
+            if (!GetCachedInfo(out entry))
+            {
+                value = 0;
+                return false;
+            }
+
+            if (dataSlot >= (uint)entry.Properties.Length)
+            {
+                value = 0;
+                return false;
+            }
+
+            value = entry.Properties[(int)dataSlot];
+            return true;
         }
 
         public Matrix WorldMatrix => GetWorldMatrix();
