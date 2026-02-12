@@ -68,21 +68,9 @@ namespace Styx.WoWInternals.WoWObjects
                 }
             }
         }
-        public override string Name
-        {
-            get
-            {
-                if (Memory == null) return "Unknown";
-                try
-                {
-                    return Memory.ReadString(PlayerNamePtr, 32);
-                }
-                catch
-                {
-                    return "Unknown";
-                }
-            }
-        }
+        // Name: inherited from WoWObject.Name → GetObjectName() via vtable.
+        // HB 3.3.5a does NOT override Name in LocalPlayer.
+        // PlayerNamePtr (0xBD08A8) is NOT a name string — it's used for combo points target GUID.
         public string RealmName
         {
             get
@@ -341,18 +329,12 @@ namespace Styx.WoWInternals.WoWObjects
                 return Memory.Read<uint>(XPPtr);
             }
         }
-        public uint XPToNextLevel
-        {
-            get
-            {
-                // Approximate WoW 3.3.5a formula
-                int level = Level;
-                if (level >= 80) return 0;
-                
-                // Simplified formula
-                return (uint)(level * level * 100 + level * 500);
-            }
-        }
+        /// <summary>
+        /// BUG-15: Reads PLAYER_NEXT_LEVEL_XP from descriptor instead of hardcoded formula.
+        /// WoWPlayer already reads this correctly via NextLevelXP.
+        /// </summary>
+        public uint XPToNextLevel => NextLevelXP;
+
         public new double XPPercent
         {
             get
@@ -511,6 +493,30 @@ namespace Styx.WoWInternals.WoWObjects
         public new bool IsMe => true;
         public override double Distance => 0;
         public override double DistanceSqr => 0;
+
+        /// <summary>
+        /// FEAT-45: More accurate indoor check for LocalPlayer via Lua IsOutdoors().
+        /// HB 4.3.4 overrides IsOutdoors on LocalPlayer with Lua call.
+        /// </summary>
+        public override bool IsOutdoors
+        {
+            get
+            {
+                try
+                {
+                    return Lua.GetReturnVal<bool>("return IsOutdoors()", 0);
+                }
+                catch
+                {
+                    return true;
+                }
+            }
+        }
+
+        /// <summary>
+        /// FEAT-45: IsIndoors = !IsOutdoors for LocalPlayer.
+        /// </summary>
+        public override bool IsIndoors => !IsOutdoors;
         
         #endregion
         
@@ -865,29 +871,109 @@ namespace Styx.WoWInternals.WoWObjects
         }
 
         /// <summary>
-        /// Sets the focus target by WoWUnit.
+        /// FEAT-18: Gets the hearth bind zone name via Lua.
+        /// Note: HB 4.3.4 reads a memory offset; no equivalent exists in HB 3.3.5a.
+        /// Returns the localized zone name string (e.g. "Stormwind City").
         /// </summary>
-        public void SetFocus(WoWUnit unit)
+        public string HearthstoneBindLocation
         {
-            if (unit == null)
+            get
             {
-                Lua.DoString("ClearFocus()");
-                return;
+                try
+                {
+                    var results = Lua.GetReturnValues("return GetBindLocation()");
+                    if (results != null && results.Count > 0 && !string.IsNullOrEmpty(results[0]))
+                        return results[0];
+                }
+                catch { }
+                return string.Empty;
             }
-            Lua.DoString($"FocusUnit('target', {unit.Guid})");
         }
 
         /// <summary>
-        /// Sets the focus target by GUID.
+        /// FEAT-18: Gets the raw reputation value with a faction via Lua.
         /// </summary>
-        public void SetFocus(ulong guid)
+        public int GetReputationWith(uint factionId)
         {
-            if (guid == 0)
+            try
             {
-                Lua.DoString("ClearFocus()");
-                return;
+                var results = Lua.GetReturnValues(
+                    $"local name, desc, standingId, bottomValue, topValue, earnedValue = GetFactionInfoByID({factionId}); return earnedValue or 0");
+                if (results != null && results.Count > 0)
+                    return Lua.ParseLuaValue<int>(results[0]);
             }
-            Lua.DoString($"FocusUnit('target', {guid})");
+            catch { }
+            return 0;
+        }
+
+        /// <summary>
+        /// FEAT-18: Gets the reputation standing level with a faction.
+        /// Maps Lua standingId (1=Hated..8=Exalted) to WoWUnitReaction.
+        /// </summary>
+        public WoWUnitReaction GetReputationLevelWith(uint factionId)
+        {
+            try
+            {
+                var results = Lua.GetReturnValues(
+                    $"local name, desc, standingId = GetFactionInfoByID({factionId}); return standingId or 0");
+                if (results != null && results.Count > 0)
+                {
+                    int standingId = Lua.ParseLuaValue<int>(results[0]);
+                    // Lua: 1=Hated, 2=Hostile, 3=Unfriendly, 4=Neutral, 5=Friendly, 6=Honored, 7=Revered, 8=Exalted
+                    return standingId switch
+                    {
+                        1 => WoWUnitReaction.Hated,
+                        2 => WoWUnitReaction.Hostile,
+                        3 => WoWUnitReaction.Unfriendly,
+                        4 => WoWUnitReaction.Neutral,
+                        5 => WoWUnitReaction.Friendly,
+                        6 => WoWUnitReaction.Honored,
+                        7 => WoWUnitReaction.Revered,
+                        8 => WoWUnitReaction.Exalted,
+                        _ => WoWUnitReaction.Hated
+                    };
+                }
+            }
+            catch { }
+            return WoWUnitReaction.Hated;
+        }
+
+        /// <summary>
+        /// Sets the focus target by WoWUnit. Returns true on success.
+        /// FEAT-18: Changed return type from void to bool.
+        /// </summary>
+        public bool SetFocus(WoWUnit unit)
+        {
+            try
+            {
+                if (unit == null)
+                {
+                    Lua.DoString("ClearFocus()");
+                    return true;
+                }
+                Lua.DoString($"FocusUnit('target', {unit.Guid})");
+                return true;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Sets the focus target by GUID. Returns true on success.
+        /// FEAT-18: Changed return type from void to bool.
+        /// </summary>
+        public bool SetFocus(ulong guid)
+        {
+            try
+            {
+                if (guid == 0)
+                {
+                    Lua.DoString("ClearFocus()");
+                    return true;
+                }
+                Lua.DoString($"FocusUnit('target', {guid})");
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>
@@ -2396,8 +2482,9 @@ namespace Styx.WoWInternals.WoWObjects
         /// <summary>
         /// Gets the active totems for this player (Shaman only).
         /// Index 0=Fire, 1=Earth, 2=Water, 3=Air
+        /// BUG-28 fix: Returns List<WoWTotemInfo> for HB API compatibility.
         /// </summary>
-        public WoWTotemInfo[] Totems
+        public List<WoWTotemInfo> Totems
         {
             get
             {
@@ -2407,7 +2494,7 @@ namespace Styx.WoWInternals.WoWObjects
                     for (int i = 0; i < 4; i++)
                         _totems[i] = new WoWTotemInfo(i);
                 }
-                return _totems;
+                return new List<WoWTotemInfo>(_totems);
             }
         }
 
@@ -2482,7 +2569,7 @@ namespace Styx.WoWInternals.WoWObjects
         /// <summary>
         /// Gets the power percentage (mana/rage/energy/etc).
         /// </summary>
-        public double PowerPercent
+        public new double PowerPercent
         {
             get
             {
@@ -2491,6 +2578,120 @@ namespace Styx.WoWInternals.WoWObjects
                     return 0;
                 return (CurrentPower * 100.0) / max;
             }
+        }
+
+        #endregion
+
+        #region FEAT-39: LocalPlayer batch 2
+
+        /// <summary>
+        /// FEAT-39: Detects the player's spec type from talent tree points.
+        /// Analyzes the primary talent tree to determine role.
+        /// </summary>
+        public SpecType Specialization
+        {
+            get
+            {
+                try
+                {
+                    // Get talent points per tree: returns tab1pts, tab2pts, tab3pts
+                    var results = Lua.GetReturnValues(
+                        "local n1,n2,n3=0,0,0; " +
+                        "local _,_,p1=GetTalentTabInfo(1); n1=p1; " +
+                        "local _,_,p2=GetTalentTabInfo(2); n2=p2; " +
+                        "local _,_,p3=GetTalentTabInfo(3); n3=p3; " +
+                        "return n1,n2,n3");
+                    if (results != null && results.Count >= 3)
+                    {
+                        int t1 = Lua.ParseLuaValue<int>(results[0]);
+                        int t2 = Lua.ParseLuaValue<int>(results[1]);
+                        int t3 = Lua.ParseLuaValue<int>(results[2]);
+                        int maxPoints = Math.Max(t1, Math.Max(t2, t3));
+                        if (maxPoints == 0) return SpecType.None;
+
+                        // Determine primary tree index (1-indexed)
+                        int primaryTree;
+                        if (t1 >= t2 && t1 >= t3) primaryTree = 1;
+                        else if (t2 >= t1 && t2 >= t3) primaryTree = 2;
+                        else primaryTree = 3;
+
+                        // Get tree role name
+                        var roleResults = Lua.GetReturnValues(
+                            $"local _,name = GetTalentTabInfo({primaryTree}); return name");
+                        // Role detection is class-specific — use tree name as heuristic
+                        // This is approximate; precise mappings require class+tree combos
+                        if (roleResults != null && roleResults.Count > 0)
+                        {
+                            string treeName = roleResults[0].ToLower();
+                            // Tank trees
+                            if (treeName == "protection" || treeName == "blood" || treeName == "feral combat")
+                            {
+                                // Feral can be tank or melee — check talent points
+                                if (treeName == "feral combat")
+                                    return SpecType.MeleeDps; // Default to melee, imprecise
+                                return SpecType.Tank;
+                            }
+                            // Healer trees
+                            if (treeName == "holy" || treeName == "discipline" || treeName == "restoration")
+                                return SpecType.Healer;
+                            // Ranged DPS trees
+                            if (treeName == "arcane" || treeName == "fire" || treeName == "frost" ||
+                                treeName == "shadow" || treeName == "destruction" || treeName == "affliction" ||
+                                treeName == "demonology" || treeName == "balance" || treeName == "elemental" ||
+                                treeName == "marksmanship" || treeName == "beast mastery" || treeName == "survival")
+                                return SpecType.RangedDps;
+                            // Melee DPS trees
+                            if (treeName == "arms" || treeName == "fury" || treeName == "retribution" ||
+                                treeName == "combat" || treeName == "assassination" || treeName == "subtlety" ||
+                                treeName == "enhancement" || treeName == "unholy")
+                                return SpecType.MeleeDps;
+                        }
+                    }
+                }
+                catch { }
+                return SpecType.None;
+            }
+        }
+
+        /// <summary>
+        /// FEAT-39: Checks if the player can use an item by entry ID via Lua.
+        /// </summary>
+        public bool CanUseItem(uint itemEntry)
+        {
+            try
+            {
+                return Lua.GetReturnVal<bool>(
+                    $"local u,q = IsUsableItem({itemEntry}); return u", 0);
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// FEAT-39: Gets estimated total repair cost via Lua GetRepairAllCost.
+        /// Must be at a repair vendor for this to return a valid value.
+        /// Returns copper amount.
+        /// </summary>
+        public long GetEstimatedRepairCost()
+        {
+            try
+            {
+                // GetRepairAllCost() takes no args, returns totalCost, canRepair
+                return Lua.GetReturnVal<long>("return GetRepairAllCost()", 0);
+            }
+            catch { }
+            return 0;
+        }
+
+        /// <summary>
+        /// FEAT-39: Gets spells on a totem multi-cast bar for a given totem element.
+        /// Note: Multi-cast totem bar (Call of the Elements) is Cataclysm+.
+        /// In WotLK, this returns an empty list. Kept for API compatibility.
+        /// </summary>
+        public List<WoWSpell> GetTotemBarSpells(int totemIndex)
+        {
+            // GetMultiCastTotemSpells does not exist in WotLK 3.3.5a Lua API.
+            // Multi-cast totem bar was introduced in Cataclysm.
+            return new List<WoWSpell>();
         }
 
         #endregion
