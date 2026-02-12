@@ -375,7 +375,11 @@ namespace Styx.WoWInternals.WoWObjects
         /// </summary>
         public bool IsMoving => WoWMovementInfo.IsMoving;
 
-        public bool IsPet => SummonedBy != null;
+        /// <summary>
+        /// BUG-08 fix: Check GUID instead of expensive ObjectManager lookup.
+        /// HB 4.3.4 checks both SummonedByGuid and CharmedByGuid.
+        /// </summary>
+        public bool IsPet => SummonedByGuid != 0UL || CharmedByGuid != 0UL;
 
         /// <summary>
         /// Movement information for this unit.
@@ -509,6 +513,24 @@ namespace Styx.WoWInternals.WoWObjects
         public uint CurrentHappiness => (uint)Math.Round(GetCurrentPower(WoWPowerType.Happiness) / 10000.0);
         public int CurrentRunicPower => GetCurrentPower(WoWPowerType.RunicPower);
         public int CurrentPower => GetCurrentPower(PowerType);
+
+        // ═══════════════════════════════════════════════════════════
+        // CATA-01: Power types that don't exist in WotLK — return 0
+        // These stubs exist for API compatibility with CRs designed for Cata+.
+        // ═══════════════════════════════════════════════════════════
+
+        /// <summary>Soul Shards (Cataclysm+ only). Always 0 in WotLK.</summary>
+        public uint CurrentSoulShards => 0;
+        /// <summary>Eclipse power (Cataclysm+ only). Always 0 in WotLK.</summary>
+        public int CurrentEclipse => 0;
+        /// <summary>Holy Power (Cataclysm+ only). Always 0 in WotLK.</summary>
+        public uint CurrentHolyPower => 0;
+        /// <summary>Max Soul Shards (Cataclysm+ only). Always 0 in WotLK.</summary>
+        public uint MaxSoulShards => 0;
+        /// <summary>Max Eclipse (Cataclysm+ only). Always 0 in WotLK.</summary>
+        public int MaxEclipse => 0;
+        /// <summary>Max Holy Power (Cataclysm+ only). Always 0 in WotLK.</summary>
+        public uint MaxHolyPower => 0;
 
         /// <summary>
         /// Gets pet happiness percentage (HB 4.3.4 compatibility).
@@ -710,7 +732,7 @@ namespace Styx.WoWInternals.WoWObjects
 
         #region Alive & Ghost
 
-        public bool IsAlive => !Dead;
+        public virtual bool IsAlive => !Dead;
 
         public virtual bool IsGhost => CurrentHealth == 1;
 
@@ -875,34 +897,47 @@ namespace Styx.WoWInternals.WoWObjects
                 if (!IsCasting)
                     return false;
                 
-                // Check if the spell is interruptible via Lua
-                // NonInterruptible flag (bit 4 of CastingInfo flags)
+                string unitId = GetLuaUnitId();
+                if (string.IsNullOrEmpty(unitId))
+                    return false;
+
+                // Check if the spell is interruptible via Lua UnitCastingInfo
+                // notInterruptible is the 8th return value
                 var result = Lua.GetReturnVal<int>(
-                    string.Format("local n,_,_,_,_,_,_,notInterruptible = UnitCastingInfo('target'); return notInterruptible and 1 or 0"), 0);
+                    $"local n,_,_,_,_,_,_,notInterruptible = UnitCastingInfo('{unitId}'); return notInterruptible and 1 or 0", 0);
                 return result == 0;
             }
         }
 
         /// <summary>
-        /// Gets the time remaining on the current cast.
+        /// Gets the time remaining on the current cast via Lua UnitCastingInfo.
+        /// BUG-25: Works for player/target/focus via Lua unitId mapping.
+        /// Returns TimeSpan.Zero for units without a known unitId.
         /// </summary>
-        public TimeSpan CurrentCastTimeLeft
+        public virtual TimeSpan CurrentCastTimeLeft
         {
             get
             {
                 if (!IsCasting || CastingSpellId == 0)
                     return TimeSpan.Zero;
                 
-                // Use Lua to get cast end time and remaining time
-                var remaining = Lua.GetReturnVal<double>(
-                    "local _,_,_,_,endTime = UnitCastingInfo('player'); if endTime then return (endTime/1000) - GetTime() else return 0 end", 0);
-                
-                return remaining > 0 ? TimeSpan.FromSeconds(remaining) : TimeSpan.Zero;
+                string unitId = GetLuaUnitId();
+                if (string.IsNullOrEmpty(unitId))
+                    return TimeSpan.Zero;
+
+                try
+                {
+                    var remaining = Lua.GetReturnVal<double>(
+                        $"local _,_,_,_,endTime = UnitCastingInfo('{unitId}'); if endTime then return (endTime/1000) - GetTime() else return 0 end", 0);
+                    return remaining > 0 ? TimeSpan.FromSeconds(remaining) : TimeSpan.Zero;
+                }
+                catch { return TimeSpan.Zero; }
             }
         }
 
         /// <summary>
         /// Gets the total cast time of the current spell being cast.
+        /// Uses WoWSpell.CastTime which comes from spell DBC data.
         /// </summary>
         public TimeSpan CurrentCastTime
         {
@@ -916,6 +951,48 @@ namespace Styx.WoWInternals.WoWObjects
                     return TimeSpan.Zero;
                 
                 return TimeSpan.FromMilliseconds(spell.CastTime);
+            }
+        }
+
+        /// <summary>
+        /// FEAT-23: Gets the remaining time on the current channel via Lua UnitChannelInfo.
+        /// Returns TimeSpan.Zero for units without a known unitId.
+        /// </summary>
+        public virtual TimeSpan CurrentChannelTimeLeft
+        {
+            get
+            {
+                if (!IsChanneling)
+                    return TimeSpan.Zero;
+
+                string unitId = GetLuaUnitId();
+                if (string.IsNullOrEmpty(unitId))
+                    return TimeSpan.Zero;
+
+                try
+                {
+                    var remaining = Lua.GetReturnVal<double>(
+                        $"local _,_,_,_,endTime = UnitChannelInfo('{unitId}'); if endTime then return (endTime/1000) - GetTime() else return 0 end", 0);
+                    return remaining > 0 ? TimeSpan.FromSeconds(remaining) : TimeSpan.Zero;
+                }
+                catch { return TimeSpan.Zero; }
+            }
+        }
+
+        /// <summary>
+        /// FEAT-23: Alias for CurrentChannelTimeLeft — HB 4.3.4 compatibility.
+        /// </summary>
+        public TimeSpan ChannelTimeLeft => CurrentChannelTimeLeft;
+
+        /// <summary>
+        /// FEAT-23: Gets the WoWSpell being channeled (typed version of ChanneledCastingSpellId).
+        /// </summary>
+        public WoWSpell? ChanneledCastingSpell
+        {
+            get
+            {
+                int id = ChanneledCastingSpellId;
+                return id != 0 ? WoWSpell.FromId(id) : null;
             }
         }
 
@@ -985,6 +1062,10 @@ namespace Styx.WoWInternals.WoWObjects
         }
         public int MountDisplayId => GetDescriptor<int>(UnitFields.MountDisplayId);
         public int DisplayId => GetDescriptor<int>(UnitFields.DisplayId);
+
+        /// <summary>FEAT-13: Native (original) display ID before model changes (UNIT_FIELD_NATIVEDISPLAYID).</summary>
+        public int NativeDisplayId => GetDescriptor<int>(UnitFields.NativeDisplayId);
+
         public ulong CreatedByGuid => GetDescriptor<ulong>(UnitFields.CreatedBy);
         public WoWUnit? CreatedBy => ObjectManager.GetObjectByGuid<WoWUnit>(CreatedByGuid);
         public uint CreatedBySpellId => GetDescriptor<uint>(UnitFields.CreatedBySpell);
@@ -1001,11 +1082,16 @@ namespace Styx.WoWInternals.WoWObjects
         public bool IsDemon => CreatureType == WoWCreatureType.Demon;
         public bool IsHumanoid => CreatureType == WoWCreatureType.Humanoid;
         public bool IsDragon => CreatureType == WoWCreatureType.Dragon;
+        /// <summary>FEAT-15: Alias for IsDragon — HB 4.3.4 API compatibility.</summary>
+        public bool IsDragonkin => IsDragon;
         public bool IsGiant => CreatureType == WoWCreatureType.Giant;
         public bool IsUndead => CreatureType == WoWCreatureType.Undead;
         public bool IsBeast => CreatureType == WoWCreatureType.Beast;
         public bool IsElemental => CreatureType == WoWCreatureType.Elemental;
         public bool IsMechanical => CreatureType == WoWCreatureType.Mechanical;
+
+        /// <summary>FEAT-22: Whether this creature is a gas cloud (extractable with engineering).</summary>
+        public bool IsGasCloud => CreatureType == WoWCreatureType.GasCloud;
 
         /// <summary>
         /// Check if the unit is in the player's party or raid.
@@ -1384,6 +1470,17 @@ namespace Styx.WoWInternals.WoWObjects
         public int IntellectBonus => GetDescriptor<int>(UnitFields.PosStat3);
         public int SpiritBonus => GetDescriptor<int>(UnitFields.PosStat4);
 
+        /// <summary>FEAT-25: Negative strength modifier (UNIT_FIELD_NEGSTAT0).</summary>
+        public int StrengthNegativeModifier => GetDescriptor<int>(UnitFields.NegStat0);
+        /// <summary>FEAT-25: Negative agility modifier (UNIT_FIELD_NEGSTAT1).</summary>
+        public int AgilityNegativeModifier => GetDescriptor<int>(UnitFields.NegStat1);
+        /// <summary>FEAT-25: Negative stamina modifier (UNIT_FIELD_NEGSTAT2).</summary>
+        public int StaminaNegativeModifier => GetDescriptor<int>(UnitFields.NegStat2);
+        /// <summary>FEAT-25: Negative intellect modifier (UNIT_FIELD_NEGSTAT3).</summary>
+        public int IntellectNegativeModifier => GetDescriptor<int>(UnitFields.NegStat3);
+        /// <summary>FEAT-25: Negative spirit modifier (UNIT_FIELD_NEGSTAT4).</summary>
+        public int SpiritNegativeModifier => GetDescriptor<int>(UnitFields.NegStat4);
+
         public int Armor => GetDescriptor<int>(UnitFields.ResistanceArmor);
         public int HolyResist => GetDescriptor<int>(UnitFields.ResistanceHoly);
         public int FireResist => GetDescriptor<int>(UnitFields.ResistanceFire);
@@ -1391,6 +1488,237 @@ namespace Styx.WoWInternals.WoWObjects
         public int FrostResist => GetDescriptor<int>(UnitFields.ResistanceFrost);
         public int ShadowResist => GetDescriptor<int>(UnitFields.ResistanceShadow);
         public int ArcaneResist => GetDescriptor<int>(UnitFields.ResistanceArcane);
+
+        #endregion
+
+        #region Combat Stats (FEAT-11)
+
+        /// <summary>Melee attack power (UNIT_FIELD_ATTACK_POWER).</summary>
+        public int AttackPower => GetDescriptor<int>(UnitFields.AttackPower);
+
+        /// <summary>Melee attack power modifiers (UNIT_FIELD_ATTACK_POWER_MODS).</summary>
+        public int AttackPowerMods => GetDescriptor<int>(UnitFields.AttackPowerMods);
+
+        /// <summary>Melee attack power multiplier (UNIT_FIELD_ATTACK_POWER_MULTIPLIER).</summary>
+        public float AttackPowerMultiplier => GetDescriptor<float>(UnitFields.AttackPowerMultiplier);
+
+        /// <summary>Ranged attack power (UNIT_FIELD_RANGED_ATTACK_POWER).</summary>
+        public int RangedAttackPower => GetDescriptor<int>(UnitFields.RangedAttackPower);
+
+        /// <summary>Ranged attack power modifiers (UNIT_FIELD_RANGED_ATTACK_POWER_MODS).</summary>
+        public int RangedAttackPowerMods => GetDescriptor<int>(UnitFields.RangedAttackPowerMods);
+
+        /// <summary>Ranged attack power multiplier (UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER).</summary>
+        public float RangedAttackPowerMultiplier => GetDescriptor<float>(UnitFields.RangedAttackPowerMultiplier);
+
+        /// <summary>Min melee damage (UNIT_FIELD_MINDAMAGE).</summary>
+        public float MinDamage => GetDescriptor<float>(UnitFields.MinDamage);
+
+        /// <summary>Max melee damage (UNIT_FIELD_MAXDAMAGE).</summary>
+        public float MaxDamage => GetDescriptor<float>(UnitFields.MaxDamage);
+
+        /// <summary>Min off-hand damage (UNIT_FIELD_MINOFFHANDDAMAGE).</summary>
+        public float MinOffHandDamage => GetDescriptor<float>(UnitFields.MinOffhandDamage);
+
+        /// <summary>Max off-hand damage (UNIT_FIELD_MAXOFFHANDDAMAGE).</summary>
+        public float MaxOffHandDamage => GetDescriptor<float>(UnitFields.MaxOffhandDamage);
+
+        /// <summary>Min ranged damage (UNIT_FIELD_MINRANGEDDAMAGE).</summary>
+        public float MinRangedDamage => GetDescriptor<float>(UnitFields.MinRangedDamage);
+
+        /// <summary>Max ranged damage (UNIT_FIELD_MAXRANGEDDAMAGE).</summary>
+        public float MaxRangedDamage => GetDescriptor<float>(UnitFields.MaxRangedDamage);
+
+        /// <summary>Base main-hand attack time in ms (UNIT_FIELD_BASEATTACKTIME).</summary>
+        public uint BaseAttackTime => GetDescriptor<uint>(UnitFields.BaseAttackTime);
+
+        /// <summary>Base off-hand attack time in ms (UNIT_FIELD_BASEATTACKTIME + 1).</summary>
+        public uint BaseOffHandAttackTime => GetDescriptorField<uint>((int)(UnitFields.BaseAttackTime + 1) * 4);
+
+        /// <summary>Base ranged attack time in ms (UNIT_FIELD_RANGEDATTACKTIME).</summary>
+        public uint BaseRangedAttackTime => GetDescriptor<uint>(UnitFields.RangedAttackTime);
+
+        #endregion
+
+        #region Descriptor Properties (FEAT-22)
+
+        /// <summary>Aura state flags (UNIT_FIELD_AURASTATE).</summary>
+        public uint AuraState => GetDescriptor<uint>(UnitFields.AuraState);
+
+        /// <summary>Base health before modifiers (UNIT_FIELD_BASE_HEALTH).</summary>
+        public int BaseHealth => GetDescriptor<int>(UnitFields.BaseHealth);
+
+        /// <summary>Health multiplier (UNIT_FIELD_MAXHEALTHMODIFIER).</summary>
+        public float MaxHealthModifier => GetDescriptor<float>(UnitFields.MaxHealthModifier);
+
+        /// <summary>Hover offset above ground (UNIT_FIELD_HOVERHEIGHT).</summary>
+        public float HoverHeight => GetDescriptor<float>(UnitFields.HoverHeight);
+
+        /// <summary>Cast speed multiplier (UNIT_MOD_CAST_SPEED). 1.0 = normal.</summary>
+        public float CastSpeedModifier => GetDescriptor<float>(UnitFields.ModCastSpeed);
+
+        /// <summary>Visual weapon slot IDs (UNIT_VIRTUAL_ITEM_SLOT_ID, 3 entries).</summary>
+        public uint[] VirtualItemSlotIds
+        {
+            get
+            {
+                return new uint[]
+                {
+                    GetDescriptor<uint>(UnitFields.VirtualItemSlotId),
+                    GetDescriptorField<uint>(((int)UnitFields.VirtualItemSlotId + 1) * 4),
+                    GetDescriptorField<uint>(((int)UnitFields.VirtualItemSlotId + 2) * 4)
+                };
+            }
+        }
+
+        /// <summary>Pet tracking number (UNIT_FIELD_PETNUMBER).</summary>
+        public uint PetNumber => GetDescriptor<uint>(UnitFields.PetNumber);
+
+        /// <summary>Pet XP (UNIT_FIELD_PETEXPERIENCE).</summary>
+        public uint PetExperience => GetDescriptor<uint>(UnitFields.PetExperience);
+
+        /// <summary>Pet XP to next level (UNIT_FIELD_PETNEXTLEVELEXP).</summary>
+        public uint PetNextLevelExperience => GetDescriptor<uint>(UnitFields.PetNextLevelExp);
+
+        /// <summary>NPC emote state (UNIT_NPC_EMOTESTATE).</summary>
+        public uint NpcEmoteState => GetDescriptor<uint>(UnitFields.NpcEmoteState);
+
+        /// <summary>Creature subtitle/guild text from cache.</summary>
+        public string SubName
+        {
+            get
+            {
+                if (GetCachedInfo(out Styx.WoWInternals.WoWCache.WoWCache.CreatureCacheEntry info))
+                {
+                    Memory? wow = ObjectManager.Wow;
+                    if (wow != null && info.SubNamePtr != 0)
+                        return wow.Read<string>(info.SubNamePtr);
+                }
+                return string.Empty;
+            }
+        }
+
+        #endregion
+
+        #region Crowd Control (FEAT-12)
+
+        /// <summary>
+        /// Checks if the unit has any aura with the specified spell mechanic.
+        /// </summary>
+        public bool HasAuraWithMechanic(WoWSpellMechanic mechanic)
+        {
+            foreach (WoWAura aura in GetAllAuras())
+            {
+                if (aura.Spell != null && aura.Spell.Mechanic == mechanic)
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Whether this unit is under a crowd control effect (stun, polymorph, fear, sap, etc.)
+        /// </summary>
+        public bool IsCrowdControlled
+        {
+            get
+            {
+                return HasAuraWithMechanic(WoWSpellMechanic.Stunned)
+                    || HasAuraWithMechanic(WoWSpellMechanic.Polymorphed)
+                    || HasAuraWithMechanic(WoWSpellMechanic.Charmed)
+                    || HasAuraWithMechanic(WoWSpellMechanic.Asleep)
+                    || HasAuraWithMechanic(WoWSpellMechanic.Frozen)
+                    || HasAuraWithMechanic(WoWSpellMechanic.Incapacitated)
+                    || HasAuraWithMechanic(WoWSpellMechanic.Sapped)
+                    || HasAuraWithMechanic(WoWSpellMechanic.Banished)
+                    || HasAuraWithMechanic(WoWSpellMechanic.Horrified)
+                    || HasAuraWithMechanic(WoWSpellMechanic.Fleeing)
+                    || HasAuraWithMechanic(WoWSpellMechanic.Turned);
+            }
+        }
+
+        #endregion
+
+        #region Power Info (FEAT-24)
+
+        /// <summary>
+        /// Gets the flat regen rate for the specified power type.
+        /// Index into UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER (7 entries starting at 0x28).
+        /// </summary>
+        public float GetPowerRegenFlat(WoWPowerType power)
+        {
+            int index = (int)power;
+            if (index < 0 || index > 6) return 0f;
+            return GetDescriptorField<float>(((int)UnitFields.PowerRegenFlatModifier + index) * 4);
+        }
+
+        /// <summary>
+        /// Gets the interrupted (combat) regen rate for the specified power type.
+        /// Index into UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER (7 entries starting at 0x2F).
+        /// </summary>
+        public float GetPowerRegenInterrupted(WoWPowerType power)
+        {
+            int index = (int)power;
+            if (index < 0 || index > 6) return 0f;
+            return GetDescriptorField<float>(((int)UnitFields.PowerRegenInterruptedFlatModifier + index) * 4);
+        }
+
+        /// <summary>
+        /// Gets the flat power cost modifier for the specified power type.
+        /// Index into UNIT_FIELD_POWER_COST_MODIFIER (7 entries starting at 0x83).
+        /// </summary>
+        public int GetPowerCostModifier(WoWPowerType power)
+        {
+            int index = (int)power;
+            if (index < 0 || index > 6) return 0;
+            return GetDescriptorField<int>(((int)UnitFields.PowerCostModifier + index) * 4);
+        }
+
+        /// <summary>
+        /// Gets the percent power cost multiplier for the specified power type.
+        /// Index into UNIT_FIELD_POWER_COST_MULTIPLIER (7 entries starting at 0x8A).
+        /// </summary>
+        public float GetPowerCostMultiplier(WoWPowerType power)
+        {
+            int index = (int)power;
+            if (index < 0 || index > 6) return 1f;
+            return GetDescriptorField<float>(((int)UnitFields.PowerCostMultiplier + index) * 4);
+        }
+
+        /// <summary>
+        /// Gets structured power info for the specified power type.
+        /// </summary>
+        public PowerInfo GetPowerInfo(WoWPowerType power)
+        {
+            return new PowerInfo(
+                power,
+                GetCurrentPower(power),
+                GetMaxPower(power),
+                (float)GetPowerPercent(power),
+                GetPowerRegenFlat(power),
+                GetPowerRegenInterrupted(power),
+                GetPowerCostModifier(power),
+                GetPowerCostMultiplier(power)
+            );
+        }
+
+        /// <summary>Convenience: ManaInfo.</summary>
+        public PowerInfo ManaInfo => GetPowerInfo(WoWPowerType.Mana);
+        /// <summary>Convenience: RageInfo.</summary>
+        public PowerInfo RageInfo => GetPowerInfo(WoWPowerType.Rage);
+        /// <summary>Convenience: EnergyInfo.</summary>
+        public PowerInfo EnergyInfo => GetPowerInfo(WoWPowerType.Energy);
+        /// <summary>Convenience: RunicPowerInfo.</summary>
+        public PowerInfo RunicPowerInfo => GetPowerInfo(WoWPowerType.RunicPower);
+        /// <summary>Convenience: HappinessInfo.</summary>
+        public PowerInfo HappinessInfo => GetPowerInfo(WoWPowerType.Happiness);
+        /// <summary>Convenience: FocusInfo.</summary>
+        public PowerInfo FocusInfo => GetPowerInfo(WoWPowerType.Focus);
+
+        /// <summary>Generic power percent — auto-selects the unit's active power type.</summary>
+        public double PowerPercent => GetPowerPercent(PowerType);
+
+        /// <summary>Convenience: Focus percentage (hunter pet).</summary>
+        public double FocusPercent => GetPowerPercent(WoWPowerType.Focus);
 
         #endregion
 
@@ -1714,6 +2042,39 @@ namespace Styx.WoWInternals.WoWObjects
 
             info = default;
             return false;
+        }
+
+        #endregion
+
+        #region Helpers
+
+        /// <summary>
+        /// Maps this unit to a WoW Lua unitId string for API calls.
+        /// Returns empty string if no known unitId matches this unit.
+        /// </summary>
+        protected string GetLuaUnitId()
+        {
+            var me = StyxWoW.Me;
+            if (me == null) return string.Empty;
+
+            if (Guid == me.Guid)
+                return "player";
+            if (Guid == me.CurrentTargetGuid)
+                return "target";
+            // Focus GUID is read separately
+            try
+            {
+                Memory? wow = ObjectManager.Wow;
+                if (wow != null)
+                {
+                    ulong focusGuid = wow.Read<ulong>(Styx.Offsets.GlobalOffsets.FocusGuid);
+                    if (Guid == focusGuid)
+                        return "focus";
+                }
+            }
+            catch { }
+
+            return string.Empty;
         }
 
         #endregion
