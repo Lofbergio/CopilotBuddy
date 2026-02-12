@@ -26,6 +26,34 @@ namespace Styx.WoWInternals.WoWObjects
         }
         
         #endregion
+
+        #region BagType
+
+        /// <summary>
+        /// FEAT-31: Gets the bag type from the item's SubClass.
+        /// WotLK bag SubClass mapping: 0=Normal, 1=SoulShard, 2=Herb, 3=Enchanting,
+        /// 4=Engineering, 5=Gem, 6=Mining, 7=Leatherworking, 8=Inscription, 9=Ammo.
+        /// </summary>
+        public BagType BagType
+        {
+            get
+            {
+                try
+                {
+                    var info = ItemInfo;
+                    if (info != null)
+                    {
+                        int subClass = (int)info.SubClassId;
+                        if (Enum.IsDefined(typeof(BagType), subClass))
+                            return (BagType)subClass;
+                    }
+                }
+                catch { }
+                return BagType.Normal;
+            }
+        }
+
+        #endregion
         
         #region Container Properties
         public uint NumSlots
