@@ -261,6 +261,8 @@ namespace Styx.Logic.POI
 				Logging.WriteDebug("Cleared POI - Reason {0}", reason);
 			}
 			Current = new BotPoi(PoiType.None);
+			// BUG-06 fix: Clear stale navigation paths when POI changes (HB 4.3.4)
+			Pathing.Navigator.Clear();
 		}
 
 		public double DistanceToPoi
