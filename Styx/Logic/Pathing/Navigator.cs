@@ -123,6 +123,32 @@ namespace Styx.Logic.Pathing
 		/// </summary>
 		public static bool IsNavigatorLoaded => _navigator?.IsLoaded ?? false;
 
+		public static float? PathDistance(WoWPoint from, WoWPoint to, float maxDistance = float.MaxValue)
+		{
+			try
+			{
+				if (!IsNavigatorLoaded)
+					return null;
+				uint mapId = GetCurrentMapId();
+				var start = new System.Numerics.Vector3(from.X, from.Y, from.Z);
+				var end = new System.Numerics.Vector3(to.X, to.Y, to.Z);
+				var result = TripperNavigator.FindPath(mapId, start, end, true);
+				if (result == null || !result.Succeeded || result.Points == null || result.Points.Length == 0)
+					return null;
+				float dist = 0f;
+				var pts = result.Points;
+				for (int i = 1; i < pts.Length; i++)
+					dist += System.Numerics.Vector3.Distance(pts[i - 1], pts[i]);
+				if (dist > maxDistance) return null;
+				return dist;
+			}
+			catch
+			{
+				return null;
+			}
+		}
+
+
 		static Navigator()
 		{
 			BotEvents.Player.OnMapChanged += OnMapChanged;
@@ -1406,6 +1432,18 @@ namespace Styx.Logic.Pathing
 			_ = start;
 			_ = end;
 			_ = mapId;
+
+			try
+			{
+				// Read native navstats (if available) to expose timing / polys visited
+				var stats = TripperNavigator.GetNavStats();
+				Logging.WriteDebug("[NAV] Pathfind: time={0}ms polysVisited={1} pathLength={2:F1} shortcuts={3} stuckRecoveries={4}",
+					stats.PathfindTimeMs, stats.PolysVisited, stats.PathLength, stats.ShortcutsApplied, stats.StuckRecoveries);
+			}
+			catch (Exception ex)
+			{
+				Logging.WriteDebug("[NAV] Failed to read NavStats: {0}", ex.Message);
+			}
 		}
 
 		/// <summary>
