@@ -42,7 +42,7 @@ public class QuestBot : BotBase
 
     public static Composite CreateRoot()
     {
-        return (Composite)new PrioritySelector(new Composite[7]
+            return (Composite)new PrioritySelector(new Composite[7]
         {
             (Composite)LevelBot.CreateDeathBehavior(),
             LevelBot.CreateCombatBehavior(),
@@ -150,11 +150,26 @@ public class QuestBot : BotBase
 
     private static Composite CreateTargetingBehavior()
     {
-        return (Composite)new Decorator((CanRunDecoratorDelegate)(context => StyxWoW.Me.IsMoving), (Composite)new DecoratorIsNotPoiType(PoiType.Kill, (Composite)new Decorator((CanRunDecoratorDelegate)(context => !StyxWoW.Me.Combat && !Vendors.NeedClassTraining), (Composite)new DecoratorNeedToFindTarget((Composite)new Sequence(new Composite[2]
-        {
-            (Composite)new ActionSetTarget(),
-            (Composite)new Wait(5, (CanRunDecoratorDelegate)(context => (WoWObject)StyxWoW.Me.CurrentTarget != (WoWObject)null), (Composite)new ActionSetPoi((RetrieveBotPoiDelegate)(context => new BotPoi((WoWObject)StyxWoW.Me.CurrentTarget, PoiType.Kill))))
-        })))));
+        // Honorbuddy 4.3.4 semantics (clean, readable):
+        // - Only run while moving
+        // - Only when the current BotPoi is NOT a Kill POI
+        // - Only when not in combat
+        // - If we find a valid CurrentTarget within 5s, set a Kill POI for it
+
+        CanRunDecoratorDelegate isMoving = context => StyxWoW.Me.IsMoving;
+        CanRunDecoratorDelegate notInCombat = context => !StyxWoW.Me.Combat;
+        CanRunDecoratorDelegate hasTarget = context => StyxWoW.Me.CurrentTarget != null;
+        RetrieveBotPoiDelegate buildKillPoi = context => new BotPoi(StyxWoW.Me.CurrentTarget, PoiType.Kill);
+
+        return (Composite)new Decorator(isMoving,
+            (Composite)new DecoratorIsNotPoiType(PoiType.Kill,
+            (Composite)new Decorator(notInCombat,
+            (Composite)new DecoratorNeedToFindTarget(
+                (Composite)new Sequence(new Composite[]
+                {
+                    new ActionSetTarget(),
+                    new Wait(5, hasTarget, new ActionSetPoi(buildKillPoi))
+                })))));
     }
 
     private static PrioritySelector CreateQuestOrderBehavior()
