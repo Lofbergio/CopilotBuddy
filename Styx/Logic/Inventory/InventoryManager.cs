@@ -5,6 +5,7 @@ using Styx.Helpers;
 using Styx.Logic.Profiles;
 using Styx.WoWInternals;
 using Styx.WoWInternals.WoWObjects;
+using Styx.Combat.CombatRoutine;
 
 namespace Styx.Logic.Inventory
 {
@@ -80,6 +81,16 @@ namespace Styx.Logic.Inventory
                     slots.Add(InventorySlot.BackSlot);
                     break;
                 case InventoryType.TwoHandWeapon:
+                {
+                    slots.Add(InventorySlot.MainHandSlot);
+                    bool flag = StyxWoW.Me.Class == WoWClass.Warrior && Lua.GetReturnVal<int>("return GetTalentInfo(2,20)", 4U) > 0;
+                    WoWItem mainHand = StyxWoW.Me.Inventory.Equipped.MainHand;
+                    if (flag && mainHand != null && mainHand.ItemInfo.InventoryType == InventoryType.TwoHandWeapon)
+                    {
+                        slots.Add(InventorySlot.SecondaryHandSlot);
+                    }
+                    break;
+                }
                 case InventoryType.WeaponMainHand:
                     slots.Add(InventorySlot.MainHandSlot);
                     break;
