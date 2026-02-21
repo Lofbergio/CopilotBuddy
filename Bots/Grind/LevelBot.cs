@@ -1108,11 +1108,27 @@ namespace Bots.Grind
         {
             return new PrioritySelector(
                 // Find target if not looting/killing
-                new DecoratorIsNotPoiType(new[] { PoiType.Kill, PoiType.Loot, PoiType.Skin, PoiType.Harvest },
+                    new DecoratorIsNotPoiType(new[] { PoiType.Kill, PoiType.Loot, PoiType.Skin, PoiType.Harvest },
                     new DecoratorNeedToFindTarget(new Sequence(
                         new TreeSharp.Action(ctx => Targeting.Instance.FirstUnit.Target()),
                         new Wait(5, ctx => StyxWoW.Me.GotTarget, new ActionIdle()),
-                        new ActionSetPoi(ctx => new BotPoi(StyxWoW.Me.CurrentTarget, PoiType.Kill))
+                        new ActionSetPoi(ctx =>
+                        {
+                            var target = StyxWoW.Me.CurrentTarget;
+                            var poiType = PoiType.Kill;
+                                var unit = target as WoWUnit;
+                                if (unit != null &&
+                                    LootTargeting.LootMobs &&
+                                    unit.Distance <= LootTargeting.LootRadius &&
+                                    unit.Dead &&
+                                    !Blacklist.Contains(unit.Guid) &&
+                                    ((unit.KilledByMe && unit.CanLoot) ||
+                                     (unit.CanSkin && LootTargeting.SkinMobs && (CharacterSettings.Instance.NinjaSkin || unit.KilledByMe))))
+                                {
+                                    poiType = PoiType.Loot;
+                                }
+                            return new BotPoi(target, poiType);
+                        })
                     ))
                 ),
                 // Move to hotspot if needed
