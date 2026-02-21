@@ -65,6 +65,15 @@ namespace TreeSharp
             return Tick(context);
         }
 
+        /// <summary>
+        /// HonorBuddy-compatible property: whether this composite is currently running.
+        /// Many third-party bots reference `IsRunning` as a property.
+        /// </summary>
+        public bool IsRunning
+        {
+            get { return LastStatus.HasValue && LastStatus.Value == RunStatus.Running; }
+        }
+
         protected virtual IEnumerable<RunStatus> Execute(object context)
         {
             yield return RunStatus.Failure;
