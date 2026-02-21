@@ -74,8 +74,8 @@ public class ActionSelectQuest : Action
                     Styx.Helpers.Logging.WriteDiagnostic("[ActionSelectQuest] Quest {0} - IsCompleted: {1}", quests[index], questById != null ? questById.IsCompleted.ToString() : "null");
                     if (this.questId != -1 || questById.IsCompleted)
                     {
-                        Styx.Helpers.Logging.WriteDiagnostic("[ActionSelectQuest] Calling GossipFrame.Instance.SelectActiveQuest({0})", quests[index]);
-                        GossipFrame.Instance.SelectActiveQuest((int)quests[index]);
+                        Styx.Helpers.Logging.WriteDiagnostic("[ActionSelectQuest] Calling GossipFrame.Instance.SelectActiveQuest(Index={0}, QuestId={1})", index, quests[index]);
+                        GossipFrame.Instance.SelectActiveQuest(index);
                         return RunStatus.Success;
                     }
                 }
