@@ -206,7 +206,12 @@ namespace Styx.WoWInternals.WoWObjects
         #endregion
 
         #region Equipment
-        public WoWInventorySlot EquipSlot => (WoWInventorySlot)_cacheEntry.EquipSlot;
+        // HonorBuddy compatibility: EquipSlot returns InventoryType
+        public InventoryType EquipSlot => (InventoryType)_cacheEntry.EquipSlot;
+
+        // Preserve original WoWInventorySlot access under a distinct name
+        public WoWInventorySlot WoWEquipSlot => (WoWInventorySlot)_cacheEntry.EquipSlot;
+
         public WoWItemAmmoType AmmoType => (WoWItemAmmoType)_cacheEntry.AmmoType;
         public InventoryType InventoryType => (InventoryType)_cacheEntry.EquipSlot;
 
