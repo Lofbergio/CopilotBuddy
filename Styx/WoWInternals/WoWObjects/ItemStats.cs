@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Styx.Helpers;
+using Styx;
 using GreenMagic;
 
 namespace Styx.WoWInternals.WoWObjects
@@ -126,78 +127,7 @@ namespace Styx.WoWInternals.WoWObjects
         #endregion
     }
     
-    #region StatTypes Enum
-    public enum StatTypes
-    {
-        None = 0,
-        Health = 1,
-        Mana = 2,
-        Agility = 3,
-        Strength = 4,
-        Intellect = 5,
-        Spirit = 6,
-        Stamina = 7,
-        
-        DefenseSkillRating = 12,
-        DodgeRating = 13,
-        ParryRating = 14,
-        BlockRating = 15,
-        HitMeleeRating = 16,
-        HitRangedRating = 17,
-        HitSpellRating = 18,
-        CritMeleeRating = 19,
-        CritRangedRating = 20,
-        CritSpellRating = 21,
-        HitTakenMeleeRating = 22,
-        HitTakenRangedRating = 23,
-        HitTakenSpellRating = 24,
-        CritTakenMeleeRating = 25,
-        CritTakenRangedRating = 26,
-        CritTakenSpellRating = 27,
-        HasteMeleeRating = 28,
-        HasteRangedRating = 29,
-        HasteSpellRating = 30,
-        HitRating = 31,
-        CritRating = 32,
-        HitTakenRating = 33,
-        CritTakenRating = 34,
-        ResilienceRating = 35,
-        HasteRating = 36,
-        ExpertiseRating = 37,
-        AttackPower = 38,
-        RangedAttackPower = 39,
-        FeralAttackPower = 40,  // Obsolète en 3.3.5
-        SpellHealingDone = 41,
-        SpellDamageDone = 42,
-        ManaRegeneration = 43,
-        ArmorPenetrationRating = 44,
-        SpellPower = 45,
-        HealthRegen = 46,
-        SpellPenetration = 47,
-        BlockValue = 48,
-        
-        // Additional stats
-        Armor = 50,
-        FireResistance = 51,
-        FrostResistance = 52,
-        HolyResistance = 53,
-        ShadowResistance = 54,
-        NatureResistance = 55,
-        ArcaneResistance = 56,
-        
-        // Combat stats
-        DamageMin = 60,
-        DamageMax = 61,
-        AttackSpeed = 62,
-        
-        // Rating conversion (pour affichage)
-        HitPercent = 70,
-        CritPercent = 71,
-        HastePercent = 72,
-        ExpertisePercent = 73
-    }
-    
-    #endregion
+    // Use Styx.StatTypes (canonical) instead of redeclaring here.
     
     #region WoWItemStatType Enum
     public enum WoWItemStatType
