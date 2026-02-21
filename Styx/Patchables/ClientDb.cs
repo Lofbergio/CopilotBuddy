@@ -179,6 +179,8 @@ namespace Styx.Patchables
         SpellDispelType,
         SpellDuration,
         SpellEffectCameraShakes,
+        // HB 4.3.4 entries required by Profession/Archaeology
+        SpellCastingRequirements = 10068128,
         SpellFocusObject,
         SpellIcon,
         SpellItemEnchantment,
@@ -189,6 +191,9 @@ namespace Styx.Patchables
         SpellRadius,
         SpellRange,
         SpellRuneCost,
+        // HB 4.3.4 archaeology-related tables
+        SpellReagents = 10068940,
+        SpellTotems = 10069136,
         SpellShapeshiftForm,
         SpellVisual,
         SpellVisualEffectName,
