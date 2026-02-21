@@ -340,7 +340,7 @@ namespace Styx.WoWInternals.WoWObjects
 
         public WoWItemClass ItemClass => ItemInfo?.ItemClass ?? WoWItemClass.Consumable;
 
-        public WoWInventorySlot EquipSlot => ItemInfo?.EquipSlot ?? WoWInventorySlot.None;
+        public WoWInventorySlot EquipSlot => (WoWInventorySlot)(ItemInfo?.EquipSlot ?? InventoryType.None);
 
         public int SellPrice => ItemInfo?.SellPrice ?? 0;
 
