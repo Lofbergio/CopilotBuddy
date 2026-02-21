@@ -160,6 +160,7 @@ namespace Styx.WoWInternals.WoWObjects
 
         public bool Combat => HasUnitFlag(UnitFlags.InCombat);
         public bool Skinnable => HasUnitFlag(UnitFlags.Skinnable);
+        public bool Lootable => HasDynamicFlag(UnitDynamicFlags.Lootable);
         public bool Dazed => HasUnitFlag(UnitFlags.Dazed);
         public bool Disarmed => HasUnitFlag(UnitFlags.Disarmed);
         public bool Attackable => !HasUnitFlag(UnitFlags.NotAttackable);
