@@ -85,6 +85,7 @@ namespace GreenMagic
         public IntPtr ThreadHandle => _hThread;
         public IntPtr WindowHandle => _hWnd;
         public Process Process => _process;
+        public uint ImageBase => _imageBase;
 
         #endregion
 
