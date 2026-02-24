@@ -62,9 +62,44 @@ namespace Styx.Logic.Pathing
             // TODO: Subscribe to OnTileLoaded when Navigation.dll exposes tile events
             // HB 4.3.4 pattern: meshNavigator.Nav.OnTileLoaded += OnTileLoaded;
             // This ensures blackspots are re-marked when tiles are loaded dynamically.
-            
+
+            // Subscribe to Tripper navigation tile events so blackspots are applied
+            try
+            {
+                var nav = Navigator.TripperNavigator; // create/get navigator
+                if (nav != null)
+                {
+                    nav.TileLoaded += OnTileLoaded;
+                }
+            }
+            catch (Exception)
+            {
+                // Ignore if navigator not available yet
+            }
+
             // Load global blackspots on startup
             LoadGlobalBlackspots();
+
+            // If a profile was already loaded before this static ctor ran, apply its blackspots now.
+            try
+            {
+                var profile = ProfileManager.CurrentProfile;
+                if (profile?.Blackspots != null && profile.Blackspots.Count > 0)
+                {
+                    AddBlackspots(profile.Blackspots);
+                    // Force re-marking in case tiles were already loaded
+                    lock (_lock)
+                    {
+                        _markedBlackspots.Clear();
+                        _lastMarkedMapId = 0;
+                    }
+                    EnsureBlackspotsMarked();
+                }
+            }
+            catch (Exception)
+            {
+                // best-effort only
+            }
         }
         
         /// <summary>
@@ -87,11 +122,50 @@ namespace Styx.Logic.Pathing
                 {
                     AddBlackspots(args.NewProfile.Blackspots);
                     Logging.Write($"[Blackspot] Loaded {args.NewProfile.Blackspots.Count} blackspots from profile");
+                    // Force re-marking in case tiles are already loaded for the new profile
+                    lock (_lock)
+                    {
+                        _markedBlackspots.Clear();
+                        _lastMarkedMapId = 0;
+                    }
+                    EnsureBlackspotsMarked();
                 }
             }
             catch (Exception ex)
             {
                 Logging.WriteDebug($"[Blackspot] Error loading profile blackspots: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Handler for navigator tile-loaded events. Re-applies profile and global blackspots
+        /// when nav tiles stream in (HB-like behavior).
+        /// </summary>
+        private static void OnTileLoaded(object? sender, TileLoadedEventArgs e)
+        {
+            try
+            {
+                var profile = ProfileManager.CurrentProfile;
+                if (profile?.Blackspots != null && profile.Blackspots.Count > 0)
+                {
+                    AddBlackspots(profile.Blackspots);
+                }
+
+                uint currentMap = StyxWoW.Me?.MapId ?? 0;
+                lock (_lock)
+                {
+                    foreach (var globalSpot in _globalBlackspots)
+                    {
+                        if (globalSpot.MapId == currentMap && !_markedBlackspots.Contains(globalSpot.Blackspot))
+                        {
+                            MarkBlackspotPolygons(globalSpot.Blackspot, currentMap);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.WriteDebug($"[Blackspot] OnTileLoaded error: {ex.Message}");
             }
         }
 
