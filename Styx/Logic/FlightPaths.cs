@@ -53,7 +53,8 @@ namespace Styx.Logic
         {
             get
             {
-                WoWUnit flightMaster = ObjectManager.GetObjectsOfType<WoWUnit>()
+                // use cached units for flight master lookup
+                WoWUnit flightMaster = ObjectManager.CachedUnits
                     .Where(u => u.IsFlightMaster && 
                                 !Blacklist.Contains(u) && 
                                 !u.IsHostile && 
