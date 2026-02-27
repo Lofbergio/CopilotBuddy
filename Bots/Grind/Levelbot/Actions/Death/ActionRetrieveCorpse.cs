@@ -89,7 +89,7 @@ namespace Levelbot.Actions.Death
             private static WoWPoint FindSafeSpot()
             {
                 // Get hostile mobs
-                List<WoWPoint> hostileLocations = ObjectManager.GetObjectsOfType<WoWUnit>(true, false)
+                List<WoWPoint> hostileLocations = ObjectManager.CachedUnits
                     .Where(u => !u.Dead && u.IsHostile)
                     .Select(u => u.Location)
                     .ToList();
