@@ -26,10 +26,14 @@
     </Style>
   </FrameworkElement.Resources>
   <Grid x:Name="LayoutRoot">
-    <Button Click="btnSaveAndClose_Click" x:Name="btnSaveAndClose"
-            Content="Save and Close" Margin="240,0,8,8"
-            Foreground="White" Background="#FF3F3F46"
-            VerticalAlignment="Bottom" Height="25.96" HorizontalAlignment="Left" Width="112"/>
+    <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="8,0,0,8">
+      <Button Click="btnDungeonConfig_Click" x:Name="btnDungeonConfig"
+              Content="DungeonBuddy" Foreground="White" Background="#FF3F3F46"
+              Height="25.96" Width="112" Margin="0,0,8,0"/>
+      <Button Click="btnSaveAndClose_Click" x:Name="btnSaveAndClose"
+              Content="Save and Close" Foreground="White" Background="#FF3F3F46"
+              Height="25.96" Width="112"/>
+    </StackPanel>
     <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="8,8,8,37.92">
       <WrapPanel>
         <!-- Mount GroupBox -->
