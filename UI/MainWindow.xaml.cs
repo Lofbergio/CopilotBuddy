@@ -170,12 +170,8 @@ namespace CopilotBuddy.UI
                                 ObjectManager.Me.Level,
                                 ObjectManager.Me.Race,
                                 ObjectManager.Me.Class);
-                            try
-                            {
-                                string zone = Lua.GetReturnVal<string>("return GetZoneText()", 0) ?? "Unknown";
-                                Logging.Write("Current zone is {0}", zone);
-                            }
-                            catch { }
+                            // Honorbuddy 3.3.5a simply logged RealZoneText
+                            Logging.Write("Current zone is {0}", ObjectManager.Me.RealZoneText);
                         }
 
                         // Reinitialize and load settings for this character (HB 4.3.4 pattern)
@@ -448,12 +444,13 @@ namespace CopilotBuddy.UI
                     ObjectManager.Me.Level,
                     ObjectManager.Me.Race,
                     ObjectManager.Me.Class);
-                try
+                // zone query can hang if injection is slow; do it off the UI thread so the Start button
+                // animation isn't blocked.  It is just informational.
+                Task.Run(() =>
                 {
-                    string zone = Lua.GetReturnVal<string>("return GetZoneText()", 0) ?? "Unknown";
-                    Logging.Write("Current zone is {0}", zone);
-                }
-                catch { }
+                    // no injection required; RealZoneText is read directly from memory
+                    Logging.Write("Current zone is {0}", ObjectManager.Me.RealZoneText);
+                });
             }
 
             TreeRoot.Start();
