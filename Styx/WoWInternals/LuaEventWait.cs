@@ -9,7 +9,7 @@ namespace Styx.WoWInternals
 	public class LuaEventWait : IDisposable
 	{
 		private const int WaitInterval = 30;
-		private readonly AutoResetEvent autoResetEvent_0 = new AutoResetEvent(false);
+		private readonly AutoResetEvent _event = new AutoResetEvent(false);
 
 		public string EventName { get; private set; }
 
@@ -21,7 +21,7 @@ namespace Styx.WoWInternals
 
 		private void EventHandler(object sender, LuaEventArgs e)
 		{
-			autoResetEvent_0.Set();
+			_event.Set();
 		}
 
 		public bool Wait()
@@ -41,7 +41,7 @@ namespace Styx.WoWInternals
 				for (;;)
 				{
 					LuaEvents.ProcessPendingEvents();
-					if (autoResetEvent_0.WaitOne(0))
+					if (_event.WaitOne(0))
 					{
 						break;
 					}
@@ -56,7 +56,7 @@ namespace Styx.WoWInternals
 				for (;;)
 				{
 					LuaEvents.ProcessPendingEvents();
-					if (autoResetEvent_0.WaitOne(0))
+					if (_event.WaitOne(0))
 					{
 						break;
 					}
@@ -85,7 +85,7 @@ namespace Styx.WoWInternals
 			Lua.Events.DetachEvent(EventName, EventHandler);
 			if (disposing)
 			{
-				autoResetEvent_0.Close();
+				_event.Close();
 				GC.SuppressFinalize(this);
 			}
 		}
