@@ -509,8 +509,12 @@ namespace Styx.WoWInternals.WoWObjects
                         
                         executor.Execute();
                         
-                        uint namePtr = executor.Memory.Read<uint>(executor.ReturnPointer);
-                        result = (namePtr == 0U) ? $"Object_{Entry}" : executor.Memory.Read<string>(namePtr);
+                        // Disable cache while reading data produced by remote code (HB uses TemporaryCacheState here)
+                        using (StyxWoW.Memory.TemporaryCacheState(false))
+                        {
+                            uint namePtr = executor.Memory.Read<uint>(executor.ReturnPointer);
+                            result = (namePtr == 0U) ? $"Object_{Entry}" : executor.Memory.Read<string>(namePtr);
+                        }
                     }
                 }
                 catch
