@@ -74,6 +74,15 @@ namespace Styx.Logic.BehaviorTree
 			if (State != TreeRootState.Running)
 				return;
 
+			// sync ticks-per-second slider value (per-character)
+			TicksPerSecond = CharacterSettings.Instance.TicksPerSecond;
+			// frame lock removed – running body directly to avoid freezes
+			RunTickBody();
+		}
+
+		// extracted body for readability and re-use in framelock wrapper
+		private static void RunTickBody()
+		{
 			if (StyxWoW.Me == null || !StyxWoW.IsInGame)
 			{
 				Logging.Write("Not in game");
@@ -151,7 +160,8 @@ namespace Styx.Logic.BehaviorTree
 				// Grab frame first to sync with WoW's main thread (like HB 3.3.5a)
 				if (ObjectManager.Executor != null)
 				{
-					ObjectManager.Executor.GrabFrame();
+					try { ObjectManager.Executor.GrabFrame(); }
+					catch (Exception ex) { Logging.WriteDebug("Initial GrabFrame failed: {0}", ex.Message); }
 				}
 				ObjectManager.Update();
 				string lastUsedPath = LevelbotSettings.Instance.LastUsedPath;
