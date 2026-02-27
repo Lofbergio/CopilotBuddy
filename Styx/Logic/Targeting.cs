@@ -11,8 +11,8 @@ using Styx.Logic.Profiles;
 using Styx.Logic.POI;
 using Styx.WoWInternals;
 using Styx.WoWInternals.World;
-using Styx.Helpers; // for StyxSettings
-using GreenMagic; // for Memory.AcquireFrame
+using Styx.Helpers;
+using GreenMagic;
 using Styx.WoWInternals.WoWObjects;
 
 namespace Styx.Logic
@@ -104,7 +104,8 @@ namespace Styx.Logic
         public static int GetAggroOnMeWithin(WoWPoint position, float range)
         {
             float rangeSqr = range * range;
-            return ObjectManager.GetObjectsOfType<WoWUnit>(true)
+            // use cached units to reduce memory queries (400ms timeout in ObjectManager)
+            return ObjectManager.CachedUnits
                 .Count(u => u.Location.DistanceSqr(position) < rangeSqr
                             && u.IsAlive && u.Attackable && u.IsHostile
                             && (u.IsTargetingMeOrPet || u.IsTargetingAnyMinion || u.TappedByAllThreatLists));
@@ -113,7 +114,7 @@ namespace Styx.Logic
         public static int GetAggroWithin(WoWPoint position, float range)
         {
             float rangeSqr = range * range;
-            return ObjectManager.GetObjectsOfType<WoWUnit>(true)
+            return ObjectManager.CachedUnits
                 .Where(u => u.IsAlive && u.Attackable && u.IsHostile && u.Location.DistanceSqr(position) <= rangeSqr)
                 .Count();
         }
@@ -647,26 +648,17 @@ namespace Styx.Logic
             ulong poiGuid = BotPoi.Current.Guid;
             WoWPoint myLoc = me.Location;
             Profile currentProfile = ProfileManager.CurrentProfile;
-            bool[] los = null;
-            if (!Battlegrounds.IsInsideBattleground)
-            {
-                WorldLine[] lines = new WorldLine[units.Count];
-                WoWPoint start = me.GetTraceLinePos();
-                for (int i = units.Count - 1; i >= 0; i--)
-                {
-                    lines[i] = new WorldLine(start, units[i].Object.ToUnit().GetTraceLinePos());
-                }
-                GameWorld.MassTraceLine(lines, GameWorld.TraceLineHitFlags.Collision, out los);
-            }
+            // LOS computation is now handled by ObjectManager.ScanCaches(),
+            // which keeps a cache updated on each AcquireFrame call.
+
             using (StyxWoW.Memory.AcquireFrame())
             {
                 for (int j = units.Count - 1; j >= 0; j--)
                 {
                     WoWUnit unit = units[j].Object.ToUnit();
-                    WoWPoint loc = unit.Location;
-                    double dist = myLoc.Distance(loc);
-                    double score = 200.0 - 2.0 * dist;
                     ulong guid = unit.Guid;
+                    double dist = ObjectManager.GetDistance(guid);
+                    double score = 200.0 - 2.0 * dist;
                     if (me.Combat)
                     {
                         if (unit.MaxMana > 1 && unit.ManaPercent > 5.0)
@@ -692,7 +684,7 @@ namespace Styx.Logic
                         float aggroRange = unit.MyAggroRange;
                         if (aggroRange != 0f && dist < (double)(aggroRange + 5f))
                             score += 100.0;
-                        if (los != null && !los[j])
+                        if (!ObjectManager.InLineOfSight(guid))
                             score += 25.0;
                         else
                             score -= 25.0;
