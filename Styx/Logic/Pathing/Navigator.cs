@@ -118,36 +118,74 @@ namespace Styx.Logic.Pathing
 			}
 		}
 
-		/// <summary>
-		/// Indicates if navigation meshes are loaded and ready.
-		/// </summary>
-		public static bool IsNavigatorLoaded => _navigator?.IsLoaded ?? false;
+        // Navigation provider management (HB 5.x/6.x compatibility)
+        private static INavigationProvider _currentProvider;
 
-		public static float? PathDistance(WoWPoint from, WoWPoint to, float maxDistance = float.MaxValue)
-		{
-			try
-			{
-				if (!IsNavigatorLoaded)
-					return null;
-				uint mapId = GetCurrentMapId();
-				var start = new System.Numerics.Vector3(from.X, from.Y, from.Z);
-				var end = new System.Numerics.Vector3(to.X, to.Y, to.Z);
-				var result = TripperNavigator.FindPath(mapId, start, end, true);
-				if (result == null || !result.Succeeded || result.Points == null || result.Points.Length == 0)
-					return null;
-				float dist = 0f;
-				var pts = result.Points;
-				for (int i = 1; i < pts.Length; i++)
-					dist += System.Numerics.Vector3.Distance(pts[i - 1], pts[i]);
-				if (dist > maxDistance) return null;
-				return dist;
-			}
-			catch
-			{
-				return null;
-			}
-		}
+        /// <summary>
+        /// The active navigation provider. Setting this property raises the
+        /// <see cref="OnNavigationProviderChanged"/> event if the value differs.
+        /// </summary>
+        public static INavigationProvider NavigationProvider
+        {
+            get => _currentProvider;
+            set
+            {
+                if (ReferenceEquals(_currentProvider, value))
+                    return;
+                var old = _currentProvider;
+                _currentProvider = value;
+                OnNavigationProviderChanged?.Invoke(null, new NavigationProviderChangedEventArgs<INavigationProvider>(old, value));
+            }
+        }
 
+        /// <summary>
+        /// Convenience alias used by older HB code.
+        /// </summary>
+        public static INavigationProvider CurrentProvider => _currentProvider;
+
+        /// <summary>
+        /// Fired when <see cref="NavigationProvider"/> is replaced.  Consumers
+        /// such as <see cref="BlackspotManager"/> can (re)wire tile events.
+        /// </summary>
+        public static event EventHandler<NavigationProviderChangedEventArgs<INavigationProvider>> OnNavigationProviderChanged;
+
+        /// <summary>
+        /// Whether the underlying Tripper navigator instance has finished loading
+        /// its meshes.  Mirrors HB's Navigator.IsNavigatorLoaded property.
+        /// </summary>
+        public static bool IsNavigatorLoaded => _navigator != null && _navigator.IsLoaded;
+
+        /// <summary>
+        /// Computes the path distance between two points using TripperNavigator.
+        /// Returns null if no path could be generated or if the calculated
+        /// distance exceeds <paramref name="maxDistance"/>.
+        /// This helper backs <see cref="StuckHandler"/> and was removed earlier
+        /// during refactoring; it has now been restored.
+        /// </summary>
+        public static float? PathDistance(WoWPoint from, WoWPoint to, float maxDistance)
+        {
+            try
+            {
+                if (from == WoWPoint.Zero || to == WoWPoint.Zero)
+                    return null;
+                uint mapId = GetCurrentMapId();
+                var start = new System.Numerics.Vector3(from.X, from.Y, from.Z);
+                var end = new System.Numerics.Vector3(to.X, to.Y, to.Z);
+                var result = TripperNavigator.FindPath(mapId, start, end, true);
+                if (result == null || !result.Succeeded || result.Points == null || result.Points.Length == 0)
+                    return null;
+                float dist = 0f;
+                var pts = result.Points;
+                for (int i = 1; i < pts.Length; i++)
+                    dist += System.Numerics.Vector3.Distance(pts[i - 1], pts[i]);
+                if (dist > maxDistance) return null;
+                return dist;
+            }
+            catch
+            {
+                return null;
+            }
+        }
 
 		static Navigator()
 		{
@@ -1368,7 +1406,7 @@ namespace Styx.Logic.Pathing
 		{
 			// AUDIT FIX: Add 30yd range limit to prevent interacting with distant NPCs
 			const float maxSearchDistSqr = 900f; // 30 yards squared
-			var unit = ObjectManager.GetObjectsOfType<WoWUnit>(false, false)
+var unit = ObjectManager.CachedUnits
 				.Where(u => !u.IsDead && !u.IsHostile && !u.PlayerControlled && !u.IsPlayer
 				            && u.Location.DistanceSqr(me.Location) < maxSearchDistSqr)
 				.OrderBy(u => u.Location.DistanceSqr(me.Location))
