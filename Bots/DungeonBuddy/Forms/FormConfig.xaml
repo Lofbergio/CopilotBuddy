@@ -1,0 +1,83 @@
+<Window x:Class="Bots.DungeonBuddy.Forms.FormConfig"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:wf="clr-namespace:System.Windows.Forms;assembly=System.Windows.Forms"
+        xmlns:wi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration"
+        mc:Ignorable="d"
+        Title="DungeonBuddy Config"
+        Height="560"
+        Width="360"
+        Loaded="FormConfig_Load"
+        Closing="FormConfig_FormClosing"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize">
+
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TabControl x:Name="tabControlMain" Grid.Row="0" Background="#252526" Foreground="#CCCCCC" SelectionChanged="tabControlMain_SelectedIndexChanged">
+            <TabItem x:Name="tabPageCommon" Header="Common">
+                <!-- property grid hosted in WinForms host -->
+                <wi:WindowsFormsHost x:Name="winFormsHost" Margin="4">
+                    <wf:PropertyGrid x:Name="propertyGridMain"/>
+                </wi:WindowsFormsHost>
+            </TabItem>
+            <TabItem x:Name="tabPageDungeons" Header="Dungeon Selection">
+                <Grid Margin="4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <wi:WindowsFormsHost Grid.Row="0">
+                        <wf:TreeView x:Name="twDungeonSelection" BeforeCheck="twDungeonSelection_BeforeCheck" AfterCheck="twDungeonSelection_AfterCheck" CheckBoxes="True"/>
+                    </wi:WindowsFormsHost>
+                    <Label x:Name="lblWarningText" Grid.Row="1" Foreground="Orange" Visibility="Collapsed" HorizontalAlignment="Center">
+                        <TextBlock Text="You need to change Queue Type to Specific before editing the dungeon list" TextWrapping="Wrap" TextAlignment="Center"/>
+                    </Label>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
+                        <CheckBox x:Name="cbShowAll" Content="Show All Dungeons" Margin="0,0,8,0" Checked="cbShowAll_CheckedChanged" Unchecked="cbShowAll_CheckedChanged"/>
+                        <Button x:Name="btnSelectAll" Content="Select All" Click="btnSelectAll_Click" Margin="0,0,5,0"/>
+                        <Button x:Name="btnUnselectAll" Content="Unselect All" Click="btnUnselectAll_Click"/>
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+            <TabItem x:Name="tabPageSecret" Header="Secret">
+                <Grid Margin="4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0,0,0,4">
+                        <Button x:Name="btnToggleMovement" Content="Disable Movement" Click="btnToggleMovement_Click" Margin="0,0,4,0"/>
+                        <Button x:Name="loadProfileButton" Content="Load Profile" Click="loadProfile_click" Margin="0,0,4,0"/>
+                        <Button x:Name="button1" Content="CurrentTarget Info" Click="button1_Click"/>
+                        <Button x:Name="dbgButton2" Content="Navigation" Click="dbgButton2_Click" Margin="6,0,0,0"/>
+                        <Button x:Name="debugBtn3" Content="Show Path" Click="debugBtn3_Click" Margin="6,0,0,0"/>
+                        <Button x:Name="RecompileScriptsButton" Content="Show Path" Click="RecompileScriptsButton_Click" Margin="6,0,0,0"/>
+                    </StackPanel>
+                    <TabControl x:Name="tabControl1" Grid.Row="1">
+                        <TabItem x:Name="tabPage1" Header="Dungeon List">
+                            <wi:WindowsFormsHost>
+                                <wf:TreeView x:Name="twDebug"/>
+                            </wi:WindowsFormsHost>
+                        </TabItem>
+                        <TabItem x:Name="tabPage2" Header="Boss List">
+                            <wi:WindowsFormsHost>
+                                <wf:TreeView x:Name="twBossTree" CheckBoxes="True" AfterCheck="twBossTree_AfterCheck"/>
+                            </wi:WindowsFormsHost>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <Label x:Name="label1" Grid.Row="1" Content="DungeonBuddy" FontFamily="Impact" FontSize="17" Foreground="#CCCCCC" HorizontalAlignment="Left"/>
+    </Grid>
+</Window>
