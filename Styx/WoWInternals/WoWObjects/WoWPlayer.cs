@@ -194,21 +194,18 @@ namespace Styx.WoWInternals.WoWObjects
         
         #region Player State Properties
         
-        /// <summary>
-        /// Whether this player is currently a ghost (dead and waiting to resurrect).
-        /// In WoW 3.3.5a, this is determined by PlayerFlags bit 0x10 (16)
-        /// </summary>
+        // mirror HB 3.3.5a / 4.3.4 implementation using flags bitvector
+        private BitVector32 PlayerFlags
+        {
+            get => new BitVector32(ReadDescriptor<int>(DescPlayerFlags));
+        }
+
         public virtual bool IsGhost
         {
-            get
-            {
-                uint flags = ReadDescriptor<uint>(DescPlayerFlags);
-                return (flags & 0x10) != 0;
-            }
+            get => PlayerFlags[16];
         }
 
         /// <summary>
-        /// FEAT-09: Override IsAlive to account for ghost state.
         /// HB 4.3.4: override bool IsAlive => !base.Dead && !this.IsGhost
         /// </summary>
         public override bool IsAlive => !Dead && !IsGhost;
@@ -266,8 +263,7 @@ namespace Styx.WoWInternals.WoWObjects
         
         public double XPPercent => NextLevelXP > 0 ? (double)XP / NextLevelXP * 100 : 0;
         
-        private BitVector32 PlayerFlags => new((int)ReadDescriptor<uint>(DescPlayerFlags));
-        
+
         #endregion
         
         #region Player Flags
@@ -654,7 +650,8 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
-                return ObjectManager.GetObjectsOfType<WoWItem>().FirstOrDefault();
+                // now using cached items list to avoid repeated memory scans
+                return ObjectManager.CachedItems.FirstOrDefault();
             }
         }
         
@@ -662,7 +659,7 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
-                return ObjectManager.GetObjectsOfType<WoWItem>().Skip(1).FirstOrDefault();
+                return ObjectManager.CachedItems.Skip(1).FirstOrDefault();
             }
         }
         
@@ -696,7 +693,8 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
-                return ObjectManager.GetObjectsOfType<WoWUnit>()
+                // filtering on cached units reduces allocation/memory access
+                return ObjectManager.CachedUnits
                     .Where(u => !u.IsNonCombatPet && (WoWObject)u.ControllingPlayer == (WoWObject)this)
                     .ToList();
             }
