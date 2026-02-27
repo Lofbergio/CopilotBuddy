@@ -150,9 +150,12 @@ namespace Styx.WoWInternals.World
                         executor.AddLine("retn");
                         executor.Execute();
                         
-                        hitPoint = memory.Read<WoWPoint>("IntersectionPoint");
-                        byte result = executor.Memory.Read<byte>(executor.ReturnPointer);
-                        return result != 0;
+                        using (StyxWoW.Memory.TemporaryCacheState(false))
+                        {
+                            hitPoint = memory.Read<WoWPoint>("IntersectionPoint");
+                            byte result = executor.Memory.Read<byte>(executor.ReturnPointer);
+                            return result != 0;
+                        }
                     }
                     catch (Exception ex)
                     {
