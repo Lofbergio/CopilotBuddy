@@ -52,6 +52,18 @@ namespace Styx.WoWInternals.WoWObjects
         }
         
         #endregion
+
+        // cache wu and other temporaries used heavily by targeting logic
+        private static readonly TimeCachedValue<WoWUnit> _cachedCurrentTarget =
+            new(TimeSpan.FromMilliseconds(400), () => ObjectManager.Me?.CurrentTarget);
+
+        /// <summary>
+        /// Helper that mirrors Honorbuddy's 400ms target cache used all over the
+        /// targeting code.  Access through <see cref="ObjectManager.Me" /> rather
+        /// than calling GetTarget repeatedly.
+        /// </summary>
+        public WoWUnit CachedCurrentTarget => _cachedCurrentTarget.Value;
+
         
         #region Account & Character Info
         public string AccountName
@@ -399,8 +411,9 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
+                // use cached units list instead of hitting memory each access
                 return (Combat || PetInCombat) && 
-                       !ObjectManager.GetObjectsOfType<WoWUnit>().All(u => !u.Aggro) && 
+                       !ObjectManager.CachedUnits.All(u => !u.Aggro) && 
                        Targeting.Instance.FirstUnit != null;
             }
         }
@@ -2272,8 +2285,11 @@ namespace Styx.WoWInternals.WoWObjects
                         executor.AddLine("retn");
                         executor.Execute();
                         
-                        reason = (GameError)executor.Memory.Read<uint>(new uint[] { allocatedMemoryAddress });
-                        canUseItem = Convert.ToBoolean(executor.Memory.Read<uint>(new uint[] { executor.ReturnPointer }));
+                        using (StyxWoW.Memory.TemporaryCacheState(false))
+                        {
+                            reason = (GameError)executor.Memory.Read<uint>(new uint[] { allocatedMemoryAddress });
+                            canUseItem = Convert.ToBoolean(executor.Memory.Read<uint>(new uint[] { executor.ReturnPointer }));
+                        }
                     }
                     finally
                     {
