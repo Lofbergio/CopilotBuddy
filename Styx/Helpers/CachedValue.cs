@@ -9,33 +9,33 @@ namespace Styx.Helpers
     /// </summary>
     public class CachedValue<T>
     {
-        private readonly Func<T> func_0;
-        private bool bool_0;
-        private T gparam_0;
+        private readonly Func<T> _producer;
+        private bool _hasValue;
+        private T _value;
 
         public CachedValue(Func<T> producer)
         {
             if (producer == null)
                 throw new ArgumentNullException("producer");
-            func_0 = producer;
+            _producer = producer;
         }
 
         public T Value
         {
             get
             {
-                if (!bool_0)
+                if (!_hasValue)
                 {
-                    gparam_0 = func_0();
-                    bool_0 = true;
+                    _value = _producer();
+                    _hasValue = true;
                 }
-                return gparam_0;
+                return _value;
             }
         }
 
         public void Reset()
         {
-            bool_0 = false;
+            _hasValue = false;
         }
 
         public static implicit operator T(CachedValue<T> pfcv)
