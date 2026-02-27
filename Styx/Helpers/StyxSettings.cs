@@ -34,6 +34,8 @@ namespace Styx.Helpers
         private int _logoutInactivityTimer = 10;
         private bool _logoutInactivityUseForceQuit = false;
         private bool _profileDebuggingMode = false;
+        // default to false because frame‑lock can freeze the game during pathing
+        private bool _useFrameLock = false;
 
         /// <summary>
         /// Path to meshes folder.
@@ -142,6 +144,19 @@ namespace Styx.Helpers
         {
             get { return _profileDebuggingMode; }
             set { _profileDebuggingMode = value; }
+        }
+
+        /// <summary>
+        /// Whether to use the memory frame lock when reading game memory.
+        /// This was enabled by default in HB but can cause freezes during navigation,
+        /// so CopilotBuddy defaults it to false.
+        /// </summary>
+        [Setting(Explanation = "Whether or not to use the frame lock when reading game memory.")]
+        [DefaultValue(false)]
+        public bool UseFrameLock
+        {
+            get { return _useFrameLock; }
+            set { _useFrameLock = value; }
         }
 
         private LogLevel _loggingLevel = LogLevel.Normal;
