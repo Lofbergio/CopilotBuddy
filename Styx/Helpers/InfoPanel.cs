@@ -55,10 +55,18 @@ namespace Styx.Helpers
         {
             TimeSpan elapsed = SessionTime;
             
-            if (ObjectManager.Me != null)
+            if (ObjectManager.Me != null && ObjectManager.Me.IsValid)
             {
-                XPPerHour = CalculatePerHour(ObjectManager.Me.XP + _startXP - _currentXP, elapsed);
-                HonorPerHour = CalculatePerHour(ObjectManager.Me.Honor - _startHonor, elapsed);
+                try
+                {
+                    XPPerHour = CalculatePerHour(ObjectManager.Me.XP + _startXP - _currentXP, elapsed);
+                    HonorPerHour = CalculatePerHour(ObjectManager.Me.Honor - _startHonor, elapsed);
+                }
+                catch (Exception ex)
+                {
+                    // descriptor read can fail if Me becomes invalid mid‑tick; ignore and keep going
+                    Logging.WriteDebug("InfoPanel.Update: failed to read player stats: {0}", ex.Message);
+                }
             }
             
             MobsPerHour = CalculatePerHour(MobsKilled, elapsed);
