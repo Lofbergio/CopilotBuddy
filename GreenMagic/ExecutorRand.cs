@@ -76,6 +76,21 @@ namespace GreenMagic
         public uint InjectCodePointer => m_InjectedCode;
 
         /// <summary>
+        /// True when continuous execution mode has been begun but not yet ended.
+        /// Mirrors HB's Executor.IsExecutingContinuously property.
+        /// </summary>
+        public bool IsExecutingContinuously
+        {
+            get
+            {
+                lock (thisLock)
+                {
+                    return m_ContinuousExecution;
+                }
+            }
+        }
+
+        /// <summary>
         /// Number of EndScene frames that have been processed by the detour.
         /// Read from the data region in the target process.
         /// </summary>
@@ -217,12 +232,32 @@ namespace GreenMagic
 
         public void GrabFrame()
         {
-            Memory.Write<byte>(m_InjectedCode, 195);
-            m_InjectionWaitingEvent.Set();
-            if (!m_InjectionFinishedEvent.WaitOne(10000, false))
-                throw new Exception("Process must have frozen or gotten out of sync; InjectionFinishedEvent was never fired.");
-            m_InjectionWaitingEvent.Reset();
-            m_InjectionContinueEvent.Set();
+            // Honorbuddy's original implementation was single-threaded, so
+            // no synchronization was needed.  In CopilotBuddy we frequently
+            // access the executor from multiple paths (GCD checks, Lua
+            // helpers, Me.CurrentTarget, etc.), which can lead to two threads
+            // racing to write the injected code or signal events.  When that
+            // happened earlier we saw timeouts and total freezes.  Adding
+            // synchronization eliminates the race while still matching HB
+            // semantics when only one thread is active.
+            //
+            // Because most callers also lock on AssemblyLock while building and
+            // executing code, we acquire that lock here as well to guarantee
+            // mutual exclusion between "grab frame" operations and user
+            // injections (e.g. CastSpell).  This mirrors the single lock used
+            // in HB's own Execute() method.
+            lock (thisLock)
+            {
+                lock (AssemblyLock)
+                {
+                    Memory.Write<byte>(m_InjectedCode, 195);
+                    m_InjectionWaitingEvent.Set();
+                    if (!m_InjectionFinishedEvent.WaitOne(10000, false))
+                        throw new Exception("Process must have frozen or gotten out of sync; InjectionFinishedEvent was never fired.");
+                    m_InjectionWaitingEvent.Reset();
+                    m_InjectionContinueEvent.Set();
+                }
+            }
         }
 
         /// <summary>
