@@ -71,6 +71,8 @@ public class ForcedBehaviorExecutor : Composite
             }
             while (this.Order.CurrentBehavior.IsDone)
             {
+                Logging.WriteDiagnostic("[FBE] Advancing past {0} (IsDone=true), remaining nodes: {1}",
+                    this.Order.CurrentBehavior, this.Order.Nodes.Count);
                 this.Order.CurrentBehavior.Dispose();
                 this.Order.CurrentBehavior = (ForcedBehavior)null;
                 this.Order.Advance();
@@ -105,6 +107,7 @@ public class ForcedBehaviorExecutor : Composite
                     yield break;
                 }
             }
+            Logging.WriteDiagnostic("[FBE] Executing {0} (IsDone=false)", this.Order.CurrentBehavior);
             this.Order.CurrentBehavior.OnTick();
             // Guard against bot stop during execution — CurrentBehavior or Branch may be set to null
             // when TreeRoot.Stop() is called while the behavior tree is yielding RunStatus.Running
@@ -169,7 +172,6 @@ public class ForcedBehaviorExecutor : Composite
                 return (ForcedBehavior)new ForcedSingleton(new System.Action(() =>
                 {
                     QuestState.Instance.CurrentGrindArea = setGrindAreaNode.GetArea();
-                    StyxWoW.AreaManager.SetArea(QuestState.Instance.CurrentGrindArea);
                 }));
             case OrderNodeType.ClearGrindArea:
                 return (ForcedBehavior)new ForcedSingleton(new System.Action(() => StyxWoW.AreaManager.SetArea((GrindArea)null)));
