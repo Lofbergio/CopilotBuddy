@@ -48,6 +48,9 @@ namespace GreenMagic
         private uint m_VehPtr;                      // data + 32 (init: 0)
         private uint m_FrameDropWaitTimePtr;        // data + 36
 
+        // XOR key used to obfuscate FrameDropWaitTime in target memory (HB Legion)
+        private uint m_FrameDropWaitTimeXorKey;
+
         // Kernel32 function addresses
         private UIntPtr WaitForSingleObject;
         private UIntPtr CreateEventA;
@@ -65,7 +68,7 @@ namespace GreenMagic
         // State
         private bool m_ContinuousExecution;
         private bool m_FirstExecution;
-        private byte[] m_ClearBytes = new byte[4096];
+        private byte[] m_ClearBytes;
         private byte[]? m_OriginalEndSceneBytes;
         private bool m_Disposed;
 
@@ -130,6 +133,15 @@ namespace GreenMagic
                 rng.GetNonZeroBytes(seed);
             }
             m_Random = new Random(BitConverter.ToInt32(seed, 0));
+            // Fill clear bytes with safe x86: 0xC3 (retn) at offset 0, then 0xCC (int3) everywhere else.
+            // HB 3.3.5a used all-zeros — random bytes are dangerous because if they ever get executed
+            // (e.g., OBS Game Capture double-hooking EndScene causes a timing edge case), random x86
+            // could modify game state before crashing. retn+int3 is always harmless.
+            m_ClearBytes = new byte[4096];
+            m_ClearBytes[0] = 0xC3; // retn — immediate safe return
+            for (int i = 1; i < m_ClearBytes.Length; i++)
+                m_ClearBytes[i] = 0xCC; // int3 — any stray execution hits a breakpoint caught by VEH
+            m_FrameDropWaitTimeXorKey = (uint)m_Random.Next();
 
             bool flag = false;
             string text = Environment.UserDomainName + "\\" + Environment.UserName;
@@ -192,8 +204,16 @@ namespace GreenMagic
             {
                 m_ContinuousExecution = false;
                 m_FirstExecution = false;
-                m_InjectionWaitingEvent.Reset();
-                m_InjectionContinueEvent.Set();
+                // HB 6.2.3/Legion: only signal Continue if the hook is currently
+                // waiting inside @CheckInjection, otherwise Set() would pre-signal
+                // the AutoReset event and desync the next frame.
+                if (InHook)
+                {
+                    if (!m_InjectionContinueEvent.SafeWaitHandle.IsClosed)
+                    {
+                        m_InjectionContinueEvent.Set();
+                    }
+                }
             }
         }
 
@@ -204,59 +224,48 @@ namespace GreenMagic
             lock (thisLock)
             {
                 Memory.Asm!.Inject(m_InjectedCode);
-                if (m_ContinuousExecution)
-                {
-                    if (m_FirstExecution)
-                    {
-                        m_InjectionContinueEvent.Reset();
-                        m_InjectionWaitingEvent.Set();
-                        WaitForInjection(10000);
-                        m_FirstExecution = false;
-                    }
-                    else
-                    {
-                        m_InjectionWaitingEvent.Set();
-                        m_InjectionContinueEvent.Set();
-                        WaitForInjection(10000);
-                    }
-                }
-                else
-                {
-                    m_InjectionWaitingEvent.Set();
-                    WaitForInjection(10000);
-                    m_InjectionWaitingEvent.Reset();
-                    m_InjectionContinueEvent.Set();
-                }
+                SharedExecuteLogicEnd(15000);
             }
+        }
+
+        /// <summary>
+        /// HB 6.2.3 SharedExecuteLogicEnd — unified event signaling for all execution paths.
+        /// </summary>
+        private void SharedExecuteLogicEnd(int timeout)
+        {
+            m_InjectionFinishedEvent.Reset();
+            m_InjectionWaitingEvent.Set();
+
+            if (!m_FirstExecution)
+            {
+                m_InjectionContinueEvent.Set();
+            }
+            else
+            {
+                m_FirstExecution = false;
+            }
+
+            try
+            {
+                WaitForInjection(timeout);
+            }
+            catch (InjectionDesyncException)
+            {
+                m_InjectionWaitingEvent.Reset();
+                throw;
+            }
+
+            Memory.WriteBytes(m_InjectedCode, m_ClearBytes);
         }
 
         public void GrabFrame()
         {
-            // Honorbuddy's original implementation was single-threaded, so
-            // no synchronization was needed.  In CopilotBuddy we frequently
-            // access the executor from multiple paths (GCD checks, Lua
-            // helpers, Me.CurrentTarget, etc.), which can lead to two threads
-            // racing to write the injected code or signal events.  When that
-            // happened earlier we saw timeouts and total freezes.  Adding
-            // synchronization eliminates the race while still matching HB
-            // semantics when only one thread is active.
-            //
-            // Because most callers also lock on AssemblyLock while building and
-            // executing code, we acquire that lock here as well to guarantee
-            // mutual exclusion between "grab frame" operations and user
-            // injections (e.g. CastSpell).  This mirrors the single lock used
-            // in HB's own Execute() method.
-            lock (thisLock)
+            // HB Legion: Clear → AddRandomLine(random(6,10), "retn") → Execute()
+            lock (AssemblyLock)
             {
-                lock (AssemblyLock)
-                {
-                    Memory.Write<byte>(m_InjectedCode, 195);
-                    m_InjectionWaitingEvent.Set();
-                    if (!m_InjectionFinishedEvent.WaitOne(10000, false))
-                        throw new Exception("Process must have frozen or gotten out of sync; InjectionFinishedEvent was never fired.");
-                    m_InjectionWaitingEvent.Reset();
-                    m_InjectionContinueEvent.Set();
-                }
+                Clear();
+                AddRandomLine(m_Random.Next(6, 10), "retn");
+                Execute();
             }
         }
 
@@ -463,7 +472,7 @@ namespace GreenMagic
                 throw new Exception("Could not write event names to memory.");
             }
 
-            m_EndSceneDetour = Memory.AllocateMemory(size, 0x1000, 0x20);
+            m_EndSceneDetour = Memory.AllocateMemory(size << 3, 0x1000, 0x20); // 32KB like HB Legion
             if (m_EndSceneDetour == 0) throw new Exception("Allocate detour failed");
             m_InjectedCode = Memory.AllocateMemory(size, 0x1000, 0x240); // PAGE_EXECUTE_READWRITE | PAGE_NOCACHE
             if (m_InjectedCode == 0) throw new Exception("Allocate injected code failed");
@@ -494,6 +503,8 @@ namespace GreenMagic
             Memory.Write<uint>(m_StatusPtr, 0);         // Status OK
             Memory.Write<uint>(m_FrameCountPtr, 0);     // Frame counter
             Memory.Write<uint>(m_InHookPtr, 0);         // Not in hook
+            // Initialize FrameDropWaitTime to 1000ms (XOR-obfuscated, like HB Legion)
+            Memory.Write<uint>(m_FrameDropWaitTimePtr, 1000 ^ m_FrameDropWaitTimeXorKey);
 
             if (!InjectEventStub(eventStub, namesMem, name2, name3))
                 throw new Exception("InjectEventStub failed");
@@ -521,53 +532,53 @@ namespace GreenMagic
             //   EXCEPTION_POINTERS { EXCEPTION_RECORD* ExceptionRecord; CONTEXT* ContextRecord; }
 
             AddLine("@ExceptionHandler:");
-            AddLine("push ebp");
-            AddLine("mov ebp, esp");
-            AddLine("push ecx");                          // save scratch
+            AddRandomLine("push ebp");
+            AddRandomLine("mov ebp, esp");
+            AddRandomLine("push ecx");                          // save scratch
 
             // Check TLS to identify if this is our thread
-            AddLine("push dword [{0}]", m_TlsPtr);        // push TLS slot index
-            AddLine("call {0}", TlsGetValue);              // TlsGetValue(slot) → eax
-            AddLine("mov ecx, eax");                       // ecx = TLS value
-            AddLine("test ecx, ecx");
-            AddLine("jz @EHContinueSearch");               // TLS == 0 → not our thread
+            AddRandomLine("push dword [{0}]", m_TlsPtr);        // push TLS slot index
+            AddRandomLine("call {0}", TlsGetValue);              // TlsGetValue(slot) → eax
+            AddRandomLine("mov ecx, eax");                       // ecx = TLS value
+            AddRandomLine("test ecx, ecx");
+            AddRandomLine("jz @EHContinueSearch");               // TLS == 0 → not our thread
 
             // ── Our thread: exception in injected code ──
             // Read EXCEPTION_POINTERS* from stack
-            AddLine("mov eax, [ebp+8]");                   // eax = EXCEPTION_POINTERS*
+            AddRandomLine("mov eax, [ebp+8]");                   // eax = EXCEPTION_POINTERS*
 
             // Read ExceptionRecord → ExceptionCode
-            AddLine("push eax");                           // save EXCEPTION_POINTERS*
-            AddLine("mov eax, [eax]");                     // eax = EXCEPTION_RECORD*
-            AddLine("mov eax, [eax]");                     // eax = ExceptionCode (first field)
-            AddLine("mov [{0}], eax", m_ReturnedDataPtr);  // store exception code
+            AddRandomLine("push eax");                           // save EXCEPTION_POINTERS*
+            AddRandomLine("mov eax, [eax]");                     // eax = EXCEPTION_RECORD*
+            AddRandomLine("mov eax, [eax]");                     // eax = ExceptionCode (first field)
+            AddRandomLine("mov [{0}], eax", m_ReturnedDataPtr);  // store exception code
 
             // Read ContextRecord and modify it
-            AddLine("pop eax");                            // eax = EXCEPTION_POINTERS* again
-            AddLine("mov eax, [eax+4]");                   // eax = CONTEXT*
+            AddRandomLine("pop eax");                            // eax = EXCEPTION_POINTERS* again
+            AddRandomLine("mov eax, [eax+4]");                   // eax = CONTEXT*
 
             // Write saved ESP (from TLS) into CONTEXT.Esp (offset 0xC4)
             // This restores the stack pointer when Windows resumes execution
-            AddLine("mov [eax+0xC4], ecx");                // CONTEXT.Esp = TLS value (saved ESP)
+            AddRandomLine("mov [eax+0xC4], ecx");                // CONTEXT.Esp = TLS value (saved ESP)
 
             // Redirect CONTEXT.Eip to @CallGateInterject (offset 0xB8)
-            AddLine("push @CallGateInterject");
-            AddLine("pop ecx");                            // ecx = address of @CallGateInterject
-            AddLine("mov [eax+0xB8], ecx");                // CONTEXT.Eip = @CallGateInterject
+            AddRandomLine("push @CallGateInterject");
+            AddRandomLine("pop ecx");                            // ecx = address of @CallGateInterject
+            AddRandomLine("mov [eax+0xB8], ecx");                // CONTEXT.Eip = @CallGateInterject
 
             // Return EXCEPTION_CONTINUE_EXECUTION (-1)
-            AddLine("mov ecx, 0xFFFFFFFF");
-            AddLine("jmp @EHReturn");
+            AddRandomLine("mov ecx, 0xFFFFFFFF");
+            AddRandomLine("jmp @EHReturn");
 
             AddLine("@EHContinueSearch:");
             // Not our thread — let WoW's handler deal with it
-            AddLine("xor ecx, ecx");                       // return 0 = EXCEPTION_CONTINUE_SEARCH
+            AddRandomLine("xor ecx, ecx");                       // return 0 = EXCEPTION_CONTINUE_SEARCH
 
             AddLine("@EHReturn:");
-            AddLine("mov eax, ecx");
-            AddLine("pop ecx");                            // restore scratch
-            AddLine("pop ebp");
-            AddLine("retn 4");                             // stdcall: callee cleans 1 param (4 bytes)
+            AddRandomLine("mov eax, ecx");
+            AddRandomLine("pop ecx");                            // restore scratch
+            AddRandomLine("pop ebp");
+            AddRandomLine("retn 4");                             // stdcall: callee cleans 1 param (4 bytes)
 
             // ═══════════════════════════════════════════════════
             // @SetUpGate — Allocate TLS slot + register VEH
@@ -575,32 +586,32 @@ namespace GreenMagic
             // Returns: 0 = success, 1 = TlsAlloc failed, 2 = AddVEH failed
 
             AddLine("@SetUpGate:");
-            AddLine("call {0}", TlsAlloc);                 // TlsAlloc() → eax
-            AddLine("cmp eax, 0xFFFFFFFF");
-            AddLine("je @SetUpGateFail1");
-            AddLine("mov [{0}], eax", m_TlsPtr);           // store TLS index
+            AddRandomLine("call {0}", TlsAlloc);                 // TlsAlloc() → eax
+            AddRandomLine("cmp eax, 0xFFFFFFFF");
+            AddRandomLine("je @SetUpGateFail1");
+            AddRandomLine("mov [{0}], eax", m_TlsPtr);           // store TLS index
 
             // AddVectoredExceptionHandler(1, @ExceptionHandler)
-            AddLine("push @ExceptionHandler");
-            AddLine("push 1");                             // first handler (highest priority)
-            AddLine("call {0}", AddVectoredExceptionHandler);
-            AddLine("test eax, eax");
-            AddLine("jz @SetUpGateFail2");
-            AddLine("mov [{0}], eax", m_VehPtr);            // store VEH handle
+            AddRandomLine("push @ExceptionHandler");
+            AddRandomLine("push 1");                             // first handler (highest priority)
+            AddRandomLine("call {0}", AddVectoredExceptionHandler);
+            AddRandomLine("test eax, eax");
+            AddRandomLine("jz @SetUpGateFail2");
+            AddRandomLine("mov [{0}], eax", m_VehPtr);            // store VEH handle
 
             // Success
-            AddLine("xor eax, eax");                       // return 0
-            AddLine("jmp @SetUpGateReturn");
+            AddRandomLine("xor eax, eax");                       // return 0
+            AddRandomLine("jmp @SetUpGateReturn");
 
             AddLine("@SetUpGateFail1:");
-            AddLine("mov eax, 1");                         // return 1 (TlsAlloc failed)
-            AddLine("jmp @SetUpGateReturn");
+            AddRandomLine("mov eax, 1");                         // return 1 (TlsAlloc failed)
+            AddRandomLine("jmp @SetUpGateReturn");
 
             AddLine("@SetUpGateFail2:");
-            AddLine("mov eax, 2");                         // return 2 (AddVEH failed)
+            AddRandomLine("mov eax, 2");                         // return 2 (AddVEH failed)
 
             AddLine("@SetUpGateReturn:");
-            AddLine("retn");
+            AddRandomLine("retn");
 
             // ═══════════════════════════════════════════════════
             // @TearDownGate — Remove VEH + free TLS slot
@@ -609,24 +620,24 @@ namespace GreenMagic
             AddLine("@TearDownGate:");
 
             // Remove VEH if registered
-            AddLine("mov eax, [{0}]", m_VehPtr);
-            AddLine("test eax, eax");
-            AddLine("jz @TearDownRemoveTLS");              // vehPtr == 0 → skip
-            AddLine("push eax");
-            AddLine("call {0}", RemoveVectoredExceptionHandler);
-            AddLine("mov dword [{0}], 0", m_VehPtr);       // zero out vehPtr
+            AddRandomLine("mov eax, [{0}]", m_VehPtr);
+            AddRandomLine("test eax, eax");
+            AddRandomLine("jz @TearDownRemoveTLS");              // vehPtr == 0 → skip
+            AddRandomLine("push eax");
+            AddRandomLine("call {0}", RemoveVectoredExceptionHandler);
+            AddRandomLine("mov dword [{0}], 0", m_VehPtr);       // zero out vehPtr
 
             AddLine("@TearDownRemoveTLS:");
             // Free TLS slot if allocated
-            AddLine("mov eax, [{0}]", m_TlsPtr);
-            AddLine("cmp eax, 0xFFFFFFFF");
-            AddLine("je @TearDownDone");                   // TLS_OUT_OF_INDEXES → skip
-            AddLine("push eax");
-            AddLine("call {0}", TlsFree);
-            AddLine("mov dword [{0}], 0xFFFFFFFF", m_TlsPtr); // reset sentinel
+            AddRandomLine("mov eax, [{0}]", m_TlsPtr);
+            AddRandomLine("cmp eax, 0xFFFFFFFF");
+            AddRandomLine("je @TearDownDone");                   // TLS_OUT_OF_INDEXES → skip
+            AddRandomLine("push eax");
+            AddRandomLine("call {0}", TlsFree);
+            AddRandomLine("mov dword [{0}], 0xFFFFFFFF", m_TlsPtr); // reset sentinel
 
             AddLine("@TearDownDone:");
-            AddLine("retn");
+            AddRandomLine("retn");
 
             // ═══════════════════════════════════════════════════
             // @CallGate — Set TLS, call injected code, return status
@@ -635,28 +646,24 @@ namespace GreenMagic
 
             AddLine("@CallGate:");
             // TlsSetValue(tlsIndex, ESP) to mark current thread
-            AddLine("push esp");                           // value = current ESP
-            AddLine("push dword [{0}]", m_TlsPtr);        // key = TLS index
-            AddLine("call {0}", TlsSetValue);              // TlsSetValue(slot, esp)
-            AddLine("test eax, eax");
-            AddLine("jz @CallGateFail3");
+            AddRandomLine("push esp");                           // value = current ESP
+            AddRandomLine("push dword [{0}]", m_TlsPtr);        // key = TLS index
+            AddRandomLine("call {0}", TlsSetValue);              // TlsSetValue(slot, esp)
+            AddRandomLine("test eax, eax");
+            AddRandomLine("jz @CallGateFail3");
 
             // Call injected code
-            AddLine("call {0}", m_InjectedCode);
-            AddLine("mov [{0}], eax", m_ReturnedDataPtr);  // store return value
+            AddRandomLine("call {0}", m_InjectedCode);
+            AddRandomLine("mov [{0}], eax", m_ReturnedDataPtr);  // store return value
 
-            // Clear TLS (unmark thread)
-            AddLine("push 0");                             // value = 0
-            AddLine("push dword [{0}]", m_TlsPtr);        // key = TLS index
-            AddLine("call {0}", TlsSetValue);              // TlsSetValue(slot, 0)
-
-            // Success
-            AddLine("xor eax, eax");                       // return 0
-            AddLine("jmp @CallGateReturn");
+            // Success — HB Legion does NOT clear TLS here;
+            // VEH is torn down in @TearDownGate on @NoInjection.
+            AddRandomLine("xor eax, eax");                       // return 0
+            AddRandomLine("jmp @CallGateReturn");
 
             AddLine("@CallGateFail3:");
-            AddLine("mov eax, 3");                         // return 3 (TlsSetValue failed)
-            AddLine("jmp @CallGateReturn");
+            AddRandomLine("mov eax, 3");                         // return 3 (TlsSetValue failed)
+            AddRandomLine("jmp @CallGateReturn");
 
             // ═══════════════════════════════════════════════════
             // @CallGateInterject — VEH redirects EIP here on crash
@@ -666,15 +673,11 @@ namespace GreenMagic
 
             AddLine("@CallGateInterject:");
 
-            // Clear TLS (unmark thread)
-            AddLine("push 0");
-            AddLine("push dword [{0}]", m_TlsPtr);
-            AddLine("call {0}", TlsSetValue);              // TlsSetValue(slot, 0) — clear mark
-
-            AddLine("mov eax, 4");                         // return 4 (exception caught)
+            // HB Legion: no TLS clear here — VEH is removed in @TearDownGate
+            AddRandomLine("mov eax, 4");                         // return 4 (exception caught)
 
             AddLine("@CallGateReturn:");
-            AddLine("retn");
+            AddRandomLine("retn");
         }
 
         private void InjectDetour()
@@ -689,9 +692,10 @@ namespace GreenMagic
             AddRandomLine("pushad");
 
             // ── Frame counter ──
-            AddRandomLine("mov eax, [{0}]", m_FrameCountPtr);
-            AddRandomLine("inc eax");
-            AddRandomLine("mov [{0}], eax", m_FrameCountPtr);
+            AddRandomLine("inc dword [{0}]", m_FrameCountPtr);
+
+            // ── Mark as in-hook (every frame, like HB 5.4.8) ──
+            AddRandomLine("mov dword [{0}], 1", m_InHookPtr);
 
             AddRandomLine("@CheckInjection:");
             AddRandomLine("mov eax, [{0}]", m_InjectionWaitingHandlePtr);
@@ -700,9 +704,6 @@ namespace GreenMagic
             AddRandomLine("call {0}", WaitForSingleObject);
             AddRandomLine("test eax, eax");
             AddRandomLine("jnz @NoInjection");
-
-            // ── Mark as in-hook ──
-            AddRandomLine("mov dword [{0}], 1", m_InHookPtr);
 
             // ── Set up VEH if not already done ──
             AddRandomLine("mov eax, [{0}]", m_VehPtr);
@@ -719,35 +720,29 @@ namespace GreenMagic
             AddLine("@StoreEaxAsStatus:");
             AddRandomLine("mov [{0}], eax", m_StatusPtr);
 
-            // ── Clear in-hook flag ──
-            AddRandomLine("mov dword [{0}], 0", m_InHookPtr);
-
             // ── Signal injection finished ──
             AddRandomLine("mov eax, [{0}]", m_InjectionFinishedHandlePtr);
             AddRandomLine("push eax");
             AddRandomLine("call {0}", SetEvent);
 
-            // ── Wait for continue signal ──
+            // ── Wait for continue signal (dynamic timeout from FrameDropWaitTime, XOR-obfuscated) ──
+            AddRandomLine("mov eax, [{0}]", m_FrameDropWaitTimePtr);
+            AddRandomLine("xor eax, {0}", m_FrameDropWaitTimeXorKey);
+            AddRandomLine("push eax");
             AddRandomLine("mov eax, [{0}]", m_InjectionContinueHandlePtr);
-            AddRandomLine("push 1000");
             AddRandomLine("push eax");
             AddRandomLine("call {0}", WaitForSingleObject);
             AddRandomLine("test eax, eax");
             AddRandomLine("jz @CheckInjection");
 
-            // ── Continue not signaled → reset waiting event and fall through ──
-            AddRandomLine("mov eax, [{0}]", m_InjectionWaitingHandlePtr);
-            AddRandomLine("push eax");
-            AddRandomLine("call {0}", ResetEvent);
-
+            // ── HB Legion: @NoInjection label FIRST, then clear InHook ──
+            // When jumping here from @CheckInjection (no injection pending),
+            // InHook must still be cleared.
             AddLine("@NoInjection:");
+            AddRandomLine("mov dword [{0}], 0", m_InHookPtr);
 
-            // ── Tear down VEH if it was set up ──
-            AddRandomLine("mov eax, [{0}]", m_VehPtr);
-            AddRandomLine("test eax, eax");
-            AddRandomLine("jz @SkipTearDown");
+            // ── Tear down VEH (HB Legion calls unconditionally when VEH enabled) ──
             AddRandomLine("call @TearDownGate");
-            AddLine("@SkipTearDown:");
 
             AddRandomLine("popad");
             
@@ -918,6 +913,11 @@ namespace GreenMagic
 
         #region Cleanup
 
+        ~ExecutorRand()
+        {
+            Dispose();
+        }
+
         public void Dispose()
         {
             if (m_Disposed)
@@ -942,9 +942,28 @@ namespace GreenMagic
                     }
                     catch { }
 
-                    // Restore original EndScene bytes
-                    Memory.WriteBytes(m_OrigEndScene, m_OriginalEndSceneBytes);
-                    Debug.WriteLine($"[ExecutorRand] Restored original EndScene bytes at 0x{m_OrigEndScene:X8}");
+                    // Verify that EndScene still has our JMP before restoring
+                    // (another hook may have overwritten it since we installed ours)
+                    byte[]? currentBytes = Memory.ReadBytes(m_OrigEndScene, 5);
+                    if (currentBytes != null && currentBytes.Length >= 5 && currentBytes[0] == 0xE9)
+                    {
+                        // Compute expected relative JMP target
+                        int expectedRel = (int)(m_EndSceneDetour - (m_OrigEndScene + 5));
+                        int actualRel = BitConverter.ToInt32(currentBytes, 1);
+                        if (expectedRel == actualRel)
+                        {
+                            Memory.WriteBytes(m_OrigEndScene, m_OriginalEndSceneBytes);
+                            Debug.WriteLine($"[ExecutorRand] Restored original EndScene bytes at 0x{m_OrigEndScene:X8}");
+                        }
+                        else
+                        {
+                            Debug.WriteLine($"[ExecutorRand] WARNING: EndScene JMP target mismatch (expected rel=0x{expectedRel:X8}, actual=0x{actualRel:X8}). Not restoring — another hook may be installed.");
+                        }
+                    }
+                    else
+                    {
+                        Debug.WriteLine($"[ExecutorRand] WARNING: EndScene first byte is not E9 (JMP). Not restoring — bytes may have been modified by another hook.");
+                    }
 
                     // Clear injected code
                     Memory.WriteBytes(m_InjectedCode, m_ClearBytes);

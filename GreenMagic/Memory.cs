@@ -539,18 +539,28 @@ namespace GreenMagic
         #region Frame Support
 
         /// <summary>
-        /// HB-compatible AcquireFrame helper.  3.3.5a and later simply
-        /// return a <see cref="Styx.FrameLock"/> and optionally hard-
-        /// grab the executor if requested.  We replicate the behavior here
-        /// using the current <see cref="ObjectManager.Executor"/> instance.
+        /// HB 5.4.8/6.2.3 AcquireFrame: FrameLock FIRST (acquires
+        /// AssemblyLock + BeginExecute), then GrabFrame INSIDE the lock
+        /// scope.  The original CopilotBuddy code had the order reversed
+        /// (GrabFrame first, FrameLock second), which left a race window
+        /// where the background thread could steal the lock.
         /// </summary>
         public IDisposable AcquireFrame(bool isHardLock = false)
         {
-            if (isHardLock)
+            var frameLock = new Styx.FrameLock();
+            try
             {
-                ObjectManager.Executor?.GrabFrame();
+                if (isHardLock)
+                {
+                    ObjectManager.Executor?.GrabFrame();
+                }
             }
-            return new Styx.FrameLock();
+            catch
+            {
+                frameLock.Dispose();
+                throw;
+            }
+            return frameLock;
         }
 
         public IDisposable AcquireFrame()
