@@ -1039,7 +1039,7 @@ namespace Bots.Grind
                 new Decorator(
                     ctx => NeedToSell(),
                     new ActionSetPoi(ctx => new BotPoi(
-                        ProfileManager.CurrentProfile.VendorManager.GetClosestVendor(Vendor.VendorType.Repair), 
+                        ProfileManager.CurrentProfile.VendorManager.GetClosestVendor(Vendor.VendorType.Sell), 
                         PoiType.Sell))
                 ),
                 // Check if need to repair
