@@ -458,7 +458,10 @@ namespace Styx.WoWInternals.WoWObjects
 
         public void UseContainerItem()
         {
-            Lua.DoString("UseContainerItem({0}, {1})", (object)(this.BagIndex + 1), (object)(this.BagSlot + 1));
+            // Use direct CGItem_C::Use instead of Lua UseContainerItem which is
+            // a hardware-event protected function and fails silently from injected code.
+            // HB 3.3.5a originally used CGItem_C::Use; the Lua path was added in 4.3.4.
+            Use();
         }
 
         public void PickUp()
