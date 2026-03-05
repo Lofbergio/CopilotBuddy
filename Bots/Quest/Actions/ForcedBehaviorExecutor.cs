@@ -107,7 +107,6 @@ public class ForcedBehaviorExecutor : Composite
                     yield break;
                 }
             }
-            Logging.WriteDiagnostic("[FBE] Executing {0} (IsDone=false)", this.Order.CurrentBehavior);
             this.Order.CurrentBehavior.OnTick();
             // Guard against bot stop during execution — CurrentBehavior or Branch may be set to null
             // when TreeRoot.Stop() is called while the behavior tree is yielding RunStatus.Running
