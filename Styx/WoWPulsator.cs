@@ -16,7 +16,6 @@ namespace Styx
 				if ((flags & PulseFlags.Objects) != (PulseFlags)0U)
 				{
 					ObjectManager.Update();
-					ObjectManager.ScanCaches();
 				}
 
 				if ((flags & PulseFlags.Lua) != (PulseFlags)0U)

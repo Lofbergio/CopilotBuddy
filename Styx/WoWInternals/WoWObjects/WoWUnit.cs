@@ -336,47 +336,11 @@ namespace Styx.WoWInternals.WoWObjects
             return WoWMathHelper.IsBehind(Location, obj.Location, obj.Rotation);
         }
 
-        public override float X
-        {
-            get
-            {
-                using (StyxWoW.Memory.AcquireFrame())
-                {
-                    Memory? wow = ObjectManager.Wow;
-                    if (wow == null)
-                        return 0f;
-                    return wow.Read<float>(BaseAddress + 1944);
-                }
-            }
-        }
-
-        public override float Y
-        {
-            get
-            {
-                using (StyxWoW.Memory.AcquireFrame())
-                {
-                    Memory? wow = ObjectManager.Wow;
-                    if (wow == null)
-                        return 0f;
-                    return wow.Read<float>(BaseAddress + 1948);
-                }
-            }
-        }
-
-        public override float Z
-        {
-            get
-            {
-                using (StyxWoW.Memory.AcquireFrame())
-                {
-                    Memory? wow = ObjectManager.Wow;
-                    if (wow == null)
-                        return 0f;
-                    return wow.Read<float>(BaseAddress + 1952);
-                }
-            }
-        }
+        // HB 5.4.8/6.2.3: X/Y/Z delegate to Location, which is PerFrameCachedValue.
+        // Multiple coordinate reads in same frame = single RPM call.
+        public override float X => Location.X;
+        public override float Y => Location.Y;
+        public override float Z => Location.Z;
 
         /// <summary>
         /// Raw transport-local position (from CMovementData). Use Location for world coords.
@@ -392,14 +356,30 @@ namespace Styx.WoWInternals.WoWObjects
             }
         }
 
+        // HB 5.4.8/6.2.3 pattern: Location via PerFrameCachedValue (lazy init).
+        // Cache invalidates each frame (FrameCount change) so multiple reads
+        // within one tick cost 0 RPM after the first.
+        private PerFrameCachedValue<WoWPoint>? _cachedLocation;
+
         public override WoWPoint Location
         {
             get
             {
-                if (IsOnTransport)
-                    return GetWorldPosition();
-                return RelativeLocation;
+                PerFrameCachedValue<WoWPoint>? cache = _cachedLocation;
+                if (cache == null)
+                {
+                    cache = new PerFrameCachedValue<WoWPoint>(ReadLocation);
+                    _cachedLocation = cache;
+                }
+                return cache;
             }
+        }
+
+        private WoWPoint ReadLocation()
+        {
+            if (IsOnTransport)
+                return GetWorldPosition();
+            return RelativeLocation;
         }
 
         public override float Rotation

@@ -211,8 +211,12 @@ namespace Styx.Logic.BehaviorTree
 
 			if (StyxSettings.Instance.UseFrameLock)
 			{
+				// HB 5.4.8 pattern: FrameLock freezes WoW → values can't
+				// change mid-tick → read cache is safe.
 				using (StyxWoW.Memory.AcquireFrame(true))
+				using (StyxWoW.Memory.TemporaryCacheState(true))
 				{
+					StyxWoW.Memory.ClearCache();
 					RunTickBody();
 				}
 
@@ -233,7 +237,12 @@ namespace Styx.Logic.BehaviorTree
 			}
 			else
 			{
-				RunTickBody();
+				// Without FrameLock WoW keeps running → values change
+				// between reads → cache disabled for safety (HB 5.4.8).
+				using (StyxWoW.Memory.TemporaryCacheState(false))
+				{
+					RunTickBody();
+				}
 			}
 
 			// HB 6.2.3 pattern: sleep OUTSIDE AcquireFrame so WoW can render

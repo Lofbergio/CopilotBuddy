@@ -1,19 +1,25 @@
 using System;
+using Styx.WoWInternals;
 
 namespace Styx.Helpers
 {
+    /// <summary>
+    /// Exact port of HB 5.4.8/6.2.3 PerFrameCachedValue.
+    /// Caches a value per EndScene frame using Executor.FrameCount.
+    /// Multiple accesses in the same frame return the cached value (0 RPM).
+    /// </summary>
     public class PerFrameCachedValue<T>
     {
         private readonly Func<T> _producer;
         private T _cachedValue;
-        private int _lastFrameCount;
+        private uint _lastFrameCount;
         
         public PerFrameCachedValue(Func<T> producer)
         {
             if (producer == null)
                 throw new ArgumentNullException("producer");
             _producer = producer;
-            _lastFrameCount = -1;
+            _lastFrameCount = uint.MaxValue;
             _cachedValue = default!;
         }
         
@@ -21,12 +27,13 @@ namespace Styx.Helpers
         {
             get
             {
-                // FEAT-38: Use Environment.TickCount as frame counter for per-tick caching
-                int currentTick = Environment.TickCount;
-                if (currentTick != _lastFrameCount)
+                // HB 5.4.8: StyxWoW.Memory.Executor.FrameCount
+                // In CopilotBuddy: ObjectManager.Executor.FrameCount
+                uint frameCount = ObjectManager.Executor?.FrameCount ?? 0;
+                if (_lastFrameCount != frameCount)
                 {
                     _cachedValue = _producer();
-                    _lastFrameCount = currentTick;
+                    _lastFrameCount = frameCount;
                 }
                 return _cachedValue;
             }
@@ -35,7 +42,7 @@ namespace Styx.Helpers
         /// <summary>Forces a cache refresh on the next access.</summary>
         public void Invalidate()
         {
-            _lastFrameCount = -1;
+            _lastFrameCount = uint.MaxValue;
         }
         
         public static implicit operator T(PerFrameCachedValue<T> pfcv)

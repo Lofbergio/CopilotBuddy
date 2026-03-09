@@ -539,13 +539,13 @@ namespace Styx.WoWInternals
         // state via BeginExecute/EndExecute, and caused the bot to freeze.
 
         /// <summary>
-        /// Replicates Honorbuddy's background scanners for distance, line-of-sight and threat.
-        /// Called inline from WoWPulsator.Pulse() on the bot thread at TPS rate.
+        /// Pre-computes distance, LOS and threat caches for all units.
+        /// NOTE: No longer called from WoWPulsator — LOS is now computed inline in
+        /// Targeting.DefaultTargetWeight() exactly like HB 4.3.4.
+        /// Kept for potential future use by plugins.
         /// </summary>
         public static void ScanCaches()
         {
-            // All callers are on the bot thread via WoWPulsator.Pulse().
-            // Lock kept for safety in case of future callers.
             lock (_cacheLock)
             {
                 _distanceCache.Clear();
@@ -555,7 +555,6 @@ namespace Styx.WoWInternals
                 if (Me == null)
                     return;
 
-                // copy under lock to avoid concurrent-updates exceptions (HB-3.3.5a bugfix)
                 List<WoWUnit> units;
                 lock (_updateLock)
                 {
@@ -566,12 +565,6 @@ namespace Styx.WoWInternals
 
                 Styx.Logic.Pathing.WoWPoint myLoc = Me.Location;
 
-                // HB 4.3.4 DefaultTargetWeight: batch LOS via CGWorldFrame::Intersect.
-                // Uses CGWorldFrameHitFlags.HitTestLOS (native WoW LOS check) — NOT
-                // navmesh raycast (TraceLineHitFlags.Collision). Native LOS accounts
-                // for doors, destructible objects, and dynamic world geometry.
-                // The native call returns true = hit/blocked; we store the NEGATION
-                // so InLineOfSight(guid) returns true = clear LOS.
                 if (!Battlegrounds.IsInsideBattleground)
                 {
                     WorldLine[] lines = new WorldLine[units.Count];
@@ -582,10 +575,9 @@ namespace Styx.WoWInternals
                     bool[] los;
                     GameWorld.MassTraceLine(lines, GameWorld.CGWorldFrameHitFlags.HitTestLOS, out los);
                     for (int i = 0; i < units.Count; i++)
-                        _losCache[units[i].Guid] = !los[i]; // negate: true=hit → false; false=clear → true
+                        _losCache[units[i].Guid] = !los[i];
                 }
 
-                // fill distance and threat caches
                 foreach (var unit in units)
                 {
                     _distanceCache[unit.Guid] = myLoc.Distance(unit.Location);

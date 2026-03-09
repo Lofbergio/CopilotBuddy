@@ -325,7 +325,10 @@ namespace Styx.Logic.Pathing
 			_unstickAttempts = 0;
 			_doorCenterTarget = WoWPoint.Zero;
 			_pathRegenThrottle = new WaitTimer(TimeSpan.FromMilliseconds(500)); // Reset so next path gen is immediate
-			WoWMovement.MoveStop();
+			// HB 4.3.4 MeshNavigator.Clear(): sets CurrentMovePath=null + StuckHandler.Reset().
+			// Does NOT call MoveStop(). Callers that need to stop (like explicit user stop)
+			// do their own MoveStop. Calling MoveStop here causes WoW auto-sit on every
+			// BotPoi.Clear() or exception recovery.
 		}
 
 		public static MoveResult MoveTo(WoWPoint destination)
@@ -561,18 +564,17 @@ namespace Styx.Logic.Pathing
 					}
 					else
 					{
-						// HB pattern: path generation failed — stop and return failure.
-						// Never blindly ClickToMove (causes walking into walls, off cliffs,
-						// climbing impossible hills, and "random walking" behavior).
-						WoWMovement.MoveStop();
+						// HB 4.3.4: path generation failed — return failure WITHOUT stopping movement.
+						// HB never calls MoveStop here; the behavior tree resumes and
+						// retries on the next tick. Calling MoveStop would halt the character,
+						// causing WoW to auto-sit after ~4s of idleness.
 						return MoveResult.PathGenerationFailed;
 					}
 				}
 				else
 				{
-					// HB pattern: no navmesh available — stop and return failure.
-					// Never blindly ClickToMove without navigation data.
-					WoWMovement.MoveStop();
+					// HB 4.3.4: no navmesh available — return failure WITHOUT stopping movement.
+					// HB never calls MoveStop here (MeshNavigator returns PathGenerationFailed only).
 					return MoveResult.PathGenerationFailed;
 				}
 

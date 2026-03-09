@@ -222,11 +222,32 @@ namespace GreenMagic
             if (ProcessHandle == IntPtr.Zero)
                 throw new InvalidOperationException("Process handle is not open");
 
+            if (count == 0)
+                return Array.Empty<byte>();
+
+            // HB 5.4.8 ExternalProcessMemory.ReadByteBuffer cache pattern:
+            // check cache first, RPM on miss, store result in cache.
+            var key = new IntPtr(address);
+            if (_cacheEnabled.Value)
+            {
+                var dict = _cache.Value;
+                if (dict.TryGetValue(key, out byte[]? cached))
+                {
+                    if (cached.Length == count)
+                        return cached;
+                    dict.Remove(key); // size mismatch — stale entry
+                }
+            }
+
             byte[] buffer = new byte[count];
             int bytesRead;
 
             if (Imports.ReadProcessMemory(ProcessHandle, address, buffer, count, out bytesRead) && bytesRead == count)
+            {
+                if (_cacheEnabled.Value)
+                    _cache.Value[key] = buffer;
                 return buffer;
+            }
 
             return null;
         }
@@ -236,11 +257,29 @@ namespace GreenMagic
             if (_hProcess == IntPtr.Zero)
                 throw new InvalidOperationException("Process handle is not open");
 
+            if (count == 0)
+                return Array.Empty<byte>();
+
+            if (_cacheEnabled.Value)
+            {
+                var dict = _cache.Value;
+                if (dict.TryGetValue(address, out byte[]? cached))
+                {
+                    if (cached.Length == count)
+                        return cached;
+                    dict.Remove(address);
+                }
+            }
+
             byte[] buffer = new byte[count];
             int bytesRead;
 
             if (Imports.ReadProcessMemory(_hProcess, address.ToUInt32(), buffer, count, out bytesRead) && bytesRead == count)
+            {
+                if (_cacheEnabled.Value)
+                    _cache.Value[address] = buffer;
                 return buffer;
+            }
 
             return null;
         }

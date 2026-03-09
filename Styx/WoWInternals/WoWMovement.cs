@@ -243,9 +243,19 @@ namespace Styx.WoWInternals
 			MoveStop();
 		}
 
+		// HB 3.3.5a / 4.3.4: throttle redundant CTM calls.
+		// Without this guard, calling CTM ~13x/sec to the same destination
+		// resets WoW's internal movement state machine each time, preventing
+		// smooth turns and causing the character to walk straight.
 		public static void ClickToMove(WoWPoint destination)
 		{
-			CallClickToMove(ClickToMoveType.Move, 0UL, destination, 0f);
+			ClickToMoveInfoStruct ctmInfo = ClickToMoveInfo;
+			if (!ctmInfo.IsClickMoving
+				|| (double)destination.DistanceSqr(ctmInfo.ClickPos) > 0.05
+				|| !ObjectManager.Me.IsMoving)
+			{
+				CallClickToMove(ClickToMoveType.Move, 0UL, destination, 0f);
+			}
 		}
 
 		public static void ClickToMove(WoWPoint destination, ulong interactGuid)

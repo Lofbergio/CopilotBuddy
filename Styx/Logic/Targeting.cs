@@ -395,10 +395,7 @@ namespace Styx.Logic
                 {
                     if (StyxWoW.IsInGame)
                     {
-                      // HB 5.4.8/6.2.3: Pulse wraps in AcquireFrame.
-                      // When UseFrameLock=true, TreeRoot already holds a hard lock
-                      // and this nested FrameLock is a no-op (re-entrant).
-                      // When UseFrameLock=false, this provides per-pulse sync.
+                      // HB 6.2.3: Pulse wraps in AcquireFrame (soft lock).
                       using (StyxWoW.Memory.AcquireFrame())
                       {
                         List<WoWObject> initialObjectList = this.GetInitialObjectList();
@@ -522,6 +519,8 @@ namespace Styx.Logic
             // ghosts; no mob in WoW 3.3.5a can legitimately aggro from this far.
             double hardDistCapSq = 300.0 * 300.0; // 300 yd
 
+            // HB 6.2.3: AcquireFrame around the removal loop.
+            using (StyxWoW.Memory.AcquireFrame())
             for (int i = units.Count - 1; i >= 0; i--)
             {
                 WoWObject obj = units[i];
@@ -599,7 +598,7 @@ namespace Styx.Logic
                 isInCombat = true;
             }
 
-            // HB 5.4.8/6.2.3: nested AcquireFrame (no-op when outer lock held).
+            // HB 6.2.3: AcquireFrame around the include loop.
             using (StyxWoW.Memory.AcquireFrame())
             {
             foreach (WoWObject woWObject in incomingUnits)
@@ -679,12 +678,21 @@ namespace Styx.Logic
             LocalPlayer me = StyxWoW.Me;
             Profile currentProfile = ProfileManager.CurrentProfile;
 
-            // HB 4.3.4 uses inline MassTraceLine for LOS; cached LOS used here instead.
-            // ObjectManager.InLineOfSight returns true = clear LOS.
-
-            // HB 5.4.8/6.2.3: nested AcquireFrame (no-op when outer lock held).
-            using (StyxWoW.Memory.AcquireFrame())
+            // HB 4.3.4: inline batch MassTraceLine for LOS before scoring.
+            bool[] losResults = null;
+            if (!Battlegrounds.IsInsideBattleground)
             {
+                WorldLine[] traceLines = new WorldLine[units.Count];
+                WoWPoint traceLinePos = StyxWoW.Me.GetTraceLinePos();
+                for (int i = units.Count - 1; i >= 0; i--)
+                {
+                    traceLines[i] = new WorldLine(traceLinePos, units[i].Object.ToUnit().GetTraceLinePos());
+                }
+                GameWorld.MassTraceLine(traceLines, GameWorld.CGWorldFrameHitFlags.HitTestLOS, out losResults);
+            }
+
+            // HB 6.2.3: AcquireFrame around the scoring loop (AFTER MassTraceLine).
+            using (StyxWoW.Memory.AcquireFrame())
             for (int j = units.Count - 1; j >= 0; j--)
             {
                 WoWUnit unit = units[j].Object.ToUnit();
@@ -742,9 +750,8 @@ namespace Styx.Logic
                         num += 100.0;
                     }
 
-                    // LOS bonus/penalty (HB 4.3.4: MassTraceLine returns true=blocked;
-                    // ObjectManager.InLineOfSight returns true=clear LOS, equivalent to !array[j])
-                    if (ObjectManager.InLineOfSight(guid))
+                    // LOS bonus/penalty (HB 4.3.4: MassTraceLine returns true=blocked)
+                    if (losResults != null && !losResults[j])
                     {
                         num += 25.0;
                     }
@@ -753,8 +760,9 @@ namespace Styx.Logic
                         num -= 25.0;
                     }
 
-                    // Aggro-within penalty (HB 4.3.4)
-                    num -= (double)(5 * Targeting.GetAggroWithin(unit.Location, 15f));
+                    // HB 6.2.3 removed GetAggroWithin from scoring (was O(N²), too
+                    // expensive for external-process RPM).  Kept for reference:
+                    // num -= (double)(5 * Targeting.GetAggroWithin(unit.Location, 15f));
                 }
                 else
                 {
@@ -771,7 +779,6 @@ namespace Styx.Logic
                 }
 
                 units[j].Score += num;
-            }
             }
         }
 
