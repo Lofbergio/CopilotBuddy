@@ -20,6 +20,8 @@ namespace Styx
 		private static OnBotStartDelegate _onBotStartComplete;
 		private static OnBotStopDelegate _onBotStopping;
 		private static OnBotChangedDelegate _onBotChanged;
+		private static EventHandler _onBotPaused;
+		private static EventHandler _onBotResumed;
 
 		static BotEvents()
 		{
@@ -229,6 +231,66 @@ namespace Styx
 		{
 			_onPulse?.Invoke(null, args);
 		}
+
+		// HB 6.2.3 smethod_9 / smethod_10: Pause/Resume events
+		public static event EventHandler OnBotPaused
+		{
+			add
+			{
+				EventHandler handler = _onBotPaused;
+				EventHandler compare;
+				do
+				{
+					compare = handler;
+					EventHandler combined = (EventHandler)Delegate.Combine(compare, value);
+					handler = Interlocked.CompareExchange(ref _onBotPaused, combined, compare);
+				}
+				while (handler != compare);
+			}
+			remove
+			{
+				EventHandler handler = _onBotPaused;
+				EventHandler compare;
+				do
+				{
+					compare = handler;
+					EventHandler removed = (EventHandler)Delegate.Remove(compare, value);
+					handler = Interlocked.CompareExchange(ref _onBotPaused, removed, compare);
+				}
+				while (handler != compare);
+			}
+		}
+
+		public static event EventHandler OnBotResumed
+		{
+			add
+			{
+				EventHandler handler = _onBotResumed;
+				EventHandler compare;
+				do
+				{
+					compare = handler;
+					EventHandler combined = (EventHandler)Delegate.Combine(compare, value);
+					handler = Interlocked.CompareExchange(ref _onBotResumed, combined, compare);
+				}
+				while (handler != compare);
+			}
+			remove
+			{
+				EventHandler handler = _onBotResumed;
+				EventHandler compare;
+				do
+				{
+					compare = handler;
+					EventHandler removed = (EventHandler)Delegate.Remove(compare, value);
+					handler = Interlocked.CompareExchange(ref _onBotResumed, removed, compare);
+				}
+				while (handler != compare);
+			}
+		}
+
+		internal static void RaiseBotPaused() => _onBotPaused?.Invoke(null, EventArgs.Empty);
+		internal static void RaiseBotResumed() => _onBotResumed?.Invoke(null, EventArgs.Empty);
 
 		internal static event EventHandler OnPulse
 		{

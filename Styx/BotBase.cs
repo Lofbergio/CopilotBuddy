@@ -42,6 +42,12 @@ namespace Styx
 
 		public virtual void Stop() { }
 
+		/// <summary>HB 6.2.3 method_0: Called when bot is paused.</summary>
+		public virtual void OnPaused() { }
+
+		/// <summary>HB 6.2.3 method_1: Called when bot is resumed.</summary>
+		public virtual void OnResumed() { }
+
 		public override string ToString() => Name;
 	}
 }

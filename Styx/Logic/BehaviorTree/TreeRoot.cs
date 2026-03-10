@@ -3,7 +3,11 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Media;
+using CommonBehaviors.Actions;
+using Styx.Common;
+using Styx.CommonBot.Coroutines;
 using Styx.Helpers;
 using Styx.Logic.Combat;
 using Styx.Logic.Pathing;
@@ -22,6 +26,13 @@ namespace Styx.Logic.BehaviorTree
 		private static string _goalText = "";
 		private static readonly object _stateLock = new object();
 		private static WindowPlacement? _lastNonMinimizedPlacement;
+
+		// HB 6.2.3: Coroutine pre-tick checks (ns47.Class678 → HookCoroutineTask)
+		private static HookCoroutineTask? _inGameCheck;
+		private static HookCoroutineTask? _taxiCheck;
+		private static ActionRunCoroutine? _composite0;
+		private static bool _onTaxi; // HB 6.2.3 bool_2: tracks taxi state across ticks
+		private static bool _paused; // HB 6.2.3 bool_3: tracks whether pause event has fired
 
 		// HB 6.2.3: Win32 imports for minimization guard
 		[DllImport("user32.dll", SetLastError = true)]
@@ -73,6 +84,26 @@ namespace Styx.Logic.BehaviorTree
 		public static bool IsRunning
 		{
 			get { return _workerThread != null && _workerThread.IsAlive && State != TreeRootState.Stopping && State != TreeRootState.Stopped; }
+		}
+
+		/// <summary>HB 5.4.8: True when the calling thread is the bot worker thread.</summary>
+		public static bool CurrentThreadIsBotThread => Thread.CurrentThread == _workerThread;
+
+		/// <summary>HB 6.2.3: true when State == Paused.</summary>
+		public static bool IsPaused => State == TreeRootState.Paused;
+
+		/// <summary>HB 6.2.3: Transition Running → Paused.</summary>
+		public static void Pause()
+		{
+			if (State != TreeRootState.Running) return;
+			State = TreeRootState.Paused;
+		}
+
+		/// <summary>HB 6.2.3: Transition Paused → Running.</summary>
+		public static void Resume()
+		{
+			if (State != TreeRootState.Paused) return;
+			State = TreeRootState.Running;
 		}
 
 		static TreeRoot()
@@ -195,53 +226,137 @@ namespace Styx.Logic.BehaviorTree
 			_minimizeGuardThread.Start();
 		}
 
+		/// <summary>
+		/// HB 6.2.3 Composite_0: coroutine composite that runs InGame + Taxi
+		/// pre-tick checks via ActionRunCoroutine before the main bot root.
+		/// </summary>
+		private static ActionRunCoroutine Composite0
+		{
+			get
+			{
+				if (_composite0 == null)
+				{
+					_inGameCheck = new HookCoroutineTask(
+						"InGame_Check",
+						"IsInGame check location. Warning: nothing is pulsed before this. Only hook this location for relogging purposes.",
+						InGameCheckAsync);
+					_taxiCheck = new HookCoroutineTask(
+						"Taxi_Check",
+						"Taxi check",
+						TaxiCheckAsync);
+					_composite0 = new ActionRunCoroutine(PreTickCoroutineAsync);
+				}
+				return _composite0;
+			}
+		}
+
+		/// <summary>
+		/// HB 6.2.3 Class1150.method_0: InGame check.
+		/// Returns true to SKIP the bot tick (not in game).
+		/// </summary>
+		private static async Task<bool> InGameCheckAsync()
+		{
+			if (StyxWoW.IsInWorld)
+				return false; // in game → don't skip
+			Logging.Write("Not in game");
+			return true; // not in game → skip tick
+		}
+
+		/// <summary>
+		/// HB 6.2.3 Class1150.method_1: Taxi check.
+		/// Returns true to SKIP the bot tick (on taxi).
+		/// </summary>
+		private static async Task<bool> TaxiCheckAsync()
+		{
+			if (StyxWoW.Me != null && StyxWoW.Me.OnTaxi)
+			{
+				_onTaxi = true;
+				StatusText = "Waiting on taxi...";
+				StyxWoW.ResetAfk();
+				return true; // on taxi → skip tick
+			}
+			if (_onTaxi)
+			{
+				_onTaxi = false;
+				BotPoi.Clear("Reached final destination with taxi");
+				return true; // just got off taxi → skip one tick to settle
+			}
+			return false; // not on taxi → don't skip
+		}
+
+		/// <summary>
+		/// HB 6.2.3 Class1150.method_2: Main pre-tick coroutine.
+		/// Awaits InGame check then Taxi check; returns true to skip bot tick.
+		/// </summary>
+		private static async Task<bool> PreTickCoroutineAsync(object? context)
+		{
+			if (await _inGameCheck!)
+				return true;
+
+			if (await _taxiCheck!)
+				return true;
+
+			return false;
+		}
+
+		/// <summary>
+		/// HB 6.2.3 smethod_7: Safe action executor with exception handling.
+		/// Returns true if action succeeded, false if exception was thrown.
+		/// </summary>
+		private static bool SafeAction(System.Action action, string name, bool stopOnError)
+		{
+			try
+			{
+				action();
+				return true;
+			}
+			catch (Exception ex)
+			{
+				Logging.WriteDiagnostic("Exception was thrown in {0}", name);
+				Logging.WriteDiagnostic(ex.ToString());
+				if (stopOnError)
+					Stop("Exception thrown");
+				return false;
+			}
+		}
+
 		private static void Tick()
 		{
-			if (State != TreeRootState.Running)
+			if (State != TreeRootState.Running && State != TreeRootState.Paused)
 				return;
 
 			// sync ticks-per-second slider value (per-character)
 			TicksPerSecond = CharacterSettings.Instance.TicksPerSecond;
 
-			// HB 6.2.3 pattern (smethod_12 + smethod_15):
-			// 1. Time the tick
-			// 2. AcquireFrame wraps ONLY the work (no sleep inside)
-			// 3. Sleep the remainder OUTSIDE the lock
+			// Split-tick approach (hybrid of HB 4.3.4 + 6.2.3):
+			// AcquireFrame is NOT used here — it's applied briefly inside
+			// RunTickBody only around the pulse phase (WoWPulsator + BotEvents).
+			// This avoids freezing WoW for the entire tick body (~50ms in combat),
+			// which caused 15 FPS.  The behavior tree runs without FrameLock so
+			// WoW can render between the few Execute() calls it makes.
+			//
+			// UseFrameLock ON:  cache enabled, pulse under brief FrameLock
+			// UseFrameLock OFF: cache disabled, no FrameLock (matches HB 4.3.4)
 			var sw = Stopwatch.StartNew();
 
-			if (StyxSettings.Instance.UseFrameLock)
+			using (StyxWoW.Memory.TemporaryCacheState(StyxSettings.Instance.UseFrameLock))
 			{
-				// HB 5.4.8 pattern: FrameLock freezes WoW → values can't
-				// change mid-tick → read cache is safe.
-				using (StyxWoW.Memory.AcquireFrame(true))
-				using (StyxWoW.Memory.TemporaryCacheState(true))
-				{
+				if (StyxSettings.Instance.UseFrameLock)
 					StyxWoW.Memory.ClearCache();
-					RunTickBody();
-				}
-
-				// HB 5.4.8/6.2.3 safety net: forcibly release the lock if
-				// something inside the tick leaked a continuous-execution hold.
-				var executor = ObjectManager.Executor;
-				if (executor != null && executor.IsExecutingContinuously)
-				{
-					lock (executor.AssemblyLock)
-					{
-						if (executor.IsExecutingContinuously)
-						{
-							Logging.WriteDiagnostic("Frame lock was forcibly released after tick completed");
-							executor.EndExecute();
-						}
-					}
-				}
+				RunTickBody();
 			}
-			else
+
+			// HB 6.2.3: Force-release leaked frame lock (runs for BOTH branches)
+			var executor = ObjectManager.Executor;
+			if (executor != null && executor.IsExecutingContinuously)
 			{
-				// Without FrameLock WoW keeps running → values change
-				// between reads → cache disabled for safety (HB 5.4.8).
-				using (StyxWoW.Memory.TemporaryCacheState(false))
+				lock (executor.AssemblyLock)
 				{
-					RunTickBody();
+					if (executor.IsExecutingContinuously)
+					{
+						Logging.WriteDiagnostic("Frame lock was forcibly released after tick completed");
+						executor.EndExecute();
+					}
 				}
 			}
 
@@ -253,13 +368,32 @@ namespace Styx.Logic.BehaviorTree
 			}
 		}
 
-		// extracted body — NO Thread.Sleep at the end (sleep is in Tick, outside lock)
+		/// <summary>
+		/// HB 6.2.3 smethod_8: Main tick body using coroutine pre-checks.
+		/// 1. Pulse if in game
+		/// 2. Run Composite_0 (InGame + Taxi coroutine checks)
+		/// 3. If checks pass (Failure = both false), pulse BotBase and tick Root
+		/// </summary>
 		private static void RunTickBody()
 		{
-			if (StyxWoW.Me == null || !StyxWoW.IsInGame)
+			// HB 6.2.3: Pause/resume handling — must be FIRST in tick body
+			if (IsPaused)
 			{
-				Logging.Write("Not in game");
+				if (!_paused)
+				{
+					Logging.Write(Colors.Lime, "Bot paused");
+					SafeAction(() => Current!.OnPaused(), "BotBase.Pause", true);
+					BotEvents.RaiseBotPaused();
+					_paused = true;
+				}
 				return;
+			}
+			if (_paused)
+			{
+				Logging.Write(Colors.Lime, "Bot resumed");
+				SafeAction(() => Current!.OnResumed(), "BotBase.Resume", true);
+				BotEvents.RaiseBotResumed();
+				_paused = false;
 			}
 
 			// ARCH-03: Check if WoW process has exited
@@ -270,14 +404,56 @@ namespace Styx.Logic.BehaviorTree
 				return;
 			}
 
-			// ARCH-03: Skip tick while on taxi (flight path)
-			if (StyxWoW.Me.OnTaxi)
+			// Pulse subsystems if in game (before coroutine checks).
+			// When UseFrameLock is ON, wrap the pulse in a brief FrameLock so
+			// all Execute() calls during ObjectManager.Update, LuaEvents,
+			// Targeting, plugins, and combat routine pulse are batched into one
+			// continuous-mode session (~10-15ms).  WoW is frozen only here.
+			// The behavior tree below runs WITHOUT FrameLock — each Execute()
+			// waits for a frame individually, letting WoW render between calls.
+			if (StyxWoW.IsInGame)
 			{
+				if (StyxSettings.Instance.UseFrameLock)
+				{
+					using (new FrameLock())
+					{
+						WoWPulsator.Pulse(Current?.PulseFlags ?? PulseFlags.All);
+						BotEvents.RaisePulse(EventArgs.Empty);
+					}
+				}
+				else
+				{
+					WoWPulsator.Pulse(Current?.PulseFlags ?? PulseFlags.All);
+					BotEvents.RaisePulse(EventArgs.Empty);
+				}
+			}
+
+			// HB 6.2.3: Run Composite_0 (InGame + Taxi pre-checks via coroutine)
+			if (Composite0.LastStatus != RunStatus.Running)
+			{
+				Composite0.Start(null);
+			}
+			if (!SafeAction(() => Composite0.Tick(null), "MainRoot.Tick", true))
+			{
+				Composite0.Stop(null);
 				return;
 			}
 
+			RunStatus? lastStatus = Composite0.LastStatus;
+			if (lastStatus != RunStatus.Running)
+			{
+				Composite0.Stop(null);
+			}
+
+			// HB 6.2.3: If Composite_0 returned Success (true) or is still Running,
+			// the pre-checks want to skip the bot tick
+			if (lastStatus != RunStatus.Failure)
+				return;
+
+			// HB 6.2.3: Pre-checks returned false → game is running normally → tick bot
+
 			// ARCH-03: Fall tracking — clear navigator during long free-falls
-			bool isFalling = StyxWoW.Me.IsFalling;
+			bool isFalling = StyxWoW.Me != null && StyxWoW.Me.IsFalling;
 			if (isFalling && !_wasFalling)
 			{
 				_fallStartTick = Environment.TickCount;
@@ -292,29 +468,24 @@ namespace Styx.Logic.BehaviorTree
 			}
 			_wasFalling = isFalling;
 
-			WoWPulsator.Pulse(Current?.PulseFlags ?? PulseFlags.All);
-			BotEvents.RaisePulse(EventArgs.Empty);
-
-			// BUG-03 fix: Removed mid-air dismount that killed the player.
-			// If mounted and flying, let the bot run normally — dismount is
-			// handled by individual bot behaviors when appropriate.
 			Current?.Pulse();
-			try
+
+			if (Current?.Root == null)
+				return;
+
+			if (Current.Root.LastStatus != RunStatus.Running)
 			{
-				Current?.Root?.Tick(null);
-				RunStatus? lastStatus = Current?.Root?.LastStatus;
-				if (lastStatus != RunStatus.Running)
-				{
-					Current?.Root?.Stop(null);
-					Current?.Root?.Start(null);
-				}
+				Current.Root.Start(null);
 			}
-			catch (Exception ex)
+			if (!SafeAction(() => Current!.Root.Tick(null), "BotBase.Root.Tick", false))
 			{
-				Logging.WriteException(ex);
-				Current?.Root?.Stop(null);
-				Current?.Root?.Start(null);
-				BotPoi.Clear();
+				BotPoi.Clear("Exception in Root.Tick");
+				Current.Root.Stop(null);
+				return;
+			}
+			if (Current.Root.LastStatus != RunStatus.Running)
+			{
+				Current.Root.Stop(null);
 			}
 		}
 
@@ -395,7 +566,7 @@ namespace Styx.Logic.BehaviorTree
 		{
 			lock (_stateLock)
 			{
-				if (State != TreeRootState.Running && State != TreeRootState.Starting)
+				if (State != TreeRootState.Running && State != TreeRootState.Starting && State != TreeRootState.Paused)
 					return;
 
 				Logging.Write(Colors.DeepSkyBlue, "Bot stopping! Reason: {0}", reason ?? "User request");
@@ -429,7 +600,8 @@ namespace Styx.Logic.BehaviorTree
 			try
 			{
 				// Main tick loop — exits when Stop() sets State to Stopping
-				while (State == TreeRootState.Running)
+				// HB 6.2.3: Loop must continue for Paused state (tick body handles it)
+				while (State == TreeRootState.Running || State == TreeRootState.Paused)
 				{
 					Tick();
 				}

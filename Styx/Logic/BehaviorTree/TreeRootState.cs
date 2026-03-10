@@ -9,6 +9,7 @@ namespace Styx.Logic.BehaviorTree
 		Stopped,
 		Starting,
 		Running,
+		Paused,   // HB 6.2.3: between Running and Stopping
 		Stopping
 	}
 }
