@@ -13,18 +13,11 @@
 			"path": "../../../hb decompile/.hb 4.3.4"
 		},
 		{
-			"name": ".hb 5.4.8",
-			"path": "../../../hb decompile/.hb 5.4.8"
-		},
-		{
 			"name": ".hb 6.2.3",
 			"path": "../../../hb decompile/.hb 6.2.3"
 		},
 		{
-			"name": ".hb legion",
-			"path": "../../../hb decompile/.hb legion"
-		},
-		{
+			"name": "Singular 4.3.4 et 5.4.8",
 			"path": "../../../Singular 4.3.4 et 5.4.8"
 		}
 	],
