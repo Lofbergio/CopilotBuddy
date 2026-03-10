@@ -2,7 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Text;
 using GreenMagic;
 using Styx.Helpers;
@@ -15,19 +14,19 @@ namespace Styx.WoWInternals
         private static readonly char[] _validChars;
         private readonly Dictionary<string, LuaEventHandlerDelegate> _eventHandlers = new Dictionary<string, LuaEventHandlerDelegate>();
         private readonly Dictionary<string, string> _eventFilters = new Dictionary<string, string>();
-        private readonly object _eventLock = new object(); // ARCH-04: Thread safety lock
+        private readonly object _eventLock = new object();
         private readonly WaitTimer _refreshTimer;
         private string _eventTableName;
         private string _frameName;
         private string _filterTableName;
         private int _registeredEventCount;
-        private static bool _initialized;
         private static bool _printAllEvents;
         private static Func<object, string> _toStringFunc;
 
         internal LuaEvents()
         {
-            this._refreshTimer = WaitTimer.ThirtySeconds;
+            // HB 4.3.4 uses a short compaction period to avoid event table bloat.
+            this._refreshTimer = WaitTimer.FiveSeconds;
             this._refreshTimer.Reset();
         }
 
@@ -43,9 +42,12 @@ namespace Styx.WoWInternals
             {
                 if (ObjectManager.WoWProcess != null && !ObjectManager.WoWProcess.HasExited && ObjectManager.IsInGame && this._frameName != null)
                 {
-                    // WoW 3.3.5a: Clean up frame and event table (no filter table)
                     Lua.DoString(string.Format("if {0} then {0}:UnregisterAllEvents(); {0}:SetScript('OnEvent', nil); {0} = nil; end if {1} then {1} = nil; end", 
                         this._frameName, this._eventTableName));
+                    if (!string.IsNullOrEmpty(this._filterTableName))
+                    {
+                        Lua.DoString(string.Format("if {0} then {0} = nil; end", this._filterTableName));
+                    }
                 }
             }
             catch
@@ -55,11 +57,22 @@ namespace Styx.WoWInternals
 
         public void AttachEvent(string eventName, LuaEventHandlerDelegate handler)
         {
-            lock (_eventLock) // ARCH-04: Thread safety
+            lock (_eventLock)
             {
+                if (!IsInitialized)
+                {
+                    Initialize();
+                }
+
+                LuaEventHandlerDelegate existing;
+                bool hasHandlers = _eventHandlers.TryGetValue(eventName, out existing) && existing != null;
                 if (!this._eventHandlers.ContainsKey(eventName))
                 {
                     this._eventHandlers[eventName] = null;
+                }
+                if (!hasHandlers && !string.IsNullOrEmpty(_frameName))
+                {
+                    Lua.DoString("{0}:RegisterEvent('{1}')", _frameName, EscapeLuaString(eventName));
                 }
                 Dictionary<string, LuaEventHandlerDelegate> dictionary;
                 (dictionary = this._eventHandlers)[eventName] = (LuaEventHandlerDelegate)Delegate.Combine(dictionary[eventName], handler);
@@ -68,55 +81,70 @@ namespace Styx.WoWInternals
 
         public void DetachEvent(string eventName, LuaEventHandlerDelegate handler)
         {
-            lock (_eventLock) // ARCH-04: Thread safety
+            lock (_eventLock)
             {
                 if (this._eventHandlers.ContainsKey(eventName))
                 {
                     Dictionary<string, LuaEventHandlerDelegate> dictionary;
                     (dictionary = this._eventHandlers)[eventName] = (LuaEventHandlerDelegate)Delegate.Remove(dictionary[eventName], handler);
+                    if (this._eventHandlers[eventName] == null && !string.IsNullOrEmpty(_frameName))
+                    {
+                        Lua.DoString("{0}:UnregisterEvent('{1}')", _frameName, EscapeLuaString(eventName));
+                    }
                 }
             }
         }
 
         public bool AddFilter(string eventName, string filterCode)
         {
-            if (this._eventFilters.ContainsKey(eventName))
-                return false;
-            
-            // WoW 3.3.5a doesn't support Lua event filters, so we implement filtering in C#
-            // Store the filter code to apply it after receiving events from WoW
-            this._eventFilters.Add(eventName, filterCode);
-            return true;
+            lock (_eventLock)
+            {
+                if (this._eventFilters.ContainsKey(eventName))
+                    return false;
+
+                this._eventFilters.Add(eventName, filterCode);
+
+                if (IsInitialized && !string.IsNullOrEmpty(_filterTableName))
+                {
+                    Lua.DoString("if {0} then {0}[\"{1}\"] = function(args) {2} end; end;", _filterTableName, EscapeLuaString(eventName), filterCode);
+                }
+
+                return true;
+            }
         }
 
         public void RemoveFilter(string eventName)
         {
-            // WoW 3.3.5a: Filters are C#-side only, just remove from dictionary
-            this._eventFilters.Remove(eventName);
+            lock (_eventLock)
+            {
+                if (IsInitialized && !string.IsNullOrEmpty(_filterTableName))
+                {
+                    Lua.DoString("if {0} then {0}[\"{1}\"] = nil; end", _filterTableName, EscapeLuaString(eventName));
+                }
+                this._eventFilters.Remove(eventName);
+            }
         }
 
         internal void ProcessEvents()
         {
-            // Get the globals table from Lua state
             LuaTable globals = Lua.State.Globals;
             if (globals == null)
                 return;
 
-            // Check if our event table variable exists
-            LuaTValue eventTableValue = null;
-            if (this._eventTableName != null)
-            {
-                eventTableValue = globals.GetField(this._eventTableName);
-            }
+            LuaTValue eventTableValue = GetEventTableValue();
 
             if (eventTableValue == null || eventTableValue.Type != LuaType.Table)
             {
-                // Initialize if not yet done
-                this.Initialize();
+                lock (_eventLock)
+                {
+                    if (!IsInitialized)
+                    {
+                        Initialize();
+                    }
+                }
                 return;
             }
 
-            // Periodic cleanup to prevent memory growth
             if (this._refreshTimer.IsFinished)
             {
                 this._refreshTimer.Reset();
@@ -127,29 +155,26 @@ namespace Styx.WoWInternals
 
             try
             {
-                // Read event table directly from memory
                 LuaTable eventTable = eventTableValue.Value.Table;
-                
-                // Safety check for memory corruption
+
                 if (eventTable.ValuesCount > 131072U)
                 {
-                    Logging.WriteDebug("Memory moved for lua events ({0} values); skipped.", eventTable.ValuesCount);
+                    Logging.WriteDebug("Memory moved for lua events ({0} new values); skipped for now.", eventTable.ValuesCount);
                     return;
                 }
 
                 int count = eventTable.Count;
                 int numEvents = (count - this._registeredEventCount) / 3;
 
-                if (numEvents > 1500)
-                {
-                    Logging.WriteDebug("Too many lua events ({0}); skipped.", numEvents);
-                    return;
-                }
-
                 if (numEvents <= 0)
                     return;
 
-                // Read all event data at once for efficiency
+                if (numEvents > 15000)
+                {
+                    Logging.WriteDebug("Memory moved for lua events ({0} new events); skipped for now.", numEvents);
+                    return;
+                }
+
                 LuaTValue[] values = eventTable.GetValues(this._registeredEventCount, numEvents * 3);
 
                 for (int i = 0; i < values.Length / 3; i++)
@@ -158,12 +183,13 @@ namespace Styx.WoWInternals
                     LuaTValue fireTimeValue = values[i * 3 + 1];
                     LuaTValue argsValue = values[i * 3 + 2];
 
-                    // Validate types
                     if (eventNameValue.Type != LuaType.String || 
                         fireTimeValue.Type != LuaType.Number || 
                         argsValue.Type != LuaType.Table)
                     {
-                        Logging.WriteDebug("Invalid lua event data types; skipped.");
+                        Logging.WriteDebug("Memory moved for lua events (type); skipped for now.");
+                        // Skip the broken tail so the tick loop does not stall on the same triplet forever.
+                        this._registeredEventCount = count;
                         break;
                     }
 
@@ -171,40 +197,23 @@ namespace Styx.WoWInternals
                     uint fireTimeStamp = (uint)fireTimeValue.Value.Double;
                     LuaTable argsTable = argsValue.Value.Table;
 
-                    // Safety check for args table
                     if (argsTable.ValuesCount > 2500U)
                     {
-                        Logging.WriteDebug("Event args table too large; skipped.");
+                        Logging.WriteDebug("Memory moved for lua events (ValuesCount); skipped for now.");
+                        this._registeredEventCount = count;
                         break;
                     }
 
                     int argsCount = argsTable.Count;
                     if (argsCount > 1000)
                     {
-                        Logging.WriteDebug("Too many event args; skipped.");
+                        Logging.WriteDebug("Memory moved for lua events (eventArgsCount); skipped for now.");
+                        this._registeredEventCount = count;
                         break;
                     }
 
-                    // Read args from memory
                     object[] args = ReadArgsFromTable(argsTable, argsCount);
 
-                    // Apply C#-side filter if one exists for this event (WoW 3.3.5a compatibility)
-                    bool hasFilter;
-                    lock (_eventLock)
-                    {
-                        hasFilter = this._eventFilters.ContainsKey(eventName);
-                    }
-                    if (hasFilter)
-                    {
-                        if (!ApplyFilter(eventName, args))
-                        {
-                            // Filter blocked this event, skip it
-                            this._registeredEventCount += 3;
-                            continue;
-                        }
-                    }
-
-                    // Invoke handler if registered (ARCH-04: lock for thread safety)
                     LuaEventHandlerDelegate handler;
                     lock (_eventLock)
                     {
@@ -233,9 +242,6 @@ namespace Styx.WoWInternals
             }
         }
 
-        /// <summary>
-        /// Reads arguments from a Lua table into an object array.
-        /// </summary>
         private object[] ReadArgsFromTable(LuaTable table, int count)
         {
             if (count == 0)
@@ -273,10 +279,7 @@ namespace Styx.WoWInternals
             set { LuaEvents._printAllEvents = value; }
         }
 
-        /// <summary>
-        /// FEAT-20: Whether the Lua event frame has been initialized.
-        /// </summary>
-        public static bool IsInitialized => LuaEvents._initialized;
+        public bool IsInitialized => GetEventTableValue() != null;
 
         private static void InvokeDelegate(Delegate d, params object[] args)
         {
@@ -297,20 +300,43 @@ namespace Styx.WoWInternals
 
         private void Initialize()
         {
-            this._frameName = GenerateRandomString(9, 15); // Frame name (WoW 3.3.5a: no filter table needed)
-            this._eventTableName = GenerateRandomString(9, 15); // Event table
+            this._frameName = GenerateRandomString(9, 15);
+            this._eventTableName = GenerateRandomString(9, 15);
+            this._filterTableName = GenerateRandomString(9, 15);
             this._registeredEventCount = 0;
-            
-            // WoW 3.3.5a: Simple initialization without Lua-side filtering
-            // Filters are applied in C# after receiving events
+
+            StringBuilder registerBuilder = new StringBuilder();
+            foreach (var kv in _eventHandlers)
+            {
+                if (kv.Value != null)
+                {
+                    registerBuilder.AppendFormat("{0}:RegisterEvent('{1}') ", this._frameName, EscapeLuaString(kv.Key));
+                }
+            }
+
+            foreach (var kv in _eventFilters)
+            {
+                registerBuilder.AppendFormat("{0}[\"{1}\"] = function(args) {2} end; ", this._filterTableName, EscapeLuaString(kv.Key), kv.Value);
+            }
+
             string text = string.Format(
-                "{0} = {{}}; {1} = CreateFrame('Frame'); " +
-                "{1}:SetScript('OnEvent', function(self, event, ...) " +
-                "tinsert({0}, event); tinsert({0}, GetTime()*1000); tinsert({0}, {{ ... }}); " +
-                "end); {1}:RegisterAllEvents();", 
-                this._eventTableName, this._frameName);
+                "{0} = {{}}; {2} = {{}}; {1} = CreateFrame('Frame'); " +
+                "{1}:SetScript('OnEvent', function(self, event, ...) local args = {{ ... }} if not {2} or not {2}[event] or {2}[event](args) then tinsert({0}, event); tinsert({0}, GetTime()*1000); tinsert({0}, args); end end); {3}",
+                this._eventTableName, this._frameName, this._filterTableName, registerBuilder);
             Lua.DoString(text);
-            _initialized = true;
+        }
+
+        private LuaTValue GetEventTableValue()
+        {
+            if (!string.IsNullOrEmpty(this._eventTableName))
+            {
+                LuaTValue field = Lua.State.Globals.GetField(this._eventTableName);
+                if (field != null && field.Type == LuaType.Table)
+                {
+                    return field;
+                }
+            }
+            return null;
         }
 
         private static string GenerateRandomString(int minLength, int maxLength)
@@ -329,46 +355,31 @@ namespace Styx.WoWInternals
             return o.ToString();
         }
 
-        /// <summary>
-        /// Applies a C#-side event filter (WoW 3.3.5a doesn't support Lua-side filters).
-        /// Evaluates the filter code and returns true if the event should be processed.
-        /// </summary>
-        private bool ApplyFilter(string eventName, object[] args)
+        private static string EscapeLuaString(string value)
         {
-            string filterCode = this._eventFilters[eventName];
-            
-            // For COMBAT_LOG_EVENT_UNFILTERED, args[2] is the event type
-            // Filter: "return args[2] == 'SPELL_CAST_SUCCESS' or args[2] == 'SPELL_AURA_APPLIED' or ..."
-            // We'll evaluate this in C# for performance
-            
-            if (eventName == "COMBAT_LOG_EVENT_UNFILTERED" && args.Length > 1)
-            {
-                // args[1] is the combat log event type (0-indexed in C#, 2-indexed in Lua)
-                string combatEventType = args[1]?.ToString() ?? string.Empty;
-                
-                // Common Singular filter: only these event types
-                if (combatEventType == "SPELL_CAST_SUCCESS" ||
-                    combatEventType == "SPELL_AURA_APPLIED" ||
-                    combatEventType == "SPELL_MISSED" ||
-                    combatEventType == "RANGE_MISSED" ||
-                    combatEventType == "SWING_MISSED")
-                {
-                    return true;
-                }
-                return false;
-            }
-            
-            // For other events, no filter implemented yet (allow all)
-            return true;
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+
+            return value.Replace("\\", "\\\\").Replace("'", "\\'").Replace("\"", "\\\"");
         }
 
         /// <summary>
         /// Processes pending Lua events (used by LuaEventWait).
+        /// Must acquire FrameLock because this is called from the behavior tree
+        /// (outside the Pulse FrameLock) and ProcessEvents reads Lua tables in
+        /// WoW memory — without FrameLock, WoW's main thread can modify Lua
+        /// state mid-read, causing "Memory moved for lua events" errors and
+        /// lost events (e.g. QUEST_QUERY_COMPLETE never delivered → 5s timeout).
         /// </summary>
         public static void ProcessPendingEvents()
         {
-            // Process events through the Lua.Events instance
-            Lua.Events.ProcessEvents();
+            using (new FrameLock())
+            {
+                // Clear cache so we read fresh event table entries that WoW
+                // added since the last Pulse FrameLock.
+                StyxWoW.Memory.ClearCache();
+                Lua.Events.ProcessEvents();
+            }
         }
     }
 }

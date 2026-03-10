@@ -648,7 +648,7 @@ namespace Bots.Grind
                         StyxWoW.Me.IsInInstance ||
                         Targeting.GetAggroOnMeWithin(StyxWoW.Me.Location, 30f) != 0)
                         return;
-                    Thread.Sleep(1500);
+                    StyxWoW.Sleep(1500);
                 };
                 _lootEventsAttached = true;
             }
@@ -879,7 +879,7 @@ namespace Bots.Grind
 
             if (freeSlots <= 1 || freeSlots < ProfileManager.CurrentProfile.MinFreeBagSlots)
             {
-                Logging.WriteDebug("Not enough free slots to loot! {0}", freeSlots);
+                // HB 4.3.4 uses Trace.WriteLine here (invisible in bot log), not Logging.WriteDebug.
                 return false;
             }
 
@@ -1403,7 +1403,7 @@ namespace Bots.Grind
         private static void SleepForLag()
         {
             // Sleep for estimated latency
-            Thread.Sleep(100 + (int)(StyxWoW.WoWClient?.Latency ?? 100));
+            StyxWoW.Sleep(100 + (int)(StyxWoW.WoWClient?.Latency ?? 100));
         }
 
         /// <summary>
