@@ -395,9 +395,6 @@ namespace Styx.Logic
                 {
                     if (StyxWoW.IsInGame)
                     {
-                      // HB 6.2.3: Pulse wraps in AcquireFrame (soft lock).
-                      using (StyxWoW.Memory.AcquireFrame())
-                      {
                         List<WoWObject> initialObjectList = this.GetInitialObjectList();
                         Delegate e = this._removeTargetsFilterHandlers;
                         object[] array = new object[] { initialObjectList };
@@ -437,7 +434,6 @@ namespace Styx.Logic
                         {
                             this._targetListUpdateFinishedHandlers(Targeting._blacklistedMobNames);
                         }
-                      }
                     }
                 }
             }
@@ -519,8 +515,6 @@ namespace Styx.Logic
             // ghosts; no mob in WoW 3.3.5a can legitimately aggro from this far.
             double hardDistCapSq = 300.0 * 300.0; // 300 yd
 
-            // HB 6.2.3: AcquireFrame around the removal loop.
-            using (StyxWoW.Memory.AcquireFrame())
             for (int i = units.Count - 1; i >= 0; i--)
             {
                 WoWObject obj = units[i];
@@ -598,9 +592,6 @@ namespace Styx.Logic
                 isInCombat = true;
             }
 
-            // HB 6.2.3: AcquireFrame around the include loop.
-            using (StyxWoW.Memory.AcquireFrame())
-            {
             foreach (WoWObject woWObject in incomingUnits)
             {
                 bool isInsideBattleground = Battlegrounds.IsInsideBattleground;
@@ -652,8 +643,6 @@ namespace Styx.Logic
                 }
             }
 
-            }
-
             // BotPoi Kill AFTER the loop (HB 4.3.4 lines 537-544)
             // With dungeon/raid exclusion
             if (!StyxWoW.Me.CurrentMap.IsDungeon && !StyxWoW.Me.CurrentMap.IsRaid)
@@ -691,8 +680,6 @@ namespace Styx.Logic
                 GameWorld.MassTraceLine(traceLines, GameWorld.CGWorldFrameHitFlags.HitTestLOS, out losResults);
             }
 
-            // HB 6.2.3: AcquireFrame around the scoring loop (AFTER MassTraceLine).
-            using (StyxWoW.Memory.AcquireFrame())
             for (int j = units.Count - 1; j >= 0; j--)
             {
                 WoWUnit unit = units[j].Object.ToUnit();

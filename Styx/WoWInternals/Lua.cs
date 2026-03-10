@@ -357,7 +357,6 @@ namespace Styx.WoWInternals
             catch (Exception ex)
             {
                 Logging.WriteDebug("Exception in DoString: {0} StackTrace:{1}", ex.Message, ex.StackTrace);
-                ObjectManager.Executor?.EndExecute();
             }
         }
 
