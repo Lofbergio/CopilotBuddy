@@ -68,19 +68,16 @@ namespace Styx.WoWInternals
 		{
 			get
 			{
-				using (StyxWoW.Memory.AcquireFrame())
+				Memory? memory = ObjectManager.Wow;
+				if (memory == null)
+					return new ClickToMoveInfoStruct();
+				try
 				{
-					Memory? memory = ObjectManager.Wow;
-					if (memory == null)
-						return new ClickToMoveInfoStruct();
-					try
-					{
-						return memory.ReadStruct<ClickToMoveInfoStruct>(ClickToMove_Base);
-					}
-					catch
-					{
-						return new ClickToMoveInfoStruct();
-					}
+					return memory.ReadStruct<ClickToMoveInfoStruct>(ClickToMove_Base);
+				}
+				catch
+				{
+					return new ClickToMoveInfoStruct();
 				}
 			}
 		}
@@ -159,12 +156,9 @@ namespace Styx.WoWInternals
 		{
 			get
 			{
-				using (StyxWoW.Memory.AcquireFrame())
-				{
-					LocalPlayer? me = ObjectManager.Me;
-					if (me == null) return false;
-					return me.IsMoving;
-				}
+				LocalPlayer? me = ObjectManager.Me;
+				if (me == null) return false;
+				return me.IsMoving;
 			}
 		}
 
@@ -202,9 +196,8 @@ namespace Styx.WoWInternals
 
 		public static void MoveStop()
 		{
-			// Stop keyboard movement
+			// Stop keyboard movement — single batched DoString (see StopMovement)
 			StopMovement(MovementDirection.AllAllowed);
-			Lua.DoString("MoveForwardStop();MoveBackwardStop();StrafeLeftStop();StrafeRightStop();");
 			
 			// Stop Click-to-Move if active (like HB 3.3.5a)
 			if (ClickToMoveInfo.Type == ClickToMoveType.Move || 
@@ -224,18 +217,24 @@ namespace Styx.WoWInternals
 		{
 			StyxWoW.ResetAfk();
 			
+			// HB 3.3.5a pattern: batch all direction stops into a single Lua.DoString
+			// call so only ONE Execute() is needed instead of up to 6.
+			var sb = new System.Text.StringBuilder(128);
 			if ((direction & MovementDirection.Forward) != 0)
-				Lua.DoString("MoveForwardStop()");
+				sb.Append("MoveForwardStop();");
 			if ((direction & MovementDirection.Backwards) != 0)
-				Lua.DoString("MoveBackwardStop()");
+				sb.Append("MoveBackwardStop();");
 			if ((direction & MovementDirection.StrafeLeft) != 0)
-				Lua.DoString("StrafeLeftStop()");
+				sb.Append("StrafeLeftStop();");
 			if ((direction & MovementDirection.StrafeRight) != 0)
-				Lua.DoString("StrafeRightStop()");
+				sb.Append("StrafeRightStop();");
 			if ((direction & MovementDirection.JumpAscend) != 0)
-				Lua.DoString("AscendStop()");
+				sb.Append("AscendStop();");
 			if ((direction & MovementDirection.Descend) != 0)
-				Lua.DoString("DescendStop()");
+				sb.Append("DescendStop();");
+			
+			if (sb.Length > 0)
+				Lua.DoString(sb.ToString());
 		}
 
 		public static void StopFace()
@@ -383,7 +382,7 @@ namespace Styx.WoWInternals
 		public static void Move(MovementDirection direction, TimeSpan duration)
 		{
 			Move(direction, true);
-			Thread.Sleep(duration);
+			StyxWoW.Sleep(duration);
 			Move(direction, false);
 		}
 
@@ -391,66 +390,38 @@ namespace Styx.WoWInternals
 		{
 			StyxWoW.ResetAfk();
 
+			// Batch all direction commands into a single Lua.DoString to avoid
+			// up to 8 separate Execute() calls (~16ms each = 128ms freeze).
+			var sb = new System.Text.StringBuilder(128);
+
 			if ((direction & MovementDirection.Forward) != 0)
-			{
-				if (start)
-					Lua.DoString("MoveForwardStart()");
-				else
-					Lua.DoString("MoveForwardStop()");
-			}
+				sb.Append(start ? "MoveForwardStart();" : "MoveForwardStop();");
 			if ((direction & MovementDirection.Backwards) != 0)
-			{
-				if (start)
-					Lua.DoString("MoveBackwardStart()");
-				else
-					Lua.DoString("MoveBackwardStop()");
-			}
+				sb.Append(start ? "MoveBackwardStart();" : "MoveBackwardStop();");
 			if ((direction & MovementDirection.StrafeLeft) != 0)
-			{
-				if (start)
-					Lua.DoString("StrafeLeftStart()");
-				else
-					Lua.DoString("StrafeLeftStop()");
-			}
+				sb.Append(start ? "StrafeLeftStart();" : "StrafeLeftStop();");
 			if ((direction & MovementDirection.StrafeRight) != 0)
-			{
-				if (start)
-					Lua.DoString("StrafeRightStart()");
-				else
-					Lua.DoString("StrafeRightStop()");
-			}
+				sb.Append(start ? "StrafeRightStart();" : "StrafeRightStop();");
 			if ((direction & MovementDirection.TurnLeft) != 0)
-			{
-				if (start)
-					Lua.DoString("TurnLeftStart()");
-				else
-					Lua.DoString("TurnLeftStop()");
-			}
+				sb.Append(start ? "TurnLeftStart();" : "TurnLeftStop();");
 			if ((direction & MovementDirection.TurnRight) != 0)
-			{
-				if (start)
-					Lua.DoString("TurnRightStart()");
-				else
-					Lua.DoString("TurnRightStop()");
-			}
+				sb.Append(start ? "TurnRightStart();" : "TurnRightStop();");
 			if ((direction & MovementDirection.JumpAscend) != 0)
-			{
-				if (start)
-					Lua.DoString("JumpOrAscendStart()");
-				else
-					Lua.DoString("AscendStop()");
-			}
+				sb.Append(start ? "JumpOrAscendStart();" : "AscendStop();");
 			if ((direction & MovementDirection.Descend) != 0)
 			{
 				if (start)
 				{
 					// Only descend if actually flying/swimming - on ground SitStandOrDescendStart() toggles sit!
 					if (StyxWoW.Me != null && (StyxWoW.Me.IsFlying || StyxWoW.Me.IsSwimming))
-						Lua.DoString("SitStandOrDescendStart()");
+						sb.Append("SitStandOrDescendStart();");
 				}
 				else
-					Lua.DoString("DescendStop()");
+					sb.Append("DescendStop();");
 			}
+
+			if (sb.Length > 0)
+				Lua.DoString(sb.ToString());
 		}
 
 		public static void Jump()
