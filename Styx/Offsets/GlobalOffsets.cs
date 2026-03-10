@@ -160,8 +160,8 @@ namespace Styx.Offsets
 		public const uint ChannelingSpellId = 0x00CEA8A8;
 
 		// ==================== Cooldowns ====================
-		/// <summary>Cooldown list pointer.</summary>
-		public const uint CooldownList = 0x00CECFF0;
+		/// <summary>Spell_C cooldown pointer (SpellCooldownPtr). List head at +8.</summary>
+		public const uint CooldownList = 0x00D3F5AC;
 
 		// ==================== Chat ====================
 		/// <summary>Last chat message received.</summary>
