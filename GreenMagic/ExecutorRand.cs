@@ -233,6 +233,11 @@ namespace GreenMagic
         /// </summary>
         private void SharedExecuteLogicEnd(int timeout)
         {
+            // Jitter: randomize FrameDropWaitTime each frame (800-1200ms)
+            // Written XOR-obfuscated to target memory — the ASM detour decodes it.
+            uint jitter = (uint)m_Random.Next(800, 1201);
+            Memory.Write<uint>(m_FrameDropWaitTimePtr, jitter ^ m_FrameDropWaitTimeXorKey);
+
             m_InjectionFinishedEvent.Reset();
             m_InjectionWaitingEvent.Set();
 
@@ -474,7 +479,7 @@ namespace GreenMagic
 
             m_EndSceneDetour = Memory.AllocateMemory(size << 3, 0x1000, 0x20); // 32KB like HB Legion
             if (m_EndSceneDetour == 0) throw new Exception("Allocate detour failed");
-            m_InjectedCode = Memory.AllocateMemory(size, 0x1000, 0x240); // PAGE_EXECUTE_READWRITE | PAGE_NOCACHE
+            m_InjectedCode = Memory.AllocateMemory(size, 0x1000, 0x40); // PAGE_EXECUTE_READWRITE (no NOCACHE — WPM flushes implicitly)
             if (m_InjectedCode == 0) throw new Exception("Allocate injected code failed");
             m_DataPtr = Memory.AllocateMemory(size, 0x1000, 0x04);
             if (m_DataPtr == 0) throw new Exception("Allocate data failed");
