@@ -199,7 +199,7 @@ namespace GreenMagic
             m_Memory.Write(name3, m_InjectionFinishedEventName);
 
             m_EndSceneDetour = m_Memory.AllocateMemory(num, 4096U, 32U);
-            m_InjectedCode = m_Memory.AllocateMemory(num, 4096U, 576U);
+            m_InjectedCode = m_Memory.AllocateMemory(num, 4096U, 64U); // PAGE_EXECUTE_READWRITE (no NOCACHE)
             m_DataPtr = m_Memory.AllocateMemory(num, 4096U, 4U);
 
             m_InjectionWaitingHandlePtr = m_DataPtr;
