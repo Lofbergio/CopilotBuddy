@@ -126,10 +126,10 @@ namespace Styx.WoWInternals.WoWObjects
         {
             if (string.IsNullOrEmpty(_name))
             {
-                uint randomPropId = RandomPropertiesId;
+                int randomPropId = RandomPropertiesId;
                 if (randomPropId != 0)
                 {
-                    _name = GetItemNameWithSuffix(Entry, randomPropId);
+                    _name = GetItemNameWithSuffix(Entry, (uint)Math.Abs(randomPropId));
                 }
                 else
                 {
@@ -204,9 +204,11 @@ namespace Styx.WoWInternals.WoWObjects
 
         public uint PropertySeed => GetItemDescriptor<uint>(ITEM_FIELD_PROPERTY_SEED);
 
-        public uint RandomPropertiesId => GetItemDescriptor<uint>(ITEM_FIELD_RANDOM_PROPERTIES_ID);
+        public int RandomPropertiesId => GetItemDescriptor<int>(ITEM_FIELD_RANDOM_PROPERTIES_ID);
 
         public WoWItemRandomProperties RandomProperties => new WoWItemRandomProperties(RandomPropertiesId);
+
+        public WoWItemRandomSuffix RandomSuffix => new WoWItemRandomSuffix(RandomPropertiesId);
 
         public uint Durability => GetItemDescriptor<uint>(ITEM_FIELD_DURABILITY);
 
@@ -360,7 +362,7 @@ namespace Styx.WoWInternals.WoWObjects
         private string GetItemLink()
         {
             if (_link == null)
-                _link = CreateItemLink(Entry, (int)Quality, 0, Array.Empty<int>(), RandomPropertiesId);
+                _link = CreateItemLink(Entry, (int)Quality, 0, Array.Empty<int>(), (uint)Math.Abs(RandomPropertiesId));
             return _link;
         }
 
@@ -673,9 +675,36 @@ namespace Styx.WoWInternals.WoWObjects
         {
             public uint Id { get; private set; }
 
-            internal WoWItemRandomProperties(uint id)
+            internal WoWItemRandomProperties(int id)
             {
-                Id = id;
+                Id = (uint)(id > 0 ? id : 0);
+            }
+
+            public bool IsValid => Id != 0;
+
+            public string Name
+            {
+                get
+                {
+                    if (!IsValid) return string.Empty;
+                    var db = StyxWoW.Db[ClientDb.ItemRandomProperties];
+                    if (db == null) return string.Empty;
+                    var row = db.GetRow(Id);
+                    if (row == null || !row.IsValid) return string.Empty;
+                    return row.GetField<string>(1U) ?? string.Empty;
+                }
+            }
+
+            public override string ToString() => $"[RandomProps: {Name} (Id: {Id})]";
+        }
+
+        public class WoWItemRandomSuffix
+        {
+            public uint Id { get; private set; }
+
+            internal WoWItemRandomSuffix(int suffixId)
+            {
+                Id = suffixId < 0 ? (uint)Math.Abs(suffixId) : 0;
             }
 
             public bool IsValid => Id != 0;
@@ -693,7 +722,7 @@ namespace Styx.WoWInternals.WoWObjects
                 }
             }
 
-            public override string ToString() => $"[RandomProps: {Name} (Id: {Id})]";
+            public override string ToString() => $"[RandomSuffix: {Name} (Id: {Id})]";
         }
 
         public class WoWItemSpell
