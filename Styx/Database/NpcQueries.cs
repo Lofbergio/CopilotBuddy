@@ -1,5 +1,6 @@
 #nullable disable
 using System;
+using System.Collections.Generic;
 using System.Data.SQLite;
 using Styx.Combat.CombatRoutine;
 using Styx.Logic.Pathing;
@@ -20,8 +21,8 @@ namespace Styx.Database
         // SELECT * FROM npcs WHERE entry = @entry LIMIT 1
         private static SQLiteCommand _getNpcByIdCmd;
 
-        // SELECT * FROM npcs WHERE map = @map AND trainer_class = @class AND trainer_type >= @trainerType 
-        // ORDER BY VECTORDISTANCE(x, y, z, @x, @y, @z) LIMIT 10
+        // SELECT * FROM npcs WHERE map = @map AND trainer_class = @class AND level >= @LEVEL 
+        // ORDER BY VECTORDISTANCE(x, y, z, @x, @y, @z) ASC
         private static SQLiteCommand _getNearestTrainerCmd;
 
         // SELECT * FROM npcs WHERE map = @map AND (flag & @flags) != 0 
@@ -29,6 +30,10 @@ namespace Styx.Database
         private static SQLiteCommand _getNearestNpcCmd;
 
         private static bool _initialized = false;
+
+        // Navigation caches - same as HB 4.3.4 dictionary_0 / dictionary_1
+        private static readonly Dictionary<NpcResult, bool> _trainerNavCache = new Dictionary<NpcResult, bool>();
+        private static readonly Dictionary<NpcResult, bool> _npcNavCache = new Dictionary<NpcResult, bool>();
 
         #endregion
 
@@ -51,7 +56,7 @@ namespace Styx.Database
                 "SELECT * FROM npcs WHERE entry = @ENTRY LIMIT 1");
 
             _getNearestTrainerCmd = Connection.CreateCommand(
-                "SELECT * FROM npcs WHERE map = @MAP_ID AND trainer_class = @TRAINER_CLASS AND level > @MINLEVEL ORDER BY VECTORDISTANCE(x,y,z,@X,@Y,@Z) ASC");
+                "SELECT * FROM npcs WHERE map = @MAP_ID AND trainer_class = @TRAINER_CLASS AND level >= @LEVEL ORDER BY VECTORDISTANCE(x,y,z,@X,@Y,@Z) ASC");
 
             _getNearestNpcCmd = Connection.CreateCommand(
                 "SELECT * FROM npcs WHERE map = @MAP_ID AND flag & @FLAG ORDER BY VECTORDISTANCE(x,y,z,@X,@Y,@Z) ASC LIMIT 25");
@@ -110,30 +115,38 @@ namespace Styx.Database
             EnsureInitialized();
             if (_getNearestTrainerCmd == null) return null;
 
-            // Trainer type 5 for level > 10 (class trainer), 0 for low level
-            int trainerType = StyxWoW.Me.Level > 10 ? 5 : 0;
+            int minLevel = StyxWoW.Me.Level > 10 ? 10 : 0;
+            WoWPoint location = StyxWoW.Me.Location;
 
             using var reader = Connection.ExecuteReader(_getNearestTrainerCmd,
                 mapId,
                 (int)searchClass,
-                trainerType,
+                minLevel,
                 searchLocation.X,
                 searchLocation.Y,
                 searchLocation.Z);
 
             if (reader == null) return null;
 
-            NpcResult result = null;
             while (reader.Read())
             {
-                result = new NpcResult(reader);
-                // Check faction compatibility
-                if (myFaction.RelationTo(new WoWFaction(result.Faction)) >= WoWUnitReaction.Neutral)
+                NpcResult result = new NpcResult(reader);
+                if ((result.NpcFlags & 32U) != 0U && myFaction.RelationTo(new WoWFaction(result.Faction)) >= WoWUnitReaction.Neutral)
                 {
+                    if (_trainerNavCache.TryGetValue(result, out bool cached))
+                    {
+                        if (!cached) continue;
+                    }
+                    else
+                    {
+                        bool canNav = Navigator.CanNavigateFully(location, result.Location);
+                        _trainerNavCache.Add(result, canNav);
+                        if (!canNav) continue;
+                    }
                     return result;
                 }
             }
-            return result;
+            return null;
         }
 
         /// <summary>
@@ -166,10 +179,11 @@ namespace Styx.Database
 
             if (reader == null) return null;
 
-            NpcResult result = null;
+            WoWPoint location = StyxWoW.Me.Location;
+
             while (reader.Read())
             {
-                result = new NpcResult(reader);
+                NpcResult result = new NpcResult(reader);
                 
                 // Skip NPCs with invalid faction
                 if (result.Faction == 0)
@@ -179,10 +193,20 @@ namespace Styx.Database
                 if (((npcFlags & UnitNPCFlags.ClassTrainer) == UnitNPCFlags.None || result.TrainerClass == (int)myClass) &&
                     myFaction.RelationTo(new WoWFaction(result.Faction)) >= WoWUnitReaction.Neutral)
                 {
+                    if (_npcNavCache.TryGetValue(result, out bool cached))
+                    {
+                        if (!cached) continue;
+                    }
+                    else
+                    {
+                        bool canNav = Navigator.CanNavigateFully(location, result.Location);
+                        _npcNavCache.Add(result, canNav);
+                        if (!canNav) continue;
+                    }
                     return result;
                 }
             }
-            return result;
+            return null;
         }
 
         #endregion
