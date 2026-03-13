@@ -46,10 +46,11 @@ namespace Styx.Logic.Inventory
             uint bestStack = 0;
             int bestLevel = -1;
             WoWItem bestItem = null;
+            int playerLevel = StyxWoW.Me.Level;
 
             foreach (var item in food)
             {
-                if (item.StackCount > bestStack && item.ItemInfo.RequiredLevel > bestLevel)
+                if (item.StackCount > bestStack && item.ItemInfo.RequiredLevel > bestLevel && item.ItemInfo.RequiredLevel <= playerLevel)
                 {
                     if (!includeSpecialtyItems && !item.ItemSpells.All(IsBasicFoodOrDrink))
                         continue;
@@ -76,10 +77,11 @@ namespace Styx.Logic.Inventory
             uint bestStack = 0;
             int bestLevel = -1;
             WoWItem bestItem = null;
+            int playerLevel = StyxWoW.Me.Level;
 
             foreach (var item in drinks)
             {
-                if (item.StackCount > bestStack && item.ItemInfo.RequiredLevel > bestLevel)
+                if (item.StackCount > bestStack && item.ItemInfo.RequiredLevel > bestLevel && item.ItemInfo.RequiredLevel <= playerLevel)
                 {
                     if (!includeSpecialtyItems && !item.ItemSpells.All(IsBasicFoodOrDrink))
                         continue;
