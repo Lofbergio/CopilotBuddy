@@ -133,7 +133,7 @@ namespace Styx.Logic.BehaviorTree
 			Lua.DoString("SetCVar('autoLootDefault', 1)");
 
 			BotPoi.Clear();
-			SpellManager.Refresh();
+			SpellManager.Initialize();
 			if (RoutineManager.Current == null)
 			{
 				throw new Exception("Unable to start. No Combat Routine loaded.");
