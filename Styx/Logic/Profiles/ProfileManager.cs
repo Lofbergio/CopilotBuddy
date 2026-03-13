@@ -91,6 +91,8 @@ namespace Styx.Logic.Profiles
 
 		private static void OnLevelUp(BotEvents.Player.LevelUpEventArgs args)
 		{
+			if (Battlegrounds.IsInsideBattleground)
+				return;
 			Logging.Write("We leveled up! Checking if we need to switch profiles.");
 			LoadProfileForLevel();
 		}
