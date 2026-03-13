@@ -1,5 +1,7 @@
 using System;
 using System.Text;
+using Styx.Logic.Combat;
+using Styx.Patchables;
 using Styx.WoWInternals;
 using Styx.WoWInternals.WoWCache;
 
@@ -20,6 +22,7 @@ namespace Styx.Logic.Questing
 			{
 				_objectives[i] = ToUTF8String(entry.ObjectiveTexts, i * 256, 256);
 			}
+			_rewardSpell = entry.RewardSpellId != 0 ? WoWSpell.FromId((int)entry.RewardSpellId) : null;
 		}
 
 		private static string ToUTF8String(byte[] bytes)
@@ -45,6 +48,7 @@ namespace Styx.Logic.Questing
 		private string _completionText;
 		private string _objectiveText;
 		private string[] _objectives;
+		private readonly WoWSpell? _rewardSpell;
 
 		public uint Id => InternalInfo.Id;
 
@@ -130,7 +134,58 @@ namespace Styx.Logic.Questing
 
 		public uint RewardTalentPoints => InternalInfo.RewardTalentPoints;
 
+		public uint RewardNumTalentPoints => InternalInfo.RewardTalentPoints;
+
 		public uint RewardArenaPoints => InternalInfo.RewardArenaPoints;
+
+		/// <summary>Alias for RewardMoneyCompensation — money reward at max level instead of XP (HB 3.3.5a parity).</summary>
+		public uint RewardMoneyAtMaxLevel => InternalInfo.RewardMoneyCompensation;
+
+		/// <summary>Cached WoWSpell for the quest reward spell (HB 3.3.5a parity).</summary>
+		public WoWSpell? RewardSpell => _rewardSpell;
+
+		/// <summary>Estimated XP reward based on quest and player level (HB 3.3.5a parity).</summary>
+		public int RewardXp
+		{
+			get
+			{
+				int playerLevel = ObjectManager.Me.Level;
+				int questLevel = Level;
+				if (questLevel == -1) questLevel = playerLevel;
+
+				var row = StyxWoW.Db[ClientDb.QuestXP].GetRow((uint)questLevel);
+				if (row == null) return 0;
+
+				int delta = Math.Clamp(2 * (questLevel - playerLevel) + 20, 1, 10);
+				int baseXp = delta * row.GetField<int>(1U + InternalInfo.XpId) / 10;
+
+				if (baseXp <= 100) return (baseXp + 2) / 5 * 5;
+				if (baseXp <= 500) return (baseXp + 5) / 10 * 10;
+				if (baseXp <= 1000) return (baseXp + 12) / 25 * 25;
+				return (baseXp + 25) / 50 * 50;
+			}
+		}
+
+		/// <summary>True if quest has StayAlive flag (HB 3.3.5a parity).</summary>
+		public bool IsStayAliveQuest => (Flags & WoWCache.QuestFlags.StayAlive) != 0;
+
+		/// <summary>True if quest has PartyQuest flag (HB 3.3.5a parity).</summary>
+		public bool IsPartyQuest => (Flags & WoWCache.QuestFlags.PartyQuest) != 0;
+
+		/// <summary>True if quest can be shared with party members (HB 3.3.5a parity).</summary>
+		public bool IsShareable => (Flags & WoWCache.QuestFlags.Shareable) != 0;
+
+		/// <summary>True if quest is a daily quest (HB 3.3.5a parity).</summary>
+		public bool IsDaily => (Flags & WoWCache.QuestFlags.Daily) != 0;
+
+		/// <summary>True if quest has PVP flag (HB 3.3.5a parity).</summary>
+		public bool FlagsPVP => (Flags & WoWCache.QuestFlags.FlagsPVP) != 0;
+
+		/// <summary>True if quest is a weekly quest (HB 3.3.5a parity).</summary>
+		public bool IsWeekly => (Flags & WoWCache.QuestFlags.Weekly) != 0;
+
+		/// <summary>True if quest is auto-accepted (HB 3.3.5a parity).</summary>
+		public bool IsAutoAccepted => (Flags & WoWCache.QuestFlags.AutoAccept) != 0;
 
 		private System.Collections.Generic.List<QuestObjective>? _objectives_list;
 
@@ -188,7 +243,7 @@ namespace Styx.Logic.Questing
 		}
 
 		/// <summary>
-		/// STUB-03: Gets descriptor data for this quest from the player's quest log.
+		/// Gets descriptor data for this quest from the player's quest log.
 		/// Reads the 25 quest log slots in the player descriptor table.
 		/// Layout per slot (5 descriptor indices each, starting at 0x9E):
 		///   +0: Quest ID (uint)
