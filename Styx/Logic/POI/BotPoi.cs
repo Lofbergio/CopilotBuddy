@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using Styx.Helpers;
+using Styx.Logic;
 using Styx.Logic.Pathing;
 using Styx.Logic.Profiles;
 using Styx.Logic.Profiles.Quest;
@@ -16,6 +17,15 @@ namespace Styx.Logic.POI
 		private WoWObject? _asObject;
 		private object? _object0;
 		private WoWPoint _location;
+
+		private void OnObjectInvalidated()
+		{
+			if (_asObject != null)
+			{
+				_asObject.OnInvalidate -= OnObjectInvalidated;
+				_asObject = null;
+			}
+		}
 
 		static BotPoi()
 		{
@@ -49,6 +59,7 @@ namespace Styx.Logic.POI
 					Entry = obj.Entry;
 					Location = obj.Location;
 					_asObject = obj;
+					obj.OnInvalidate += OnObjectInvalidated;
 				}
 				catch (Exception ex)
 				{
@@ -254,6 +265,10 @@ namespace Styx.Logic.POI
 						_asObject = null;
 					}
 				}
+				if (_asObject != null)
+				{
+					_asObject.OnInvalidate += OnObjectInvalidated;
+				}
 				return _asObject;
 			}
 		}
@@ -274,15 +289,18 @@ namespace Styx.Logic.POI
 
 		public TurnInNode? AsTurnIn => _object0 as TurnInNode;
 
+		public Quest? AsQuest => _object0 as Quest;
+
 		public static void Clear(string reason = "")
 		{
 			if (!string.IsNullOrEmpty(reason))
 			{
 				Logging.WriteDebug("Cleared POI - Reason {0}", reason);
 			}
-			Current = new BotPoi(PoiType.None);
-			// BUG-06 fix: Clear stale navigation paths when POI changes (HB 4.3.4)
+			// HB 4.3.4 order: Navigator → Current → FlightPaths
 			Pathing.Navigator.Clear();
+			Current = new BotPoi(PoiType.None);
+			FlightPaths.Reset();
 		}
 
 		public double DistanceToPoi
