@@ -1,6 +1,6 @@
 # QC Verified Files — DO NOT RE-ANALYZE
 
-> **Last updated:** 2026-03-13
+> **Last updated:** 2025-07-19
 >
 > Every file below has been **manually QC'd** against the HB decompiled references (3.3.5a for offsets, 4.3.4 for API, 6.2.3 for nav/UI).
 > Each was verified line-by-line, then committed individually.
@@ -49,6 +49,70 @@
 | `b50933b` | `Styx/Logic/Inventory/Frames/Merchant/MerchantFrame.cs` | Money check, BuyItem bool, 0-based index |
 | `5a85730` | `Styx/Logic/Inventory/Frames/LootFrame/LootFrame.cs` | Remove duplicate LootSlotInfo class |
 | `03221b5` | `Styx/Logic/Questing/Quest.cs` | RewardXp, RewardSpell, flag properties |
+
+### Sonnet 4.6 session — Modified files (`0695540`)
+
+| File | Summary |
+|------|---------|
+| `Styx/HonorbuddyUnableToStartException.cs` | URL cleared to "" |
+| `Styx/Logic/Mount.cs` | OnDismount→EventHandler\<EventArgs\>, MountUp returns bool, StateMount obsolete overload |
+| `Styx/StyxWoW.cs` | Added Landmarks property (exists in HB 4.3.4 line 59) |
+| `Styx/WoWInternals/WoWObjects/WoWPlayer.cs` | Removed DescInebriation/Inebriation (WoWInebriationLevel deleted) |
+
+### Sonnet 4.6 session — Helpers/Exceptions (`3fc7321`)
+
+| File | Summary |
+|------|---------|
+| `Styx/EmoteState.cs` | Exact match HB 4.3.4 |
+| `Styx/GraphicsApi.cs` | Exact match |
+| `Styx/Guard.cs` | smethod_0 → CheckExecutor, logic identical |
+| `Styx/InvalidExecutorException.cs` | Exact copy |
+| `Styx/InvalidObjectPointerException.cs` | Exact copy |
+| `Styx/Helpers/ActivitySetter.cs` | string_0 → _previousText, logic matches |
+| `Styx/Helpers/FieldDisplayNameAttribute.cs` | Exact copy |
+| `Styx/Helpers/GameDebugAddStringDelegate.cs` | Exact copy |
+| `Styx/Helpers/IndexedList.cs` | method_0 → Clamp, int_0 → _index |
+| `Styx/Helpers/XmlUtils.cs` | OrdinalIgnoreCase improvement over HB's ToLower |
+| `Styx/Logic/Pathing/PathGenerationFailStep.cs` | Exact match |
+
+### Sonnet 4.6 session — BG Landmarks (`1284f95`)
+
+| File | Summary |
+|------|---------|
+| `Styx/Logic/AlteracValleyLandmark.cs` | Icon/entry mappings match HB 4.3.4 smethod_1 |
+| `Styx/Logic/AlteracValleyLandmarkType.cs` | Exact match (Flags enum) |
+| `Styx/Logic/ArathiBasinLandmark.cs` | Icon/entry mappings match |
+| `Styx/Logic/ArathiBasinLandmarkType.cs` | Exact match |
+| `Styx/Logic/EyeOfTheStormLandmark.cs` | Icon/entry mappings match |
+| `Styx/Logic/EyeOfTheStormLandmarkType.cs` | Exact match |
+| `Styx/Logic/IsleOfConquestLandmark.cs` | Icon/entry mappings match |
+| `Styx/Logic/IsleOfConquestLandmarkType.cs` | Exact match (Flags enum) |
+| `Styx/Logic/StrandOfTheAncientsLandmark.cs` | WorldState + NormalIcon match |
+| `Styx/Logic/StrandOfTheAncientsLandmarkType.cs` | Exact match (Flags enum) |
+| `Styx/Logic/LandmarkControlType.cs` | Exact match |
+| `Styx/Logic/LandmarkType.cs` | Exact match |
+
+### Sonnet 4.6 session — Auction/Stable (`b3994b9`)
+
+| File | Summary |
+|------|---------|
+| `Styx/WoWInternals/Misc/AuctionFrame.cs` | Exact match |
+| `Styx/WoWInternals/Misc/AuctionHouse.cs` | API matches, Lua-based (vs HB memory reads) |
+| `Styx/WoWInternals/Misc/AuctionListType.cs` | Exact match |
+| `Styx/WoWInternals/Misc/AuctionPostTime.cs` | Exact match |
+| `Styx/WoWInternals/Misc/WoWAuction.cs` | Lua-filled struct, layout differs from HB |
+| `Styx/WoWInternals/Misc/Stable.cs` | Logic matches; StablePetArrayOffset=0 (TODO) |
+| `Styx/WoWInternals/Misc/StabledPet.cs` | Struct38 → StabledPetNative deobfuscated |
+
+### Sonnet 4.6 session — DBC (`de403e7`)
+
+| File | Summary |
+|------|---------|
+| `Styx/WoWInternals/DBC/LfgDungeonExpansion.cs` | Struct34 deobfuscated |
+| `Styx/WoWInternals/Misc/DBC/CreatureFamily.cs` | Struct37 deobfuscated |
+| `Styx/WoWInternals/Misc/DBC/PetFoodFlags.cs` | Exact match |
+
+---
 
 ## Deleted files (verified as invented / not from HB)
 
