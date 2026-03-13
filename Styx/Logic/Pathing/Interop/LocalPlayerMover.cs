@@ -28,6 +28,7 @@ namespace Styx.Logic.Pathing.Interop
     {
         void MoveTowards(Vector3 point);
         void MoveInDirection(MoveDirection direction, bool start);
+        void Move(WoWMovement.MovementDirection direction);
         void StopMoving();
         void MoveStop();
         void SetFacing(float facing);
@@ -85,6 +86,12 @@ namespace Styx.Logic.Pathing.Interop
                 WoWMovement.Move(movementDir);
             else
                 WoWMovement.MoveStop();
+        }
+
+        /// HB 4.3.4 IPlayerMover compatibility
+        public void Move(WoWMovement.MovementDirection direction)
+        {
+            WoWMovement.Move(direction);
         }
 
         /// <summary>
