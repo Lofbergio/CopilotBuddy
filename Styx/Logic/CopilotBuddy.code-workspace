@@ -15,10 +15,6 @@
 		{
 			"name": ".hb 6.2.3",
 			"path": "../../../hb decompile/.hb 6.2.3"
-		},
-		{
-			"name": "Singular 4.3.4 et 5.4.8",
-			"path": "../../../Singular 4.3.4 et 5.4.8"
 		}
 	],
 	"settings": {
