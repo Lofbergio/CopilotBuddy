@@ -80,10 +80,10 @@ namespace Styx.Logic.Combat
         }
 
         /// <summary>
-        /// Returns true if this is a melee-range spell.
-        /// FEAT-08: Checks both synthetic rangeId and DBC rangeIndex.
+        /// Returns true if this is a melee-range spell (SpellRangeId == 2).
+        /// Does NOT include self-only spells (RangeId == 1). Matches HB 4.3.4.
         /// </summary>
-        public bool IsMeleeSpell => SpellRangeId <= 2;
+        public bool IsMeleeSpell => SpellRangeId == 2;
 
         /// <summary>
         /// Returns true if this spell can only target self.
@@ -131,7 +131,7 @@ namespace Styx.Logic.Combat
 
         public uint MaxTargets
         {
-            get { return _spellEntry.MaxTargetLevel; }
+            get { return _spellEntry.MaxAffectedTargets; }
         }
 
         public WoWCreatureType TargetType
@@ -280,6 +280,11 @@ namespace Styx.Logic.Combat
             get { return ObjectManager.Wow.Read<string>(_spellEntry.ToolTip); }
         }
 
+        public string Description
+        {
+            get { return ObjectManager.Wow.Read<string>(_spellEntry.Description); }
+        }
+
         // HB 4.3.4 WoWSpell.cs line 426: delegates to CooldownTimeLeft
         public bool Cooldown
         {
@@ -339,39 +344,16 @@ namespace Styx.Logic.Combat
             get { return (WoWSpellSchool)_spellEntry.SchoolMask; }
         }
 
-        private static readonly HashSet<int> _loggedBadPowerType = new HashSet<int>();
-
+        /// <summary>
+        /// Returns true if the spell is currently usable (power, stance, equipped items, etc.).
+        /// HB 4.3.4 WoWSpell.cs: delegates to IsUsableSpell Lua.
+        /// IsUsableSpell exists in the WoW 3.3.5a Lua API — returns (usable, nomana).
+        /// </summary>
         public bool CanCast
         {
             get
             {
-                // Memory-based power check replaces Lua IsUsableSpell to avoid
-                // 1 Execute() (~16ms) per spell check. Covers 90%+ of cases.
-                // PowerCost is cached from first Lua call; PowerType is from DBC.
-                var me = ObjectManager.Me;
-                if (me == null || me.Dead)
-                    return false;
-                int cost = PowerCost;
-                if (cost <= 0)
-                    return true;
-                var pt = PowerType;
-                switch (pt)
-                {
-                    case WoWPowerType.Health:
-                    case WoWPowerType.Mana:
-                    case WoWPowerType.Rage:
-                    case WoWPowerType.Focus:
-                    case WoWPowerType.Energy:
-                    case WoWPowerType.Happiness:
-                    case WoWPowerType.Runes:
-                    case WoWPowerType.RunicPower:
-                        return me.GetCurrentPower(pt) >= cost;
-                    default:
-                        if (_loggedBadPowerType.Add(_id))
-                            Logging.WriteDebug("[WoWSpell] CanCast: spell {0} (id={1}) has unknown PowerType={2} (raw={3}), cost={4} — assuming castable",
-                                Name, _id, pt, (int)pt, cost);
-                        return true;
-                }
+                return Lua.GetReturnVal<bool>("return IsUsableSpell(select(1, GetSpellInfo(" + Id + ")))", 0U);
             }
         }
 
@@ -382,10 +364,14 @@ namespace Styx.Logic.Combat
 
         public SpellEffect GetSpellEffect(int index)
         {
-            if (index > 2)
-            {
-                throw new IndexOutOfRangeException("Index can't be higher than 2 for SpellEffects!");
-            }
+            // HB 4.3.4 returns null for missing/empty effects.
+            // WotLK 3.3.5a DBC has fixed 3-slot arrays; unused slots have Effect == 0.
+            if (index < 0 || index > 2)
+                return null;
+
+            if (_spellEntry.Effect[index] == 0)
+                return null;
+
             return new SpellEffect(
                 (WoWSpellEffectType)_spellEntry.Effect[index],
                 (WoWApplyAuraType)_spellEntry.EffectApplyAuraName[index],
