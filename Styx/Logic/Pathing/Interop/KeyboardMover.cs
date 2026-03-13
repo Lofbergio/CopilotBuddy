@@ -137,6 +137,9 @@ namespace Styx.Logic.Pathing.Interop
 		public void MoveStop() => WoWMovement.MoveStop();
 
 		/// <inheritdoc />
+		public void Move(WoWMovement.MovementDirection direction) => WoWMovement.Move(direction);
+
+		/// <inheritdoc />
 		public void SetFacing(float facing)
 		{
 			ObjectManager.Me?.SetFacing(facing);
