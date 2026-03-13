@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Threading;
 using Styx.Helpers;
@@ -27,6 +28,10 @@ public static class Rest
     /// </summary>
     public static bool NoFood { get; private set; }
 
+    // Throttle timers to prevent spamming food/drink every pulse (HB 4.3.4 bugfix)
+    private static readonly WaitTimer _feedTimer = new(TimeSpan.FromSeconds(5));
+    private static readonly WaitTimer _drinkTimer = new(TimeSpan.FromSeconds(5));
+
     /// <summary>
     /// Gets whether the player has no drink available.
     /// </summary>
@@ -55,13 +60,14 @@ public static class Rest
         // Eat food
         if (!string.IsNullOrEmpty(LevelbotSettings.Instance.FoodName) &&
             me.HealthPercent <= 55.0 &&
-            !me.Buffs.ContainsKey("Food"))
+            !me.Auras.ContainsKey("Food"))
         {
-            var foodCount = Lua.GetReturnVal<int>($"return GetItemCount(\"{LevelbotSettings.Instance.FoodName}\")", 0);
+            var escapedFood = Lua.Escape(LevelbotSettings.Instance.FoodName);
+            var foodCount = Lua.GetReturnVal<int>($"return GetItemCount(\"{escapedFood}\")", 0);
             if (foodCount > 0)
             {
                 Logging.Write("Eating {0}", LevelbotSettings.Instance.FoodName);
-                Lua.DoString($"UseItemByName(\"{LevelbotSettings.Instance.FoodName}\")");
+                Lua.DoString($"UseItemByName(\"{escapedFood}\")");
                 NoFood = false;
             }
             else
@@ -76,12 +82,13 @@ public static class Rest
             me.ManaPercent <= 55.0 &&
             !me.Auras.ContainsKey("Drink"))
         {
-            var drinkCount = Lua.GetReturnVal<int>($"return GetItemCount(\"{LevelbotSettings.Instance.DrinkName}\")", 0);
+            var escapedDrink = Lua.Escape(LevelbotSettings.Instance.DrinkName);
+            var drinkCount = Lua.GetReturnVal<int>($"return GetItemCount(\"{escapedDrink}\")", 0);
             if (drinkCount > 0)
             {
                 NoDrink = false;
                 Logging.Write("Drinking {0}", LevelbotSettings.Instance.DrinkName);
-                Lua.DoString($"UseItemByName(\"{LevelbotSettings.Instance.DrinkName}\")");
+                Lua.DoString($"UseItemByName(\"{escapedDrink}\")");
             }
             else
             {
@@ -120,16 +127,21 @@ public static class Rest
     /// </summary>
     public static void FeedImmediate()
     {
+        if (!_feedTimer.IsFinished)
+            return;
+
         var me = ObjectManager.Me;
         if (me == null)
             return;
+
+        _feedTimer.Reset();
 
         // Auto-detect best food
         WoWItem food = Consumable.GetBestFood(false);
         if (food != null)
         {
             Logging.Write("Eating {0}", food.Name);
-            food.UseContainerItem();
+            food.Use();
         }
         else
         {
@@ -144,16 +156,21 @@ public static class Rest
     /// </summary>
     public static void DrinkImmediate()
     {
+        if (!_drinkTimer.IsFinished)
+            return;
+
         var me = ObjectManager.Me;
         if (me == null)
             return;
+
+        _drinkTimer.Reset();
 
         // Auto-detect best drink
         WoWItem drink = Consumable.GetBestDrink(false);
         if (drink != null)
         {
             Logging.Write("Drinking {0}", drink.Name);
-            drink.UseContainerItem();
+            drink.Use();
         }
         else
         {
