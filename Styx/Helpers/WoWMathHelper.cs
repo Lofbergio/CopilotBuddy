@@ -35,7 +35,7 @@ namespace Styx.Helpers
         
         public static bool IsSafelyBehind(WoWPoint me, WoWPoint target, float targetFacingRadians)
         {
-            return IsBehind(me, target, targetFacingRadians, DegreesToRadians(150f));
+            return IsBehind(me, target, targetFacingRadians, DegreesToRadians(260f));
         }
         
         public static bool IsBehind(WoWPoint me, WoWPoint target, float targetFacingRadians, float arcRadians)
