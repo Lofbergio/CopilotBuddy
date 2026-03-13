@@ -4,7 +4,8 @@ namespace Styx
 {
 	public enum GameError
 	{
-		InvFull,
+		None = 0,
+		InvFull = 0,
 		BankFull,
 		CantEquipLevelI,
 		CantEquipSkill,
