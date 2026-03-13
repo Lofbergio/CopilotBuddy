@@ -13,7 +13,7 @@ using Matrix = Tripper.Tools.Math.Matrix;
 
 namespace Styx.WoWInternals.WoWObjects
 {
-    public class WoWGameObject : WoWObject, IComparable<WoWGameObject>, IComparable<WoWUnit>, IComparer<WoWUnit>, IComparer<WoWGameObject>
+    public class WoWGameObject : WoWObject, IComparable<WoWGameObject>, IComparable<WoWUnit>, IComparer<WoWUnit>, IComparer<WoWGameObject>, ILootableObject
     {
         #region Constants - Offsets 3.3.5a
         
@@ -41,6 +41,30 @@ namespace Styx.WoWInternals.WoWObjects
         
         #endregion
         
+        #region Slot Mapping Table — WotLK 3.3.5a (HB 3.3.5a port)
+
+        /// <summary>
+        /// Memory layout of one GO type slot-mapping entry (HB 3.3.5a Struct64).
+        /// 36 of these are read from 0xA38F90; each maps a GO type to its slot ID array.
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SlotMappingEntry
+        {
+            public uint Unknown;
+            public uint SlotCount;
+            public uint SlotArrayAddress;
+            private uint _padding;
+        }
+
+        /// <summary>
+        /// Per-GO-type slot mapping: _slotMappingTable[goType][i] == dataSlot
+        /// means Properties[i] holds the value for that dataSlot.
+        /// Lazy-loaded on first GetDataSlot() call when ObjectManager.Wow is available.
+        /// </summary>
+        private static uint[][]? _slotMappingTable;
+
+        #endregion
+
         #region Constructor
         public WoWGameObject(uint baseAddress) : base(baseAddress)
         {
@@ -96,12 +120,13 @@ namespace Styx.WoWInternals.WoWObjects
         public WoWUnit? CreatedBy => ObjectManager.GetObjectByGuid<WoWUnit>(CreatedByGuid);
         public uint DisplayId => GetDescriptorField<uint>(GAMEOBJECT_DISPLAYID);
         public GameObjectFlags Flags => (GameObjectFlags)GetDescriptorField<uint>(GAMEOBJECT_FLAGS);
-        public ushort DynamicFlags => GetDescriptorField<ushort>(GAMEOBJECT_DYNAMIC);
+        public uint DynamicFlags => GetDescriptorField<uint>(GAMEOBJECT_DYNAMIC);
         public uint Faction => GetDescriptorField<uint>(GAMEOBJECT_FACTION);
         public int Level => GetDescriptorField<int>(GAMEOBJECT_LEVEL);
         public uint Bytes1 => GetDescriptorField<uint>(GAMEOBJECT_BYTES_1);
-        public ushort FlagsDynamic => DynamicFlags;
+        public uint FlagsDynamic => DynamicFlags;
         public uint FactionTemplateId => Faction;
+        public WoWFactionTemplate? FactionTemplate => WoWFactionTemplate.FromId(FactionTemplateId);
         
         #endregion
         
@@ -375,8 +400,10 @@ namespace Styx.WoWInternals.WoWObjects
             if (creator != null)
                 return creator.GetReactionTowards(unit);
             
-            // Check faction template
-            return WoWUnitReaction.Neutral;
+            var factionTemplate = FactionTemplate;
+            if (factionTemplate == null)
+                return WoWUnitReaction.Neutral;
+            return factionTemplate.GetReactionTowards(unit);
         }
 
         /// <summary>
@@ -388,16 +415,9 @@ namespace Styx.WoWInternals.WoWObjects
             {
                 if (IsHerb || IsMineral || IsChest)
                 {
-                    if (!GetDataSlot(GameObjectDataSlot.LockId, out int lockId))
-                        return null;
-                    
-                    if (lockId != 0)
-                    {
-                        // NOTE: Full implementation requires reading Lock.dbc from MPQs
-                        // For basic bot functionality, we can rely on server-side checks
-                        // when attempting to interact with locked objects.
-                        // Return null for now - interaction will fail if skill too low
-                    }
+                    LockEntry? lockRecord = LockRecord;
+                    if (lockRecord.HasValue)
+                        return lockRecord.Value.RequiredSkill[0];
                 }
                 return null;
             }
@@ -406,7 +426,7 @@ namespace Styx.WoWInternals.WoWObjects
         /// <summary>
         /// Gets the cached game object info from WoW client memory.
         /// Reads the cache entry pointer at BaseAddress + 0x1A4 (420 decimal).
-        /// STUB-01: Critical for IsHerb, IsMineral, GetDataSlot, LockRecord.
+        /// Used by IsHerb, IsMineral, GetDataSlot, LockRecord.
         /// </summary>
         public bool GetCachedInfo(out WoWCache.WoWCache.GameObjectCacheEntry info)
         {
@@ -491,11 +511,8 @@ namespace Styx.WoWInternals.WoWObjects
 
         public bool GetDataSlot(uint dataSlot, out int value)
         {
-            // STUB-02: Read from cache entry Properties[] via GO type slot-mapping table.
-            // The slot map at 0xA38F90 (10710832) defines which Properties[] index
-            // corresponds to each data slot for each GO type. For simplicity, and since
-            // WotLK GO types have consistent slot layouts, we map directly using the
-            // Properties[] array from the cache entry.
+            // HB 3.3.5a port: look up which Properties[] index corresponds to the
+            // requested dataSlot using the per-GO-type slot mapping table at 0xA38F90.
             WoWCache.WoWCache.GameObjectCacheEntry entry;
             if (!GetCachedInfo(out entry))
             {
@@ -503,14 +520,78 @@ namespace Styx.WoWInternals.WoWObjects
                 return false;
             }
 
-            if (dataSlot >= (uint)entry.Properties.Length)
+            WoWGameObjectType subType = SubType;
+            if (subType >= (WoWGameObjectType)36)
             {
                 value = 0;
                 return false;
             }
 
-            value = entry.Properties[(int)dataSlot];
-            return true;
+            if (_slotMappingTable == null)
+                LoadSlotMappingTable();
+
+            // If memory was unavailable, table stays null — bail and retry next pulse.
+            if (_slotMappingTable == null)
+            {
+                value = 0;
+                return false;
+            }
+
+            uint[] typeSlots = _slotMappingTable[(int)subType];
+            for (int i = 0; i < typeSlots.Length; i++)
+            {
+                if (typeSlots[i] == dataSlot)
+                {
+                    if (i >= entry.Properties.Length)
+                    {
+                        value = 0;
+                        return false;
+                    }
+                    value = entry.Properties[i];
+                    return true;
+                }
+            }
+
+            value = 0;
+            return false;
+        }
+
+        /// <summary>
+        /// Reads the 36-entry slot mapping table from WoW memory at 0xA38F90.
+        /// Each GO type has its own uint[] of slot IDs that map to Properties[] indices.
+        /// Only sets _slotMappingTable on success — stays null on failure so next call retries.
+        /// </summary>
+        private static void LoadSlotMappingTable()
+        {
+            const uint SlotMappingTableAddress = 10710832U; // 0xA38F90 — WotLK 3.3.5a
+            const int GameObjectTypeCount = 36;
+            const int MaxSlotsPerType = 24; // Properties[] SizeConst
+
+            Memory? memory = ObjectManager.Wow;
+            if (memory == null)
+                return; // Will retry next call
+
+            try
+            {
+                var table = new uint[GameObjectTypeCount][];
+                var entries = memory.ReadStructArray<SlotMappingEntry>(SlotMappingTableAddress, GameObjectTypeCount);
+
+                for (int i = 0; i < GameObjectTypeCount; i++)
+                {
+                    int slotCount = (int)entries[i].SlotCount;
+                    if (slotCount > MaxSlotsPerType)
+                        slotCount = MaxSlotsPerType;
+
+                    table[i] = memory.ReadStructArray<uint>(entries[i].SlotArrayAddress, slotCount);
+                }
+
+                _slotMappingTable = table; // Atomic assignment — only when fully loaded
+            }
+            catch (Exception ex)
+            {
+                Helpers.Logging.Write("[WoWGameObject] Failed to load slot mapping table: {0}", ex.Message);
+                // Leave _slotMappingTable null so next call retries
+            }
         }
 
         public Matrix WorldMatrix => GetWorldMatrix();
