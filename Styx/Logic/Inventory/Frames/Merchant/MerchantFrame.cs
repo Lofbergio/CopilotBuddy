@@ -177,19 +177,34 @@ namespace Styx.Logic.Inventory.Frames.Merchant
             int? index = GetMerchantIndex(itemId);
             if (index.HasValue)
             {
+                MerchantItem merchantItem = GetMerchantItemAtIndex(index.Value - 1);
+                if ((long)stackCount * (long)merchantItem.BuyPrice > (long)ObjectManager.Me.Coinage)
+                {
+                    Logging.Write("Not enough money to buy item {0}", itemId);
+                    return;
+                }
                 Lua.DoString("BuyMerchantItem(" + index.Value + "," + stackCount + ")");
             }
         }
 
         /// <summary>
         /// Buys an item by merchant index and amount.
+        /// Returns true if the purchase was made, false if not enough money.
         /// </summary>
-        public void BuyItem(int index, int amount)
+        public bool BuyItem(int index, int amount)
         {
-            if (index > 0 && amount > 0)
+            if (index <= 0 || amount <= 0)
+                return false;
+
+            MerchantItem merchantItem = GetMerchantItemAtIndex(index - 1);
+            if ((long)amount * (long)merchantItem.BuyPrice > (long)ObjectManager.Me.Coinage)
             {
-                Lua.DoString("BuyMerchantItem(" + index + "," + amount + ")");
+                Logging.Write("Not enough money to buy {0}", amount);
+                return false;
             }
+
+            Lua.DoString("BuyMerchantItem(" + index + "," + amount + ")");
+            return true;
         }
 
         public void SellItem(WoWItem item)
@@ -387,15 +402,17 @@ namespace Styx.Logic.Inventory.Frames.Merchant
                 return false;
 
             int numItems = MerchantNumItems;
-            for (int i = 1; i <= numItems; i++)
+            for (int i = 0; i < numItems; i++)
             {
                 var merchantItem = GetMerchantItemAtIndex(i);
                 if (merchantItem != null && 
                     string.Equals(merchantItem.Name, name, StringComparison.OrdinalIgnoreCase))
                 {
+                    if ((long)amount * (long)merchantItem.BuyPrice >= (long)StyxWoW.Me.Coinage)
+                        return false;
                     for (int j = 0; j < amount; j++)
                     {
-                        Lua.DoString("BuyMerchantItem(" + i + ",1)");
+                        BuyItem(merchantItem.Index, 1);
                     }
                     return true;
                 }
