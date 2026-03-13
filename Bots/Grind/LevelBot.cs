@@ -30,6 +30,7 @@ using Styx.Logic.Inventory.Frames.MailBox;
 using Styx.Logic.Inventory.Frames.Merchant;
 using Styx.Logic.Inventory.Frames.Taxi;
 using Styx.Logic.Inventory.Frames.Trainer;
+using Styx.CommonBot;
 using Styx.Logic.Pathing;
 using Styx.Logic.POI;
 using Styx.Logic.Profiles;
@@ -489,7 +490,7 @@ namespace Bots.Grind
                 return;
 
             _releaseTimer.Reset();
-            InfoPanel.Died();
+            GameStats.Died();
             Navigator.Clear();
             Logging.Write("I died.");
             _diedIndoors = StyxWoW.Me.IsIndoors;
@@ -780,7 +781,7 @@ namespace Bots.Grind
                                     // Update stats
                                     new DecoratorContinue(
                                         ctx => BotPoi.Current.Type == PoiType.Loot,
-                                        new TreeSharp.Action(ctx => InfoPanel.LootedMob())
+                                        new TreeSharp.Action(ctx => GameStats.LootedMob())
                                     ),
                                     // Track last loot
                                     new TreeSharp.Action(ctx =>
