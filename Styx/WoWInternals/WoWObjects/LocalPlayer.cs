@@ -12,19 +12,20 @@ using Styx.Patchables;
 using Styx.WoWInternals.DBC;
 using Styx.WoWInternals.WoWCache;
 using Styx; // for ThreatStatus and related types
+using Styx.Combat.CombatRoutine; // for WoWClass
 
 namespace Styx.WoWInternals.WoWObjects
 {
     /// <summary>
     /// Enumeration of Death Knight rune types.
+    /// Values match WoW 3.3.5a memory layout at 0xC24304.
     /// </summary>
-    public enum RuneType : byte
+    public enum RuneType : uint
     {
-        Unknown = 0,
-        Blood = 1,
-        Unholy = 2,
-        Frost = 3,
-        Death = 4
+        Blood = 0,
+        Unholy = 1,
+        Frost = 2,
+        Death = 3
     }
 
     public class LocalPlayer : WoWPlayer
@@ -38,10 +39,7 @@ namespace Styx.WoWInternals.WoWObjects
         private const uint ZoneIdPtr = 0xBD080C;            // 12388364U — matches GlobalOffsets.ZoneId
         private const uint MapIdPtr = 0xAB63BC;             // 11232188U — matches GlobalOffsets.MapId
         private const uint ContinentNamePtr = 0xCD8620;     // 13469216U
-        private const uint RealmNamePtr = 0xBD0784;         // 12388228U
         private const uint PlayerNamePtr = 0xBD08A8;        // 12388520U
-        private const uint XPPtr = 0xBE5D88;                // 12475784U — FIXME: same as KnownSpellsPtr/SpellBook, XP should use descriptors
-        private const uint RestingPtr = 0xAF5254;           // 11489876U
         private const uint LastRedErrorPtr = 0xBCFB90;      // 12385168U
         private const uint KnownSpellsPtr = 0xBE5D88;       // 12475784U — matches GlobalOffsets.SpellBook
         
@@ -89,10 +87,9 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
-                if (Memory == null) return string.Empty;
                 try
                 {
-                    return Memory.ReadString(RealmNamePtr, 32);
+                    return Lua.GetReturnVal<string>("return GetRealmName()", 0) ?? string.Empty;
                 }
                 catch
                 {
@@ -180,6 +177,20 @@ namespace Styx.WoWInternals.WoWObjects
             {
                 if (Memory == null) return 0U;
                 return Memory.Read<uint>(MapIdPtr);
+            }
+        }
+
+        /// <summary>
+        /// Gets the current sub-zone (area) ID.
+        /// Reads from 0xBD0810 — matches GlobalOffsets.AreaId.
+        /// HB API exposes this as SubZoneId on LocalPlayer.
+        /// </summary>
+        public uint SubZoneId
+        {
+            get
+            {
+                if (Memory == null) return 0U;
+                return Memory.Read<uint>(0xBD0810);
             }
         }
         
@@ -355,24 +366,36 @@ namespace Styx.WoWInternals.WoWObjects
             {
                 // HB 4.3.4 pattern: BotEvents sets InstanceDeathLocation from dungeon map DB
                 // when player dies inside an instance, and clears it to Empty otherwise.
-                // WoWPoint.Empty = (NaN,NaN,NaN), WoWPoint.Zero = (0,0,0) — both mean "no value".
-                if (InstanceDeathLocation != WoWPoint.Empty && InstanceDeathLocation != WoWPoint.Zero)
+                // Fall back to CorpsePoint when InstanceDeathLocation is not set.
+                if (InstanceDeathLocation != WoWPoint.Empty)
                     return InstanceDeathLocation;
-                return WoWPoint.Empty;
+                return CorpsePoint;
             }
         }
         
-        #endregion
-        
-        #region Experience & Rest
-        public uint CurrentXP
+        /// <summary>
+        /// Whether the player is currently in a vehicle.
+        /// Vehicles were introduced in WotLK 3.3.5a. Uses Lua UnitInVehicle("player").
+        /// </summary>
+        public bool InVehicle
         {
             get
             {
-                if (Memory == null) return 0U;
-                return Memory.Read<uint>(XPPtr);
+                try
+                {
+                    return Lua.GetReturnVal<bool>("return UnitInVehicle('player')", 0);
+                }
+                catch
+                {
+                    return false;
+                }
             }
         }
+
+        #endregion
+        
+        #region Experience & Rest
+        public uint CurrentXP => XP;
         /// <summary>
         /// BUG-15: Reads PLAYER_NEXT_LEVEL_XP from descriptor instead of hardcoded formula.
         /// WoWPlayer already reads this correctly via NextLevelXP.
@@ -388,14 +411,8 @@ namespace Styx.WoWInternals.WoWObjects
                 return (CurrentXP * 100.0) / needed;
             }
         }
-        public new bool IsResting
-        {
-            get
-            {
-                if (Memory == null) return false;
-                return Memory.Read<byte>(RestingPtr) != 0;
-            }
-        }
+        // IsResting: inherited from WoWPlayer.IsResting (PlayerFlags bit 0x20)
+        // DO NOT override here — RestingPtr (0xAF5254) is the CurrentCursorSpell linked-list head, not a resting flag.
         
         #endregion
         
@@ -510,8 +527,7 @@ namespace Styx.WoWInternals.WoWObjects
                 if (Memory == null) return 0;
                 try
                 {
-                    // FocusGuid offset from GlobalOffsets
-                    return Memory.Read<ulong>(0x00BD07C8);
+                    return Memory.Read<ulong>(Styx.Offsets.GlobalOffsets.FocusGuid);
                 }
                 catch
                 {
@@ -936,89 +952,63 @@ namespace Styx.WoWInternals.WoWObjects
         }
 
         /// <summary>
-        /// FEAT-18: Gets the raw reputation value with a faction via Lua.
+        /// FEAT-18: Gets the raw reputation value with a faction using GetFactionStanding (HB 4.3.4 pattern).
         /// </summary>
         public int GetReputationWith(uint factionId)
         {
-            try
-            {
-                var results = Lua.GetReturnValues(
-                    $"local name, desc, standingId, bottomValue, topValue, earnedValue = GetFactionInfoByID({factionId}); return earnedValue or 0");
-                if (results != null && results.Count > 0)
-                    return Lua.ParseLuaValue<int>(results[0]);
-            }
-            catch { }
+            if (GetFactionStanding(factionId, out var standing))
+                return standing.TotalReputation;
             return 0;
         }
 
         /// <summary>
         /// FEAT-18: Gets the reputation standing level with a faction.
-        /// Maps Lua standingId (1=Hated..8=Exalted) to WoWUnitReaction.
+        /// Uses HB 4.3.4 threshold-based approach on raw reputation value.
         /// </summary>
         public WoWUnitReaction GetReputationLevelWith(uint factionId)
         {
-            try
-            {
-                var results = Lua.GetReturnValues(
-                    $"local name, desc, standingId = GetFactionInfoByID({factionId}); return standingId or 0");
-                if (results != null && results.Count > 0)
-                {
-                    int standingId = Lua.ParseLuaValue<int>(results[0]);
-                    // Lua: 1=Hated, 2=Hostile, 3=Unfriendly, 4=Neutral, 5=Friendly, 6=Honored, 7=Revered, 8=Exalted
-                    return standingId switch
-                    {
-                        1 => WoWUnitReaction.Hated,
-                        2 => WoWUnitReaction.Hostile,
-                        3 => WoWUnitReaction.Unfriendly,
-                        4 => WoWUnitReaction.Neutral,
-                        5 => WoWUnitReaction.Friendly,
-                        6 => WoWUnitReaction.Honored,
-                        7 => WoWUnitReaction.Revered,
-                        8 => WoWUnitReaction.Exalted,
-                        _ => WoWUnitReaction.Hated
-                    };
-                }
-            }
-            catch { }
+            int rep = GetReputationWith(factionId);
+            if (rep >= 42000) return WoWUnitReaction.Exalted;
+            if (rep >= 21000) return WoWUnitReaction.Revered;
+            if (rep >= 9000) return WoWUnitReaction.Honored;
+            if (rep >= 3000) return WoWUnitReaction.Friendly;
+            if (rep >= 0) return WoWUnitReaction.Neutral;
+            if (rep >= -3000) return WoWUnitReaction.Unfriendly;
+            if (rep >= -6000) return WoWUnitReaction.Hostile;
             return WoWUnitReaction.Hated;
         }
 
         /// <summary>
         /// Sets the focus target by WoWUnit. Returns true on success.
-        /// FEAT-18: Changed return type from void to bool.
+        /// HB 4.3.4 pattern: delegates to guid overload. Null clears focus.
         /// </summary>
         public bool SetFocus(WoWUnit unit)
         {
+            if (unit == null)
+                return ClearFocus();
+            return SetFocus(unit.Guid);
+        }
+
+        /// <summary>
+        /// Sets the focus target by GUID. Returns true on success.
+        /// HB 4.3.4 pattern: writes GUID directly to the focus address in memory.
+        /// </summary>
+        public bool SetFocus(ulong guid)
+        {
+            if (Memory == null) return false;
             try
             {
-                if (unit == null)
-                {
-                    Lua.DoString("ClearFocus()");
-                    return true;
-                }
-                Lua.DoString($"FocusUnit('target', {unit.Guid})");
-                return true;
+                return Memory.Write<ulong>(Styx.Offsets.GlobalOffsets.FocusGuid, guid);
             }
             catch { return false; }
         }
 
         /// <summary>
-        /// Sets the focus target by GUID. Returns true on success.
-        /// FEAT-18: Changed return type from void to bool.
+        /// Clears the current focus target.
         /// </summary>
-        public bool SetFocus(ulong guid)
+        public bool ClearFocus()
         {
-            try
-            {
-                if (guid == 0)
-                {
-                    Lua.DoString("ClearFocus()");
-                    return true;
-                }
-                Lua.DoString($"FocusUnit('target', {guid})");
-                return true;
-            }
-            catch { return false; }
+            return SetFocus(0UL);
         }
 
         /// <summary>
@@ -1184,7 +1174,7 @@ namespace Styx.WoWInternals.WoWObjects
         public RuneType GetRuneType(int index)
         {
             if (Memory == null || index < 0 || index >= 6)
-                return RuneType.Unknown;
+                return RuneType.Blood;
 
             try
             {
@@ -1192,7 +1182,7 @@ namespace Styx.WoWInternals.WoWObjects
             }
             catch
             {
-                return RuneType.Unknown;
+                return RuneType.Blood;
             }
         }
 
@@ -1708,7 +1698,7 @@ namespace Styx.WoWInternals.WoWObjects
 
         /// <summary>
         /// Gets the spell currently pending on the cursor (if any).
-        /// Address: 11489876 (0xAF5654)
+        /// Address: 11489876 (0xAF5254)
         /// Ported from HB 3.3.5a smethod_11
         /// </summary>
         public WoWSpell? CurrentCursorSpell
@@ -2216,7 +2206,7 @@ namespace Styx.WoWInternals.WoWObjects
             {
                 if (itemInfo.InternalInfo.EquipSlot == 0)
                 {
-                    reason = GameError.InvFull;
+                    reason = GameError.None;
                     return false;
                 }
                 else
@@ -2633,6 +2623,11 @@ namespace Styx.WoWInternals.WoWObjects
         #region FEAT-39: LocalPlayer batch 2
 
         /// <summary>
+        /// HB 4.3.4 API compatibility alias — combat routines and bots reference Me.SpecType.
+        /// </summary>
+        public SpecType SpecType => Specialization;
+
+        /// <summary>
         /// FEAT-39: Detects the player's spec type from talent tree points.
         /// Analyzes the primary talent tree to determine role.
         /// </summary>
@@ -2672,12 +2667,14 @@ namespace Styx.WoWInternals.WoWObjects
                         {
                             string treeName = roleResults[0].ToLower();
                             // Tank trees
-                            if (treeName == "protection" || treeName == "blood" || treeName == "feral combat")
-                            {
-                                // Feral can be tank or melee — check talent points
-                                if (treeName == "feral combat")
-                                    return SpecType.MeleeDps; // Default to melee, imprecise
+                            if (treeName == "protection" || treeName == "blood")
                                 return SpecType.Tank;
+                            // Feral Combat: bear form = tank, cat form = melee DPS (matches HB 4.3.4 SpecType logic)
+                            if (treeName == "feral combat")
+                            {
+                                if (Shapeshift == ShapeshiftForm.Bear || Shapeshift == ShapeshiftForm.DireBear)
+                                    return SpecType.Tank;
+                                return SpecType.MeleeDps;
                             }
                             // Healer trees
                             if (treeName == "holy" || treeName == "discipline" || treeName == "restoration")
@@ -2687,7 +2684,12 @@ namespace Styx.WoWInternals.WoWObjects
                                 treeName == "shadow" || treeName == "destruction" || treeName == "affliction" ||
                                 treeName == "demonology" || treeName == "balance" || treeName == "elemental" ||
                                 treeName == "marksmanship" || treeName == "beast mastery" || treeName == "survival")
+                            {
+                                // Frost DK is melee, not ranged — "frost" tree name is shared with Mage
+                                if (treeName == "frost" && Class == WoWClass.DeathKnight)
+                                    return SpecType.MeleeDps;
                                 return SpecType.RangedDps;
+                            }
                             // Melee DPS trees
                             if (treeName == "arms" || treeName == "fury" || treeName == "retribution" ||
                                 treeName == "combat" || treeName == "assassination" || treeName == "subtlety" ||
