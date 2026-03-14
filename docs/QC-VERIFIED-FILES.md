@@ -154,6 +154,38 @@
 | `Styx/CommonBot/Inventory/EquipmentManager.cs` | HB 6.2.3 adapted — explicit Initialize(), omits event listener |
 | `Styx/CommonBot/Inventory/EquipmentSet.cs` | Exact match HB 6.2.3 — same Lua calls, same return indices |
 
+### Sonnet 4.6 session #3 — Enums + structs (`b1bf096`)
+
+| File | Summary |
+|------|---------|
+| `Styx/PvPState.cs` | Exact match HB 4.3.4 — [Flags] None/PVP/FFAPVP/InPvPSanctuary |
+| `Styx/Logic/BattleForGilneasLandmarkType.cs` | Exact match HB 4.3.4 |
+| `Styx/Logic/BattleForGilneasLandmark.cs` | HB 4.3.4 design — NormalIcon switch, entry 2400-2414, deobfuscated |
+| `Styx/WoWInternals/WoWObjects/DurabilityCostEntry.cs` | Exact match HB 4.3.4 — uint[29] Multiplier |
+| `Styx/WoWInternals/WoWObjects/DurabilityQualityEntry.cs` | Exact match HB 4.3.4 |
+
+### Sonnet 4.6 session #3 — Helpers + exceptions (`a929d12`)
+
+| File | Summary |
+|------|---------|
+| `Styx/Helpers/Arguments.cs` | HB 4.3.4 deobfuscated — CLI parser, same regex, same public API |
+| `Styx/Helpers/BGBotSettings.cs` | Exact match HB 4.3.4 — BG1/BG2/IsHealer/IncludeMountedPlayers |
+| `Styx/Logic/Pathing/OnDemandDownloading/InvalidFileFormatException.cs` | Exact match HB 4.3.4 |
+| `Styx/Logic/Profiles/ForceMailManager.cs` | HB 4.3.4 deobfuscated — DualHashSet, XML parsing, same keywords |
+
+### Sonnet 4.6 session #3 — WoWVehicle (`d4ac547`)
+
+| File | Summary |
+|------|---------|
+| `Styx/WoWInternals/WoWVehicle.cs` | HB 6.2.3 adapted for WotLK — wraps WoWUnit, DBC stubs |
+
+### Sonnet 4.6 session #3 — Modified files (`57965f8`)
+
+| File | Summary |
+|------|---------|
+| `Styx/Logic/Combat/RoutineManager.cs` | Added Current setter (exists in HB 4.3.4) |
+| `Styx/Logic/Combat/SpellManager.cs` | Added CastRandom/BuffRandom int+bool overloads (HB 4.3.4) |
+
 ---
 
 ## Deleted files (verified as invented / not from HB)
