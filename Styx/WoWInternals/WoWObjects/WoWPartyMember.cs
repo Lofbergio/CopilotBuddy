@@ -189,6 +189,19 @@ namespace Styx.WoWInternals.WoWObjects
             }
         }
 
+        /// <summary>
+        /// Returns true if this member is flagged for Free-For-All PvP.
+        /// Ported from HB 4.3.4 WoWPartyMember.FFAPvpFlagged (StatusFlags & 16).
+        /// </summary>
+        public bool FFAPvpFlagged
+        {
+            get
+            {
+                var result = Lua.GetReturnVal<int>($"return UnitIsPVPFreeForAll('{_unitId}') and 1 or 0", 0);
+                return result == 1;
+            }
+        }
+
         #endregion
 
         #region Raid Role Flags
@@ -346,6 +359,13 @@ namespace Styx.WoWInternals.WoWObjects
                 return 0;
             }
         }
+
+        /// <summary>
+        /// Gets the continent ID for this party member.
+        /// Ported from HB 4.3.4 WoWPartyMember.ContinentId (memory struct field).
+        /// WotLK Lua has no per-unit continent API; returns 0 as a safe stub.
+        /// </summary>
+        public ushort ContinentId => 0;
 
         #endregion
 
