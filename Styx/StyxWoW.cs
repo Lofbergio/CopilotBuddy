@@ -142,6 +142,21 @@ namespace Styx
         public static bool GlobalCooldown => SpellManager.GlobalCooldown;
 
         /// <summary>
+        /// Gets the graphics API currently in use by WoW.
+        /// Uses GetCVar('gxAPI') — valid in WotLK 3.3.5a.
+        /// </summary>
+        public static GraphicsApi GameGraphicsApi
+        {
+            get
+            {
+                var apiName = Lua.GetReturnVal<string>("return GetCVar('gxAPI')", 0) ?? "D3D9";
+                if (Enum.TryParse(apiName, true, out GraphicsApi result))
+                    return result;
+                return GraphicsApi.D3D9;
+            }
+        }
+
+        /// <summary>
         /// Exposes the memory manager for convenience.  Mirrors HB's
         /// <c>StyxWoW.Memory</c> property and simply proxies to the
         /// underlying ObjectManager.Wow instance.

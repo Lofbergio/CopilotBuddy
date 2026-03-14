@@ -1,6 +1,7 @@
 #nullable disable
 using System;
 using Styx.Helpers;
+using Styx.Logic.Combat;
 
 namespace Styx.WoWInternals.WoWObjects
 {
@@ -233,6 +234,39 @@ namespace Styx.WoWInternals.WoWObjects
         /// Returns true if the totem has expired.
         /// </summary>
         public bool Expired => !Active || TimeLeft <= TimeSpan.Zero;
+
+        /// <summary>
+        /// Gets the spell that created this totem.
+        /// </summary>
+        public WoWSpell Spell => WoWSpell.FromId(SpellId);
+
+        /// <summary>
+        /// Gets the icon texture path for this totem's spell.
+        /// </summary>
+        public string IconPath
+        {
+            get
+            {
+                int id = SpellId;
+                if (id <= 0)
+                    return string.Empty;
+                return Lua.GetReturnVal<string>($"local t = GetSpellTexture({id}); return t or ''", 0) ?? string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Gets the expiry DateTime for this totem (StartTime + Duration).
+        /// </summary>
+        public DateTime Expires
+        {
+            get
+            {
+                var start = StartTime;
+                if (start == DateTime.MinValue)
+                    return DateTime.MinValue;
+                return start.AddSeconds(Duration);
+            }
+        }
 
         #endregion
 
