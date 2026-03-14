@@ -217,9 +217,7 @@ namespace Styx.Logic
                     CreatureSpell = WoWSpell.FromId(CreatureSpellId);
                     if (CreatureSpell != null)
                     {
-                        // SpellEffect1.MiscValueB contains mount type in some versions
-                        // For 3.3.5, we determine mount type differently
-                        Type = DetermineMountType(CreatureSpellId);
+                        Type = (MountType)CreatureSpell.SpellEffect1.MiscValueB;
                     }
                     else
                     {
@@ -231,31 +229,6 @@ namespace Styx.Logic
                     CreatureSpell = null;
                     Type = MountType.Unknown;
                 }
-            }
-
-            /// <summary>
-            /// Determines mount type based on spell ID for WoW 3.3.5a.
-            /// </summary>
-            private static MountType DetermineMountType(int spellId)
-            {
-                // Known flying mount spells in WotLK
-                // This is a simplified check - full implementation would read spell data
-                // Flying mounts typically have aura that increases speed and allows flight
-                WoWSpell spell = WoWSpell.FromId(spellId);
-                if (spell == null)
-                    return MountType.Unknown;
-
-                // Check spell name for flying keywords as fallback
-                string name = spell.Name?.ToLower() ?? "";
-                if (name.Contains("flying") || name.Contains("drake") || name.Contains("proto") ||
-                    name.Contains("gryphon") || name.Contains("hippogryph") || name.Contains("wyvern") ||
-                    name.Contains("wind rider") || name.Contains("carpet") || name.Contains("phoenix"))
-                {
-                    return MountType.Flying;
-                }
-
-                // Default to ground mount
-                return MountType.Ground;
             }
 
             /// <summary>
@@ -305,18 +278,17 @@ namespace Styx.Logic
         }
     }
 
-    /// <summary>
-    /// Mount type enumeration.
-    /// </summary>
     public enum MountType
     {
-        Unknown = 0,
-        Ground = 1,
-        Flying = 2,
-        EpicGroundOnly = 3,
-        Scaling = 4,
-        TransformFlight = 5,
-        Underwater = 6,
-        UnderwaterVashjir = 7
+        Unknown = -1,
+        EpicGroundOnly = 225,
+        Flying = 229,
+        Ground = 230,
+        Underwater = 231,
+        UnderwaterVashjir = 232,
+        TransformFlight = 238,
+        AhnQiraj = 241,
+        ProfessionMount = 247,
+        Scaling = 248
     }
 }
