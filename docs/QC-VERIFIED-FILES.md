@@ -104,6 +104,23 @@
 | `Styx/WoWInternals/Misc/Stable.cs` | Logic matches; StablePetArrayOffset=0 (TODO) |
 | `Styx/WoWInternals/Misc/StabledPet.cs` | Struct38 → StabledPetNative deobfuscated |
 
+### Sonnet 4.6 session — Chat / WoWChat (HB 4.3.4 matching)
+
+| File | Summary |
+|------|---------|
+| `Styx/WoWInternals/WoWChat.cs` | Chat event dispatch + Lua event bindings (CHAT_MSG_* events) |
+| `Styx/WoWInternals/WoWChatMessage.cs` | Chat message struct (sender, content, channel, type) |
+| `Styx/WoWInternals/ChatMessageEventArgs.cs` | EventArgs wrapper for chat messages |
+| `Styx/WoWInternals/ChatMessageHandler.cs` | Delegate type used by chat events |
+
+> **Note:**
+> - Chat-related code is **fully verified** and **must not be modified**: `Styx/WoWInternals/WoWChat.cs`, `Styx/WoWInternals/WoWChatMessage.cs`, `Styx/WoWInternals/ChatMessageEventArgs.cs`, `Styx/WoWInternals/ChatMessageHandler.cs` are API‑critical and already mirror HB 4.3.4 behavior.
+> - `StyxResources` / `.resx` localization resources are not used (logs are hardcoded).
+> - DBC-style `Spell*Entry` classes are not present; CopilotBuddy uses `SpellEntry` for spell data.
+> - WoW currency + inebriation systems do not exist in 3.3.5a (so `WoWCurrencyInfo` / `WoWInebriationLevel` are intentionally absent).
+> - The HB bug-report UI (`FormBugLoginInfo` etc.) and its WinForms resources are not ported (unused for this project).
+
+
 ### Sonnet 4.6 session — DBC (`de403e7`)
 
 | File | Summary |
