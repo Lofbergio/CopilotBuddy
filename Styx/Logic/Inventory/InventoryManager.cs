@@ -19,97 +19,100 @@ namespace Styx.Logic.Inventory
         /// </summary>
         public static List<InventorySlot> GetInventorySlotsByEquipSlot(InventoryType type)
         {
-            var slots = new List<InventorySlot>();
+            var list = new List<InventorySlot>();
 
             switch (type)
             {
                 case InventoryType.Head:
-                    slots.Add(InventorySlot.HeadSlot);
+                    list.Add(InventorySlot.HeadSlot);
                     break;
                 case InventoryType.Neck:
-                    slots.Add(InventorySlot.NeckSlot);
+                    list.Add(InventorySlot.NeckSlot);
                     break;
                 case InventoryType.Shoulder:
-                    slots.Add(InventorySlot.ShoulderSlot);
+                    list.Add(InventorySlot.ShoulderSlot);
                     break;
                 case InventoryType.Body:
-                    slots.Add(InventorySlot.ShirtSlot);
+                    list.Add(InventorySlot.ShirtSlot);
                     break;
                 case InventoryType.Chest:
                 case InventoryType.Robe:
-                    slots.Add(InventorySlot.ChestSlot);
+                    list.Add(InventorySlot.ChestSlot);
                     break;
                 case InventoryType.Waist:
-                    slots.Add(InventorySlot.WaistSlot);
+                    list.Add(InventorySlot.WaistSlot);
                     break;
                 case InventoryType.Legs:
-                    slots.Add(InventorySlot.LegsSlot);
+                    list.Add(InventorySlot.LegsSlot);
                     break;
                 case InventoryType.Feet:
-                    slots.Add(InventorySlot.FeetSlot);
+                    list.Add(InventorySlot.FeetSlot);
                     break;
                 case InventoryType.Wrist:
-                    slots.Add(InventorySlot.WristSlot);
+                    list.Add(InventorySlot.WristSlot);
                     break;
                 case InventoryType.Hand:
-                    slots.Add(InventorySlot.HandsSlot);
+                    list.Add(InventorySlot.HandsSlot);
                     break;
                 case InventoryType.Finger:
-                    slots.Add(InventorySlot.Finger0Slot);
-                    slots.Add(InventorySlot.Finger1Slot);
+                    list.Add(InventorySlot.Finger0Slot);
+                    list.Add(InventorySlot.Finger1Slot);
                     break;
                 case InventoryType.Trinket:
-                    slots.Add(InventorySlot.Trinket0Slot);
-                    slots.Add(InventorySlot.Trinket1Slot);
+                    list.Add(InventorySlot.Trinket0Slot);
+                    list.Add(InventorySlot.Trinket1Slot);
                     break;
                 case InventoryType.Weapon:
-                    slots.Add(InventorySlot.MainHandSlot);
-                    slots.Add(InventorySlot.SecondaryHandSlot);
+                    list.Add(InventorySlot.MainHandSlot);
+                    list.Add(InventorySlot.SecondaryHandSlot);
                     break;
                 case InventoryType.Shield:
                 case InventoryType.WeaponOffHand:
                 case InventoryType.Holdable:
-                    slots.Add(InventorySlot.SecondaryHandSlot);
+                    list.Add(InventorySlot.SecondaryHandSlot);
                     break;
                 case InventoryType.Ranged:
                 case InventoryType.Thrown:
                 case InventoryType.RangedRight:
                 case InventoryType.Relic:
-                    slots.Add(InventorySlot.RangedSlot);
+                    list.Add(InventorySlot.RangedSlot);
                     break;
                 case InventoryType.Cloak:
-                    slots.Add(InventorySlot.BackSlot);
+                    list.Add(InventorySlot.BackSlot);
                     break;
                 case InventoryType.TwoHandWeapon:
                 {
-                    slots.Add(InventorySlot.MainHandSlot);
+                    list.Add(InventorySlot.MainHandSlot);
                     bool flag = StyxWoW.Me.Class == WoWClass.Warrior && Lua.GetReturnVal<int>("return GetTalentInfo(2,20)", 4U) > 0;
                     WoWItem mainHand = StyxWoW.Me.Inventory.Equipped.MainHand;
                     if (flag && mainHand != null && mainHand.ItemInfo.InventoryType == InventoryType.TwoHandWeapon)
                     {
-                        slots.Add(InventorySlot.SecondaryHandSlot);
+                        list.Add(InventorySlot.SecondaryHandSlot);
                     }
                     break;
                 }
                 case InventoryType.WeaponMainHand:
-                    slots.Add(InventorySlot.MainHandSlot);
+                    list.Add(InventorySlot.MainHandSlot);
                     break;
                 case InventoryType.Bag:
                 case InventoryType.Quiver:
-                    slots.Add(InventorySlot.Bag0Slot);
-                    slots.Add(InventorySlot.Bag1Slot);
-                    slots.Add(InventorySlot.Bag2Slot);
-                    slots.Add(InventorySlot.Bag3Slot);
+                    list.Add(InventorySlot.Bag0Slot);
+                    list.Add(InventorySlot.Bag1Slot);
+                    list.Add(InventorySlot.Bag2Slot);
+                    list.Add(InventorySlot.Bag3Slot);
                     break;
                 case InventoryType.Tabard:
-                    slots.Add(InventorySlot.TabardSlot);
+                    list.Add(InventorySlot.TabardSlot);
                     break;
                 case InventoryType.Ammo:
-                    slots.Add(InventorySlot.AmmoSlot);
+                    // WotLK: Ammo slot exists (physical slot 0) but AutoEquip2 (Cata plugin)
+                    // never adds AmmoSlot=0 to its EquippedItems dictionary → KeyNotFoundException.
+                    // Return empty list so AutoEquip2 skips ammo items gracefully.
+                    // Ammo is auto-equipped by AutoEquipper.CheckAndEquipAmmo() instead.
                     break;
             }
 
-            return slots;
+            return list;
         }
 
         /// <summary>

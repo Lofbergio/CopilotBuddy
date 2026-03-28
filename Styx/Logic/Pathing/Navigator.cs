@@ -969,13 +969,12 @@ namespace Styx.Logic.Pathing
 			var startVec = new Vector3(start.X, start.Y, start.Z);
 			var endVec = new Vector3(destination.X, destination.Y, destination.Z);
 
-			// TEST: Commenté pour isoler crash - EnsureTilesAroundPosition suspect
-			// try
-			// {
-			// 	TripperNavigator.EnsureTilesAroundPosition(mapId, startVec, LoadTilesAroundRadius);
-			// 	TripperNavigator.EnsureTilesAroundPosition(mapId, endVec, LoadTilesAroundRadius);
-			// }
-			// catch { }
+			try
+			{
+				TripperNavigator.EnsureTilesAroundPosition(mapId, startVec, LoadTilesAroundRadius);
+				TripperNavigator.EnsureTilesAroundPosition(mapId, endVec, LoadTilesAroundRadius);
+			}
+			catch { }
 
 			BlackspotManager.EnsureBlackspotsMarked();
 
@@ -1007,13 +1006,12 @@ namespace Styx.Logic.Pathing
 			var startVec = new Vector3(start.X, start.Y, start.Z);
 			var endVec = new Vector3(destination.X, destination.Y, destination.Z);
 
-			// TEST: Commenté pour isoler crash - EnsureTilesAroundPosition suspect
-			// try
-			// {
-			// 	TripperNavigator.EnsureTilesAroundPosition(mapId, startVec, LoadTilesAroundRadius);
-			// 	TripperNavigator.EnsureTilesAroundPosition(mapId, endVec, LoadTilesAroundRadius);
-			// }
-			// catch { }
+			try
+			{
+				TripperNavigator.EnsureTilesAroundPosition(mapId, startVec, LoadTilesAroundRadius);
+				TripperNavigator.EnsureTilesAroundPosition(mapId, endVec, LoadTilesAroundRadius);
+			}
+			catch { }
 
 			BlackspotManager.EnsureBlackspotsMarked();
 
