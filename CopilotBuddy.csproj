@@ -43,12 +43,7 @@
     </Reference>
   </ItemGroup>
 
-  <!-- Native DLLs that need to be copied to output -->
-  <ItemGroup>
-    <None Include="Lib\Navigation.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
+  <!-- Native Navigation.dll: place manually next to exe. Loaded via [DllImport] P/Invoke. -->
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" />
