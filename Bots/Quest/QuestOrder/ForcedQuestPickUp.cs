@@ -149,7 +149,7 @@ public class ForcedQuestPickUp : ForcedBehavior
                 }))
             })),
             (Composite)new Decorator((CanRunDecoratorDelegate)(context => !(BotPoi.Current.AsObject != (WoWObject)null) ? (double)ForcedQuestPickUp.Me.Location.DistanceSqr(BotPoi.Current.Location) > 6.25 : !BotPoi.Current.AsObject.WithinInteractRange), (Composite)new ActionMoveToPoi()),
-            (Composite)new Decorator((CanRunDecoratorDelegate)(context => BotPoi.Current.AsObject != (WoWObject)null && BotPoi.Current.AsObject.WithinInteractRange), (Composite)new Sequence((ContextChangeHandler)(context => (object)BotPoi.Current.AsObject), new Composite[10]
+            (Composite)new Decorator((CanRunDecoratorDelegate)(context => BotPoi.Current.AsObject != (WoWObject)null && BotPoi.Current.AsObject.WithinInteractRange), (Composite)new Sequence((ContextChangeHandler)(context => (object)BotPoi.Current.AsObject), new Composite[11]
             {
                 // HB 4.3.4: 10 elements in sequence
                 (Composite)new ActionMoveStop(),
@@ -157,6 +157,13 @@ public class ForcedQuestPickUp : ForcedBehavior
                 (Composite)new DecoratorContinue((CanRunDecoratorDelegate)(context => context is WoWUnit), (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context => ((WoWUnit)context).Target()))),
                 (Composite)new TreeSharp.Action((ActionSucceedDelegate)(context => ((WoWObject)context).Interact())),
                 (Composite)new ActionSleep(1500),
+                // DEBUG: log frame visibility after interact + sleep
+                (Composite)new TreeSharp.Action((ActionDelegate)(context =>
+                {
+                    Logging.WriteDebug("[QuestPickUp] After interact: GossipFrame.IsVisible={0}, QuestTitleButton1.IsVisible={1}, QuestFrame.IsVisible={2}",
+                        GossipFrame.Instance.IsVisible, ForcedQuestPickUp.QuestTitleButton.IsVisible, QuestFrame.Instance.IsVisible);
+                    return RunStatus.Success;
+                })),
                 (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.IsGossipOrQuestListVisible), (Composite)new Sequence(new Composite[2]
                 {
                     (Composite)new TreeSharp.Action((ActionDelegate)(context => this.SelectAvailableQuest(context))),
@@ -204,35 +211,83 @@ public class ForcedQuestPickUp : ForcedBehavior
     {
         if (!GossipFrame.Instance.IsVisible && !ForcedQuestPickUp.QuestTitleButton.IsVisible)
             return RunStatus.Success;
-        List<GossipQuestEntry> gossipAvailableQuests = GossipFrame.Instance.AvailableQuests;
-        List<uint> questFrameAvailableQuests = QuestFrame.Instance.AvailableQuests;
+
+        // HB 4.3.4 ForcedQuestPickUp.method_4 pattern:
+        // Two distinct quest list sources in WotLK:
+        //   1) GossipFrame.AvailableQuests  → gossip-based quests (GossipFrame visible)
+        //   2) QuestFrame.AvailableQuests   → native multi-quest frame (QuestTitleButton1/2 visible, no GossipFrame)
+        // Both paths end with GossipFrame.Instance.SelectAvailableQuest(index) which calls
+        // SelectAvailableQuest(N) / SelectGossipAvailableQuest(N) — works for both frames.
+        var gossipQuests = GossipFrame.Instance.AvailableQuests;
+        var nativeQuests = QuestFrame.Instance.AvailableQuests;
+        // WotLK 3.3.5a: GossipQuestEntry.Id from memory is unreliable (wrong struct layout).
+        // GetGossipAvailableQuests() returns 5 values per quest: title, level, isTrivial, isRepeatable, isLegendary.
+        List<string> luaDump = gossipQuests.Count > 0 ? Lua.GetReturnValues("return GetGossipAvailableQuests()") : null;
+
         int questIndex = -1;
-        if (gossipAvailableQuests.Count > 0)
+        if (gossipQuests.Count > 0)
         {
-            for (int index2 = 0; index2 < gossipAvailableQuests.Count; ++index2)
+            // Primary: match by quest ID from memory struct.
+            // Cast both sides to long (HB 4.3.4 / 3.3.5a pattern) to avoid sign extension issues.
+            for (int i = 0; i < gossipQuests.Count; i++)
             {
-                if ((long)gossipAvailableQuests[index2].Id == (long)this.QuestId)
+                if ((long)gossipQuests[i].Id == (long)this.QuestId)
                 {
-                    questIndex = index2;
+                    questIndex = i;
                     break;
+                }
+            }
+
+            // Fallback: match by Lua name from GetGossipAvailableQuests().
+            // WotLK 3.3.5a returns 5 values per quest: title, level, isTrivial, isRepeatable, isLegendary.
+            // The memory struct (GossipQuestEntry.Id) is unreliable in 3.3.5a — Lua is authoritative.
+            if (questIndex == -1 && luaDump != null && luaDump.Count >= 5)
+            {
+                // Try to match our quest by name (works when profile locale = client locale)
+                const int valuesPerQuest = 5;
+                for (int k = 0; k < luaDump.Count / valuesPerQuest; k++)
+                {
+                    if (string.Equals(luaDump[k * valuesPerQuest], this.QuestName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        questIndex = k;
+                        Logging.WriteDebug("[QuestPickUp] Found quest \"{0}\" via Lua name match at gossip index {1}.", this.QuestName, k);
+                        break;
+                    }
+                }
+
+                // Last resort: if there is exactly ONE gossip quest available, select it.
+                // Safe assumption — if there's only one quest to accept and we're here to accept it, it's the right one.
+                if (questIndex == -1 && gossipQuests.Count == 1)
+                {
+                    questIndex = 0;
+                    Logging.WriteDebug("[QuestPickUp] Single gossip quest available — selecting index 0 (quest id={0}, lua name='{1}').",
+                        gossipQuests[0].Id, luaDump.Count >= 1 ? luaDump[0] : "?");
                 }
             }
         }
         else
         {
-            if (questFrameAvailableQuests.Count <= 0)
+            // Native multi-quest frame (QuestTitleButton1/2/etc.) — no GossipFrame open.
+            if (nativeQuests.Count <= 0)
                 return RunStatus.Success;
-            for (int index3 = 0; index3 < questFrameAvailableQuests.Count; ++index3)
+
+            for (int j = 0; j < nativeQuests.Count; j++)
             {
-                if ((int)questFrameAvailableQuests[index3] == (int)this.QuestId)
+                if (nativeQuests[j] == this.QuestId)
                 {
-                    questIndex = index3;
+                    questIndex = j;
                     break;
                 }
             }
         }
+
         if (questIndex == -1)
+        {
+            Logging.WriteDebug("[QuestPickUp] Quest \"{0}\" (id={1}) not found in gossip or native quest list (gossip={2}, native={3}).",
+                this.QuestName, this.QuestId, gossipQuests.Count, nativeQuests.Count);
             return RunStatus.Failure;
+        }
+
         GossipFrame.Instance.SelectAvailableQuest(questIndex);
         StyxWoW.Sleep(500);
         return RunStatus.Running;

@@ -194,6 +194,41 @@ namespace Styx.WoWInternals.WoWObjects
             }
         }
         
+        /// <summary>
+        /// Returns the zone-level area ID of the player's hearthstone binding point.
+        /// HB 4.3.4: ReadRelative(Offsets[5013]) — returns zone-level AreaTable ID.
+        /// 3.3.5a: GetHomebindAreaId() @ 0x6CEF10 returns the subzone area ID.
+        ///         We walk up via AreaTable.ParentAreaId to reach the top-level zone ID,
+        ///         matching what HB 4.3.4 returned and what ZoneId uses.
+        /// </summary>
+        public uint HearthstoneAreaId
+        {
+            get
+            {
+                ExecutorRand executor = ObjectManager.Executor;
+                if (executor == null) return 0U;
+                lock (executor.AssemblyLock)
+                {
+                    executor.Clear();
+                    executor.AddLine("call 0x6CEF10");  // GetHomebindAreaId — returns AreaTable subzone ID
+                    executor.AddLine("retn");
+                    executor.Execute();
+                }
+                uint areaId = executor.Memory.Read<uint>(executor.ReturnPointer);
+
+                // Walk up ParentAreaId until we reach a zone-level entry (ParentAreaId == 0).
+                // Example: Razor Hill (362) → parent Durotar (14) → parent 0 → return 14.
+                for (int i = 0; i < 8; i++)
+                {
+                    var entry = DBC.AreaTable.GetAreaById(areaId);
+                    if (entry == null || entry.ParentAreaId == 0)
+                        break;
+                    areaId = entry.ParentAreaId;
+                }
+                return areaId;
+            }
+        }
+
         private Map? _currentMap;
         private uint _currentMapCachedId;
         

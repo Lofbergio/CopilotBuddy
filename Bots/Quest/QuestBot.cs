@@ -21,6 +21,7 @@ using Styx.Logic.Pathing;
 using Styx.Logic.POI;
 using Styx.Logic.Profiles;
 using Styx.Logic.Profiles.Quest;
+using Styx.WoWInternals;
 using Styx.WoWInternals.World;
 using Styx.WoWInternals.WoWObjects;
 using System;
@@ -76,6 +77,14 @@ public class QuestBot : BotBase
     {
         if (ProfileManager.CurrentOuterProfile == (Profile)null)
             throw new HonorbuddyUnableToStartException("You haven't loaded a profile.");
+        // Profile loaded, but no sub-profile covers the current character level.
+        // HB 3.3.5a pattern: explicit abort with level info rather than NPE.
+        if (ProfileManager.CurrentProfile == (Profile)null)
+        {
+            int level = ObjectManager.Me?.Level ?? 0;
+            throw new HonorbuddyUnableToStartException(
+                $"No sub-profile found for your level ({level}). Load a profile that covers level {level}.");
+        }
         if (ProfileManager.CurrentProfile.QuestOrder.Count <= 0)
             throw new HonorbuddyUnableToStartException("Can not start quest bot - this profile does not contain a quest order.");
         QuestState.Instance.InitializeFromProfile(ProfileManager.CurrentProfile);

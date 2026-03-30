@@ -116,23 +116,26 @@ namespace Styx.Logic.Inventory.Frames.Gossip
             get
             {
                 List<GossipQuestEntry> list = new List<GossipQuestEntry>();
-                using (new FrameLock())
-                {
-                    if (!base.IsVisible)
-                        return list;
+                if (!base.IsVisible)
+                    return list;
 
-                    for (int i = 0; i < 10; i++)
+                // CGQuestInfo_C__GetAvailableQuestInfoFromIndex returns non-null for ALL indices 0-9
+                // even when there are fewer real quests (pre-allocated slots). Cap the loop to the
+                // actual quest count from Lua to avoid reading garbage entries.
+                int count = Lua.GetReturnVal<int>("return GetNumGossipAvailableQuests()", 0U);
+                int limit = Math.Min(count, 10);
+
+                for (int i = 0; i < limit; i++)
+                {
+                    try
                     {
-                        try
-                        {
-                            GossipQuestEntry entry = GetAvailableQuestInfo(i);
-                            if (entry != null)
-                                list.Add(entry);
-                        }
-                        catch
-                        {
-                            break;
-                        }
+                        GossipQuestEntry entry = GetAvailableQuestInfo(i);
+                        if (entry != null)
+                            list.Add(entry);
+                    }
+                    catch
+                    {
+                        break;
                     }
                 }
                 return list;
