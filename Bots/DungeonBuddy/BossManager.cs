@@ -84,6 +84,32 @@ namespace Bots.DungeonBuddy
         }
 
         /// <summary>
+        /// Marque un boss comme tué (par nom, utilisé par l'UI)
+        /// </summary>
+        public static void MarkBossDead(string name)
+        {
+            var boss = _bosses.FirstOrDefault(b => b.Name == name);
+            if (boss != null)
+            {
+                boss.IsDead = true;
+                _killedBossIds.Add(boss.EntryId);
+            }
+        }
+
+        /// <summary>
+        /// Remet un boss à vivant (par nom, utilisé par l'UI)
+        /// </summary>
+        public static void ResetBoss(string name)
+        {
+            var boss = _bosses.FirstOrDefault(b => b.Name == name);
+            if (boss != null)
+            {
+                boss.IsDead = false;
+                _killedBossIds.Remove(boss.EntryId);
+            }
+        }
+
+        /// <summary>
         /// Vérifie si tous les boss obligatoires sont morts
         /// </summary>
         public static bool AreAllRequiredBossesDead()
