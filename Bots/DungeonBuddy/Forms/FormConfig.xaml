@@ -60,7 +60,7 @@
                         <Button x:Name="button1" Content="CurrentTarget Info" Click="button1_Click"/>
                         <Button x:Name="dbgButton2" Content="Navigation" Click="dbgButton2_Click" Margin="6,0,0,0"/>
                         <Button x:Name="debugBtn3" Content="Show Path" Click="debugBtn3_Click" Margin="6,0,0,0"/>
-                        <Button x:Name="RecompileScriptsButton" Content="Show Path" Click="RecompileScriptsButton_Click" Margin="6,0,0,0"/>
+                        <Button x:Name="RecompileScriptsButton" Content="Reload Scripts" Click="RecompileScriptsButton_Click" Margin="6,0,0,0"/>
                     </StackPanel>
                     <TabControl x:Name="tabControl1" Grid.Row="1">
                         <TabItem x:Name="tabPage1" Header="Dungeon List">

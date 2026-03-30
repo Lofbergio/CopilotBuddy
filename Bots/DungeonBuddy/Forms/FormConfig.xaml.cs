@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -109,8 +110,14 @@ namespace Bots.DungeonBuddy.Forms
             if (DungeonBuddySettings.Instance.QueueType == QueueType.Specific || DungeonBuddySettings.Instance.QueueType == QueueType.SoloFarm)
             {
                 ToggleControlForSelection(true);
-                var all = Styx.WoWInternals.DBC.LfgDungeons.All.Values;
-                var dungeons = (cbShowAll.IsChecked == true) ? all : all.Where(d => !d.IsRandomDungeon);
+                // WotLK LfgDungeons.dbc TypeId: 1=Dungeon, 2=Raid, 4=Zone, 6=Random
+                // Only show actual dungeons and random entries — zones/raids/holidays excluded
+                var all = Styx.WoWInternals.DBC.LfgDungeons.All.Values
+                    .Where(d => (d.TypeId == 1 || d.TypeId == 6) && !d.IsHolidayEvent);
+                var playerLevel = StyxWoW.Me.Level;
+                var dungeons = (cbShowAll.IsChecked == true)
+                    ? all
+                    : all.Where(d => d.MinLevel <= playerLevel && d.MaxLevel >= playerLevel);
                 GenerateTreeView(twDungeonSelection, false, dungeons);
                 GenerateTreeView(twDebug, true, all);
             }
@@ -244,7 +251,11 @@ namespace Bots.DungeonBuddy.Forms
 
         private void loadProfile_click(object sender, RoutedEventArgs e)
         {
-            var ofd = new System.Windows.Forms.OpenFileDialog();
+            var ofd = new System.Windows.Forms.OpenFileDialog
+            {
+                Filter = "Profile files (*.xml)|*.xml|All files (*.*)|*.*",
+                InitialDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Default Profiles", "DungeonBuddy")
+            };
             if (ofd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
             {
                 FormConfig.LoadProfile(ofd.FileName);
@@ -253,16 +264,8 @@ namespace Bots.DungeonBuddy.Forms
 
         public static void LoadProfile(string path)
         {
-            try
-            {
-                // Use the central ProfileManager to load the profile
-                Styx.Logic.Profiles.ProfileManager.LoadNew(path);
-                Logging.Write("Loaded profile: {0}", new object[] { path });
-            }
-            catch (Exception ex)
-            {
-                Logging.Write("Failed to load profile '{0}': {1}", new object[] { path, ex.Message });
-            }
+            // HB 4.3.4: Profile.Load(path) → ProfileManager.Load(profile)
+            Bots.DungeonBuddy.Profiles.ProfileManager.LoadFromPath(path);
         }
 
         private void cbShowAll_CheckedChanged(object sender, RoutedEventArgs e)
@@ -286,7 +289,7 @@ namespace Bots.DungeonBuddy.Forms
 
         private void RecompileScriptsButton_Click(object sender, RoutedEventArgs e)
         {
-            Logging.Write("RecompileScripts pressed");
+            DungeonManager.ReloadDungeons();
         }
 
         private void btnToggleMovement_Click(object sender, RoutedEventArgs e)
@@ -298,7 +301,11 @@ namespace Bots.DungeonBuddy.Forms
 
         private void twBossTree_AfterCheck(object sender, wf.TreeViewEventArgs e)
         {
-            // mirror original hook; actual handling elsewhere
+            // HB 4.3.4: BossManager.BossEncounters.FirstOrDefault(b => b.Name == node.Text) → Reset/MarkAsDead
+            if (e.Node.Checked)
+                BossManager.ResetBoss(e.Node.Text);
+            else
+                BossManager.MarkBossDead(e.Node.Text);
         }
     }
 }
