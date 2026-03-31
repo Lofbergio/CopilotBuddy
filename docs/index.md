@@ -1,74 +1,78 @@
-# CopilotBuddy Documentation
+﻿# CopilotBuddy Documentation
 
-Welcome to the **CopilotBuddy** documentation - a WoW Bot Framework for **World of Warcraft 3.3.5a (WotLK)**.
+Bienvenue dans la documentation **CopilotBuddy** (WoW Bot Framework pour World of Warcraft 3.3.5a).
 
-!!! info "WotLK 3.3.5a Build 12340"
-    This documentation is specifically for **WotLK 3.3.5a**. While the API is based on HonorBuddy 4.3.4 (Cataclysm), many adaptations have been made for WotLK compatibility.
+!!! note "Structure actuelle"
+    Cette documentation est construite à partir des fichiers de `docs/` et de `mkdocs.yml`. La page d'accueil `index.md` est utilisée par le site et ne doit pas être supprimée sans mise à jour de la navigation.
 
-## Quick Links
+## Liens rapides
 
-- **[API Reference](api/overview.md)** - Complete API documentation
-- **[WotLK Compatibility](compatibility/overview.md)** - WotLK-specific information and limitations
-- **[Creating Combat Routines](guides/creating-routines.md)** - Guide to building custom combat routines
-- **[Changelog](about/changelog.md)** - Version history and updates
+- **[API Reference](api/overview.md)** - Documentation API (contient routes actuelles)
+- **[API Public (Auto-generated)](api/auto/README.md)** - Les types publics automatiquement extraits du code
+- **[WotLK Compatibility](compatibility/overview.md)** - Infos et limitations WotLK
+- **[Création de routines de combat](guides/creating-routines.md)** - Guide de création de routines
+- **[Changelog](about/changelog.md)** - Historique des versions
 
-## Key Features
+## Fonctionnalités clés
 
-- ✅ **WotLK 3.3.5a Compatible** - Tested on build 12340
-- ✅ **Combat Routine System** - Create custom combat logic with TreeSharp
-- ✅ **Memory Reading** - Direct WoW process memory access
-- ✅ **Lua Integration** - Execute Lua code and read game state
-- ✅ **Navigation** - Recast-based pathfinding and movement
-- ✅ **Bot Framework** - Quest, grind, and combat bot implementations
+- ✅ Compatible WotLK 3.3.5a (build 12340)
+- ✅ Système de combat avec TreeSharp (behavior tree)
+- ✅ Lecture directe de mémoire WoW (GreenMagic + Styx.WoWInternals)
+- ✅ Intégration Lua (`Lua.DoString`, `GetReturnVal`, etc.)
+- ✅ Navigation et pathfinding via Tripper
+- ✅ Bot framework (quest, grind, gather, dungeon…)
 
-## Getting Started
+## Comment utiliser
 
 ### Installation
 
-1. Extract CopilotBuddy to a folder
-2. Launch `CopilotBuddy.exe`
-3. Attach to WoW 3.3.5a process
-4. Select a bot and combat routine
+1. Extraire dans un dossier, par exemple `C:\CopilotBuddy`
+2. Exécuter `CopilotBuddy.exe`
+3. Attacher au processus WoW 3.3.5a
+4. Sélectionner un bot et une routine de combat
 
-### System Requirements
+### Prérequis
 
-- Windows 7+ (64-bit)
-- .NET 10.0 Runtime
-- World of Warcraft 3.3.5a (Build 12340)
+- Windows 7+ 64-bit
+- .NET Runtime (10.0 conseillé)
+- WoW 3.3.5a build 12340
 
-## Architecture Overview
+## Structure du projet (2026)
 
+```text
+CopilotBuddy/
+├── Styx/                      # noyau bot + WoW interactions
+│   ├── WoWInternals/          # descripteurs WoW, cache, objet, etc.
+│   │   └── WoWObjects/        # WoWItem, WoWUnit, LocalPlayer, etc.
+│   ├── Logic/                 # comportement des bots
+│   ├── Combat/                # management des sorts, cibles
+│   └── ...
+├── TreeSharp/                 # moteur behavior tree
+├── Tripper/                   # pathfinding + navigation
+├── Bots/                      # bots (Grind, Gather, Dungeon, Quest...)
+├── Buddy/                     # coroutines, actions, decorators
+├── docs/                      # documentation MKDocs
+├── mkdocs.yml                 # config site docs (nav)
+└── ...
 ```
-CopilotBuddy
-├── Styx/                    # Core bot framework
-│   ├── WoWInternals/       # WoW process interaction
-│   │   ├── WoWObjects/     # Game object representations
-│   │   ├── Memory/         # Memory reading/writing
-│   │   └── Lua/            # Lua execution
-│   └── Combat/             # Combat routine system
-├── TreeSharp/              # Behavior tree engine
-├── Tripper/                # Navigation & pathfinding
-├── Bots/                   # Bot implementations
-└── Routines/               # Combat routines (runtime compiled)
-```
 
-## Recent Changes
+## Mise à jour requise par rapport aux fichiers obsolètes
 
-### v1.0.0 (Current)
-- ✅ **LocalPlayer.Role** - Implemented with `GetRaidRosterInfo()` for WotLK
-- ✅ **IsGhost Property** - Added to WoWPlayer for ghost detection
-- ✅ **Error #134 Fix** - Resolved crash from non-existent LFG APIs
-- ✅ **Monk Removal** - Removed Monk class references (doesn't exist in WotLK)
-- ✅ **ConfigurationWindow** - Pure WinForms settings GUI
+- Si tu supprimes `docs/index.md`, mettre à jour `mkdocs.yml` :
+  - remplacer `Home: index.md` par un autre fichier existant (ex. `api/overview.md`)
+- Vérifier que les fichiers listés dans `nav` existent bien (ex: `api/combat/wowspell.md`, `compatibility/known-issues.md`).
 
-## Support
+## Notifications importantes
 
-Found a bug? Have questions?
+- Certaines pages de l’ancienne documentation peuvent pointer vers des chemins supprimés (`api/core/memory.md` => `api/greenmagic/memory.md` si besoin).
+- Utilise `git status` et `git diff` sur `docs/` pour voir ce qui a été renommé ou déplacé.
 
-- Create an issue on GitHub
-- Check the [Known Issues](compatibility/known-issues.md) page
-- Review the [API Differences](compatibility/api-differences.md) for WotLK-specific behavior
+## Support & bugs
+
+- Ouvrir un issue GitHub
+- Page `[Known Issues](compatibility/known-issues.md)`
+- Page `[API Differences](compatibility/api-differences.md)`
 
 ---
 
-**Note**: This bot is for educational purposes. Use at your own risk.
+**Note**: usage de ce bot à vos risques et périls ; projet à but éducatif.
