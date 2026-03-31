@@ -55,40 +55,13 @@ plugins:
 nav:
   - Home: index.md
   - API Reference:
-      - Overview: api/overview.md
-      - Core Systems:
-          - Memory: api/core/memory.md
-      - Styx.WoWInternals:
-          - ObjectManager: api/styx/objectmanager.md
-          - Lua: api/styx/lua.md
-      - WoW Objects:
-          - WoWObject: api/wowobjects/wowobject.md
-          - WoWUnit: api/wowobjects/wowunit.md
-          - WoWPlayer: api/wowobjects/wowplayer.md
-          - LocalPlayer: api/wowobjects/localplayer.md
-          - WoWItem: api/wowobjects/wowitem.md
-          - WoWGameObject: api/wowobjects/wowgameobject.md
-      - Combat:
-          - CustomClass: api/combat/customclass.md
-          - SpellManager: api/combat/spellmanager.md
-          - WoWSpell: api/combat/wowspell.md
-          - WoWAura: api/combat/wowaura.md
-      - Pathing:
-          - Navigator: api/pathing/navigator.md
-      - Movement:
-          - WoWMovement: api/movement/wowmovement.md
-      - Logic:
-          - Blacklist: api/logic/blacklist.md
-          - Targeting: api/logic/targeting.md
-          - BotPoi (POI): api/logic/botpoi.md
-      - Inventory:
-          - WoWBag: api/inventory/wowbag.md
-      - TreeSharp:
-          - Overview: api/treesharp/overview.md
-  - WotLK Compatibility:
-      - Overview: compatibility/overview.md
-      - API Differences: compatibility/api-differences.md
-  - Tools:
-      - Profile Generator: profile-generator.md
-  - About:
-      - Setup Guide: SETUP.md
+      - Public API (Auto): api/auto/README.md
+      - Overview Outils: api/public_api_index.md
+  - Guides:
+      - Création de routines: guides/creating-routines.md
+      - Lecture mémoire: guides/memory-reading.md
+  - Outils:
+      - Générateur de profils: profile-generator.md
+  - À propos:
+      - Guide d'installation: SETUP.md
+      - Changelog: about/changelog.md

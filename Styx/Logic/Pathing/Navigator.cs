@@ -1010,10 +1010,10 @@ namespace Styx.Logic.Pathing
 			return CanNavigateFully(me.Location, destination);
 		}
 
-		public static WoWPoint[]? GeneratePath(WoWPoint start, WoWPoint destination)
+		public static WoWPoint[] GeneratePath(WoWPoint start, WoWPoint destination)
 		{
 			if (!IsNavigatorLoaded)
-				return null;
+				return Array.Empty<WoWPoint>();
 
 			uint mapId = (uint)(GetCurrentMapId());
 			var startVec = new Vector3(start.X, start.Y, start.Z);
@@ -1040,7 +1040,7 @@ namespace Styx.Logic.Pathing
 				return path;
 			}
 
-			return null;
+			return Array.Empty<WoWPoint>();
 		}
 
 		public static bool IsPathSafe(IList<WoWPoint> path)

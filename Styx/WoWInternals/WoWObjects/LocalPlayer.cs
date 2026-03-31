@@ -195,11 +195,8 @@ namespace Styx.WoWInternals.WoWObjects
         }
         
         /// <summary>
-        /// Returns the zone-level area ID of the player's hearthstone binding point.
-        /// HB 4.3.4: ReadRelative(Offsets[5013]) — returns zone-level AreaTable ID.
-        /// 3.3.5a: GetHomebindAreaId() @ 0x6CEF10 returns the subzone area ID.
-        ///         We walk up via AreaTable.ParentAreaId to reach the top-level zone ID,
-        ///         matching what HB 4.3.4 returned and what ZoneId uses.
+        /// Returns the area ID of the player's hearthstone binding point.
+        /// HB 4.3.4: ReadRelative(Offsets[5013]). 3.3.5a: GetHomebindAreaId() @ 0x6CEF10.
         /// </summary>
         public uint HearthstoneAreaId
         {
@@ -210,22 +207,11 @@ namespace Styx.WoWInternals.WoWObjects
                 lock (executor.AssemblyLock)
                 {
                     executor.Clear();
-                    executor.AddLine("call 0x6CEF10");  // GetHomebindAreaId — returns AreaTable subzone ID
+                    executor.AddLine("call 0x6CEF10");  // GetHomebindAreaId
                     executor.AddLine("retn");
                     executor.Execute();
                 }
-                uint areaId = executor.Memory.Read<uint>(executor.ReturnPointer);
-
-                // Walk up ParentAreaId until we reach a zone-level entry (ParentAreaId == 0).
-                // Example: Razor Hill (362) → parent Durotar (14) → parent 0 → return 14.
-                for (int i = 0; i < 8; i++)
-                {
-                    var entry = DBC.AreaTable.GetAreaById(areaId);
-                    if (entry == null || entry.ParentAreaId == 0)
-                        break;
-                    areaId = entry.ParentAreaId;
-                }
-                return areaId;
+                return executor.Memory.Read<uint>(executor.ReturnPointer);
             }
         }
 
@@ -967,27 +953,7 @@ namespace Styx.WoWInternals.WoWObjects
         }
 
         /// <summary>
-        /// FEAT-18: Gets the hearth bind zone name via Lua.
-        /// Note: HB 4.3.4 reads a memory offset; no equivalent exists in HB 3.3.5a.
-        /// Returns the localized zone name string (e.g. "Stormwind City").
-        /// </summary>
-        public string HearthstoneBindLocation
-        {
-            get
-            {
-                try
-                {
-                    var results = Lua.GetReturnValues("return GetBindLocation()");
-                    if (results != null && results.Count > 0 && !string.IsNullOrEmpty(results[0]))
-                        return results[0];
-                }
-                catch { }
-                return string.Empty;
-            }
-        }
-
-        /// <summary>
-        /// FEAT-18: Gets the raw reputation value with a faction using GetFactionStanding (HB 4.3.4 pattern).
+        /// Gets the raw reputation value with a faction using GetFactionStanding (HB 4.3.4 pattern).
         /// </summary>
         public int GetReputationWith(uint factionId)
         {
