@@ -225,19 +225,13 @@ namespace Bots.Grind
                         )
                     ),
                     // In combat: Heal, CombatBuff, Combat
-                    // combat branch: only run when we have a valid LIVE current target.
-                    // Without this guard, StyxWoW.Me.Combat stays true ~5s after the kill while
-                    // Targeting.Instance.FirstUnit already points to the next path mob → CC calls
-                    // Target() on it → LootBehavior (priority 2) never runs during the combat flag
-                    // decay window. Requiring a live CurrentTarget ensures we fall through to loot
-                    // the corpse before pulling the next mob.
+                    // combat branch: only run when we have a valid first target
                 new Decorator(
                         ctx =>
                         {
                             bool combat = StyxWoW.Me.Combat || (StyxWoW.Me.GotAlivePet && StyxWoW.Me.Pet.Combat);
-                            bool hasLiveTarget = StyxWoW.Me.CurrentTarget != null && !StyxWoW.Me.CurrentTarget.Dead;
                             return !StyxWoW.Me.Mounted && combat &&
-                                   Targeting.Instance.FirstUnit != null && hasLiveTarget;
+                                   Targeting.Instance.FirstUnit != null;
                         },
                         new PrioritySelector(
                             new Decorator(
