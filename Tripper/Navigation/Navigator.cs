@@ -240,17 +240,20 @@ namespace Tripper.Navigation
 
         /// <summary>
         /// Sets default area costs in the native DLL filter.
-        /// Matches HB 6.2.3 WowNavigator.SetDefaultQueryFilterCosts pattern.
-        /// Road=1.0 (preferred), Ground=1.66, Water=3.33, etc.
+        /// HB 6.2.3 uses Road=1.0, Ground=1.66 with 4×4 sub-tiles (133y).
+        /// Our mesh uses 1×1 tiles (533y) which preserves mountain shortcuts that
+        /// HB's tile-boundary splitting would eliminate. To compensate, the native
+        /// DLL applies a slope penalty in getCost() that penalizes elevation changes,
+        /// making mountain routes more expensive than flat valley roads.
         /// </summary>
         private void SetDefaultAreaCosts()
         {
             try
             {
-                // HB 6.2.3 SetDefaultQueryFilterCosts — exact values from decompile
-                // Lower cost = preferred path. Road=1.0 is natural preference without detour-causing suroptimisation.
+                // HB 6.2.3 default area costs (unchanged).
+                // Mountain shortcuts are handled by the native slope penalty, not by area costs.
                 NativeMethods.SetAreaCost((uint)AreaType.Ground, 1.66f);
-                NativeMethods.SetAreaCost((uint)AreaType.Road, 1.0f);             // HB 6.2.3: 1.0 (was 0.5 — caused road detours)
+                NativeMethods.SetAreaCost((uint)AreaType.Road, 1.0f);
                 NativeMethods.SetAreaCost((uint)AreaType.Water, 3.33f);
                 NativeMethods.SetAreaCost((uint)AreaType.Lava, 55.0f);
                 NativeMethods.SetAreaCost((uint)AreaType.Fall, 1.7f);
@@ -263,11 +266,16 @@ namespace Tripper.Navigation
                 NativeMethods.SetAreaCost((uint)AreaType.Blocked, 100.0f);
                 NativeMethods.SetAreaCost((uint)AreaType.InteractUnit, 1.66f);
                 NativeMethods.SetAreaCost((uint)AreaType.InteractObject, 1.66f);
-                NativeMethods.SetAreaCost((uint)AreaType.Blackspot, 60.0f);       // HB 6.2.3: blackspot penalty
-                NativeMethods.SetAreaCost((uint)AreaType.Horde, 1.66f);           // HB 6.2.3: faction area
-                NativeMethods.SetAreaCost((uint)AreaType.Alliance, 1.66f);        // HB 6.2.3: faction area
+                NativeMethods.SetAreaCost((uint)AreaType.Blackspot, 60.0f);
+                NativeMethods.SetAreaCost((uint)AreaType.Horde, 1.66f);
+                NativeMethods.SetAreaCost((uint)AreaType.Alliance, 1.66f);
                 
-                Log("Default area costs set (Road=1.0, Ground=1.66)");
+                // Slope penalty: 5.0 extra cost per unit of elevation change.
+                // Compensates for 533y tiles keeping mountain shortcuts that HB's
+                // 133y tiles would structurally eliminate.
+                NativeMethods.SetSlopePenalty(5.0f);
+                
+                Log("Default area costs set (Road=1.0, Ground=1.66, SlopePenalty=5.0)");
             }
             catch (Exception ex)
             {
