@@ -38,13 +38,12 @@ namespace Styx.Logic.Pathing
 		private static bool _suppressDriftCheck;
 		private static int _suppressDriftCheckIndex;
 
-		// Elevator sequence tracking (HB 6.2.3: once method_18 enters method_20, the elevator
-		// handler keeps being called every tick via the path index — no re-checking player
-		// position vs offmesh start). This flag locks the bot into elevator mode.
-		private static bool _inElevatorSequence;
-		private static WoWPoint _elevatorTarget = WoWPoint.Zero;
-		// HB 4.3.4 MeshNavigator.bool_0: state flag used by elevator off-mesh logic
-		private static bool _hbElevatorFlag;
+		// HB 6.2.3 elevator motion detection (bool_2, woWPoint_0, waitTimer_2):
+		// Tracks whether the Transport GO is currently moving by comparing position every 400ms.
+		// Prevents exiting elevator while it's still in motion.
+		private static bool _elevatorMoving;
+		private static WoWPoint _lastElevatorPos = WoWPoint.Zero;
+		private static WaitTimer _elevatorMotionTimer = new WaitTimer(TimeSpan.FromMilliseconds(400));
 		// Track whether the current path is partial (navmesh doesn't fully connect start→dest).
 		// HB 6.2.3 method_24: returns MoveResult.Failed when reaching end of a partial path,
 		// instead of ReachedDestination, so the behavior tree knows the bot isn't at the goal.
@@ -335,8 +334,6 @@ namespace Styx.Logic.Pathing
 			_currentPolyTypes = null;
 			_currentAbilityFlags = null;
 			_ridingElevator = false;
-			_inElevatorSequence = false;
-			_elevatorTarget = WoWPoint.Zero;
 			_unstickAttempts = 0;
 			_doorCenterTarget = WoWPoint.Zero;
 			_pathRegenThrottle = new WaitTimer(TimeSpan.FromMilliseconds(500)); // Reset so next path gen is immediate
@@ -471,11 +468,8 @@ namespace Styx.Logic.Pathing
 						// Ignore
 					}
 
-					// Clear stale elevator state: if bot died during elevator ride, the sequence
-					// flag persists and blocks all subsequent navigation (e.g., corpse run).
-					// Resetting here ensures a fresh start when destination changes.
-					_inElevatorSequence = false;
-					_elevatorTarget = WoWPoint.Zero;
+					// Clear stale elevator state: if bot died during elevator ride,
+					// reset flags to ensure a fresh start when destination changes.
 					_ridingElevator = false;
 				}
 
@@ -713,31 +707,35 @@ namespace Styx.Logic.Pathing
 			if (_currentPath.Count > 0 && _currentPathIndex < _currentPath.Count)
 			{
 
-				// HB 6.2.3: Once in elevator mode (method_20), keep calling the elevator handler
-				// every tick regardless of player position relative to offmesh start.
-				// This prevents the offmesh precision check from pulling the bot back to the gate.
-				if (_inElevatorSequence)
+				// HB 6.2.3 MovePath → method_18: if currently on an offmesh segment
+				// (Flags[Index-1] & 4), re-dispatch the offmesh handler every tick.
+				// This replaces the old _inElevatorSequence lock with HB's exact pattern.
+				if (_currentPathIndex > 0 && _currentFlags != null
+				    && (_currentPathIndex - 1) < _currentFlags.Length
+				    && (_currentFlags[_currentPathIndex - 1] & TripperNav.StraightPathFlags.OffMeshConnection) != 0)
 				{
-					var elevResult = HandleElevator(me, _elevatorTarget);
-					if (elevResult != null)
-						return elevResult.Value;
-					// HandleElevator returned null = ride complete.
-					// Force path regeneration from current position: the old path's
-					// remaining waypoints were rooted at the offmesh endpoint, which may
-					// be offset from the actual elevator exit (mmap-extractor tiles).
-					_inElevatorSequence = false;
-					_elevatorTarget = WoWPoint.Zero;
-					_stuckCheckTimer.Reset();
-					_unstickAttempts = 0;
-					try { StuckHandler.Reset(); } catch { }
-					_currentPath.Clear();
-					_currentPathIndex = 0;
-					_suppressDriftCheck = false;
-					_suppressDriftCheckIndex = 0;
-					_currentFlags = null;
-					_currentPolyTypes = null;
-					_currentAbilityFlags = null;
-					return MoveResult.Moved;
+					var offMeshAreaType = (_currentPolyTypes != null && (_currentPathIndex - 1) < _currentPolyTypes.Length)
+						? _currentPolyTypes[_currentPathIndex - 1]
+						: TripperNav.AreaType.Ground;
+
+					// HB 6.2.3 method_18: if player reached offmesh endpoint AND not elevator → advance
+					WoWPoint offMeshEndPt = _currentPath[_currentPathIndex];
+					WoWPoint offMeshStartPt = _currentPath[_currentPathIndex - 1];
+					if (IsAtPoint(me.Location, offMeshEndPt) && offMeshAreaType != TripperNav.AreaType.Elevator)
+					{
+						_currentPathIndex++;
+						_ridingElevator = false;
+						if (_currentPathIndex >= _currentPath.Count)
+						{
+							if (_isPartialPath) return MoveResult.Failed;
+							return MoveResult.ReachedDestination;
+						}
+						return MoveResult.Moved;
+					}
+
+					// Dispatch offmesh handler based on area type (HB 6.2.3 method_18 switch)
+					var offResult = DispatchOffMesh(me, offMeshEndPt, offMeshStartPt, offMeshAreaType);
+					return offResult;
 				}
 
 				// Door handling (HB 6.2.3 method_7): auto-detect and interact with closed doors on path
@@ -747,11 +745,12 @@ namespace Styx.Logic.Pathing
 
 				// Stuck detection — integrated directly in MoveTo() to cover ALL callers
 				// (ActionMoveToPoi, corpse run, loot, hotspot, plugins, etc.)
-				// Suppress stuck detection when at an off-mesh connection point (elevator, portal):
+				// Suppress stuck detection when on an off-mesh connection segment (elevator, portal):
 				// the bot may be intentionally stopped, waiting for elevator to arrive.
-				bool isAtOffMesh = _currentFlags != null && _currentPathIndex < _currentFlags.Length
-					&& (_currentFlags[_currentPathIndex] & TripperNav.StraightPathFlags.OffMeshConnection) != 0;
-				if (_stuckCheckTimer.IsFinished && !isAtOffMesh && !_ridingElevator && !_inElevatorSequence)
+				bool isAtOffMesh = _currentFlags != null && _currentPathIndex > 0
+					&& (_currentPathIndex - 1) < _currentFlags.Length
+					&& (_currentFlags[_currentPathIndex - 1] & TripperNav.StraightPathFlags.OffMeshConnection) != 0;
+				if (_stuckCheckTimer.IsFinished && !isAtOffMesh && !_ridingElevator)
 				{
 					_stuckCheckTimer.Reset();
 					if (StuckHandler.IsStuck())
@@ -785,7 +784,7 @@ namespace Styx.Logic.Pathing
 
 				// Path validity check (P6.7): if player has drifted far from the current path segment
 				// (knockback, teleport, fear, etc.), force path regeneration instead of following stale path
-				if (_currentPathIndex > 0 && !_ridingElevator && !_inElevatorSequence
+				if (_currentPathIndex > 0 && !_ridingElevator
 				    && !(_suppressDriftCheck && _currentPathIndex == _suppressDriftCheckIndex)
 				    // GAP 2a — HB 6.2.3 method_15 line 1: skip drift check while falling
 				    && !me.IsFalling
@@ -834,9 +833,10 @@ namespace Styx.Logic.Pathing
 					}
 				}
 				
-				// HB 4.3.4 method_5 / HB 6.2.3 method_24: while-loop to advance through
-				// ALL reached waypoints in a single tick, preventing micro-pauses between nodes.
+				// HB 6.2.3 method_24: while-loop to advance through ALL reached waypoints.
 				// Uses 2D distance² ≤ precision² AND |ΔZ| < 4.5 (HB 6.2.3 method_27).
+				// Advances Index FIRST, then checks if we entered an offmesh segment —
+				// if so, returns Moved and the top-of-loop dispatch handles it next tick.
 				while (_currentPathIndex < _currentPath.Count)
 				{
 					nextPoint = _currentPath[_currentPathIndex];
@@ -847,47 +847,9 @@ namespace Styx.Logic.Pathing
 					bool reachedWaypoint = distance2DSqr <= waypointPrecision * waypointPrecision && zDiff < 4.5f;
 
 					if (!reachedWaypoint)
-						break; // Not at this waypoint yet — stop advancing
-
-					// Off-mesh guard: if this waypoint is an off-mesh entry point (elevator, portal),
-					// require tighter precision before advancing — don't skip critical transition points
-					if (_currentFlags != null && _currentPathIndex < _currentFlags.Length &&
-					    (_currentFlags[_currentPathIndex] & TripperNav.StraightPathFlags.OffMeshConnection) != 0)
-					{
-						const float offMeshPrecision = 1.0f; // 1 yard tight precision for off-mesh points
-						if (distance2DSqr > offMeshPrecision * offMeshPrecision)
-						{
-							// Not close enough to off-mesh connection point yet, click directly to it
-							WoWMovement.ClickToMove(nextPoint);
-							return MoveResult.Moved;
-						}
-						
-						// Dispatch off-mesh connection based on AreaType (ported from HB 4.3.4 method_4)
-						WoWPoint offMeshEnd = (_currentPathIndex + 1 < _currentPath.Count)
-							? _currentPath[_currentPathIndex + 1]
-							: nextPoint;
-
-						if (_currentPolyTypes != null && _currentPathIndex < _currentPolyTypes.Length)
-						{
-							var offMeshResult = HandleOffMeshConnection(me, offMeshEnd, _currentPolyTypes[_currentPathIndex]);
-							if (offMeshResult != null)
-								return offMeshResult.Value;
-						}
-						else
-						{
-							var offMeshResult = HandleOffMeshConnection(me, offMeshEnd, TripperNav.AreaType.Ground);
-							if (offMeshResult != null)
-								return offMeshResult.Value;
-						}
-						// Off-mesh connection is also an advance boundary (HB 4.3.4/6.2.3: break on flag & 4)
 						break;
-					}
 
-					// Reset stuck timer on successful waypoint advance
-					_stuckCheckTimer.Reset();
-					_unstickAttempts = 0;
-					try { StuckHandler.Reset(); } catch { }
-
+					// HB 6.2.3 method_24: advance Index, then check if offmesh boundary
 					_currentPathIndex++;
 					if (_suppressDriftCheck && _currentPathIndex > _suppressDriftCheckIndex)
 					{
@@ -901,9 +863,18 @@ namespace Styx.Logic.Pathing
 						return MoveResult.ReachedDestination;
 					}
 
-					// HB 4.3.4 method_5 / HB 6.2.3 method_24: after advancing, immediately
-					// issue MoveTowards on the new next waypoint so movement never pauses.
-					// (The loop will check if we've also reached THIS new waypoint.)
+					// HB 6.2.3 method_24: if segment we just entered is offmesh (Flags[Index-1] & 4),
+					// stop advancing and return Moved. Next tick, the top-level dispatch handles it.
+					if (_currentFlags != null && (_currentPathIndex - 1) < _currentFlags.Length
+					    && (_currentFlags[_currentPathIndex - 1] & TripperNav.StraightPathFlags.OffMeshConnection) != 0)
+					{
+						return MoveResult.Moved;
+					}
+
+					// Reset stuck timer on successful waypoint advance
+					_stuckCheckTimer.Reset();
+					_unstickAttempts = 0;
+					try { StuckHandler.Reset(); } catch { }
 				}
 
 				// Now move towards the current waypoint with push-ahead
@@ -1299,31 +1270,27 @@ namespace Styx.Logic.Pathing
 		}
 
 		/// <summary>
-		/// Handles off-mesh connection dispatch based on AreaType.
-		/// Ported from HB 4.3.4 MeshNavigator.method_4 / HB 6.2.3 method_18.
-		/// Returns null to continue normal waypoint advancement, or a MoveResult to return immediately.
+		/// HB 6.2.3 method_27: checks if player has reached a waypoint.
+		/// Uses 2D distance² ≤ PathPrecision² AND |ΔZ| < 4.5f.
 		/// </summary>
-		/// <remarks>
-		/// MaNGOS mmap-extractor bakes offmesh connections with Recast default area type 63
-		/// (RC_WALKABLE_AREA). Additionally, the Detour straightPathPolys array sometimes maps
-		/// the offmesh start vertex to the adjacent GROUND poly (AreaType=1) rather than the
-		/// offmesh poly itself, depending on path geometry. Therefore we detect elevator by
-		/// Z-delta FIRST, regardless of AreaType — this is the only reliable indicator.
-		/// </remarks>
-		private static MoveResult? HandleOffMeshConnection(LocalPlayer me, WoWPoint targetPoint, TripperNav.AreaType areaType)
+		private static bool IsAtPoint(WoWPoint playerPos, WoWPoint target)
 		{
-			// Detect elevator by Z-delta geometry FIRST, regardless of AreaType.
-			// This handles both RC_WALKABLE_AREA=63 (mmap-extractor default) and Ground=1
-			// (when Detour assigns the ground poly at the offmesh start vertex).
-			float zDelta = Math.Abs(me.Z - targetPoint.Z);
-			if (zDelta > 10f)
-			{
-				return HandleElevator(me, targetPoint);
-			}
+			return playerPos.Distance2DSqr(target) <= PathPrecision * PathPrecision
+			       && Math.Abs(playerPos.Z - target.Z) < 4.5f;
+		}
+
+		/// <summary>
+		/// Dispatches off-mesh connection handling based on AreaType.
+		/// Exact port of HB 6.2.3 method_18 switch statement.
+		/// For MaNGOS tiles (area=Ground), auto-detects elevator vs portal by checking
+		/// for Transport game objects nearby.
+		/// </summary>
+		private static MoveResult DispatchOffMesh(LocalPlayer me, WoWPoint endPoint, WoWPoint startPoint, TripperNav.AreaType areaType)
+		{
 			switch (areaType)
 			{
 				case TripperNav.AreaType.Elevator:
-					return HandleElevator(me, targetPoint);
+					return HandleElevator(me, endPoint, startPoint);
 
 				case TripperNav.AreaType.Portal:
 				case TripperNav.AreaType.DefendersPortal:
@@ -1337,98 +1304,56 @@ namespace Styx.Logic.Pathing
 				case TripperNav.AreaType.InteractObject:
 					return HandleInteractObject(me);
 
+				case TripperNav.AreaType.Ground:
 				default:
-					// Standard run/jump offmesh — walk to target, advance path
-					WoWMovement.ClickToMove(targetPoint);
-					return null;
+					// HB 6.2.3 method_19: standard Run/Jump offmesh connection
+					return HandleStandardOffMesh(me, endPoint);
 			}
 		}
 
 		/// <summary>
 		/// Standard off-mesh connection handler for Run/Jump connections.
 		/// Ported from HB 6.2.3 MeshNavigator.method_19.
-		/// NOTE: MaNGOS mmap-extractor sets default flags (255) on all offmesh connections.
-		/// These don't match HB's custom flag convention, so we only check ability flags
-		/// when the area type was set by HB's custom mesh builder (not Recast default 63).
-		/// For mmap-extractor connections, HandleOffMeshConnection auto-detects by geometry.
 		/// </summary>
-		private static MoveResult? HandleStandardOffMesh(LocalPlayer me, WoWPoint targetPoint)
+		private static MoveResult HandleStandardOffMesh(LocalPlayer me, WoWPoint targetPoint)
 		{
-			// Check ability flags — only meaningful for HB-format meshes where
-			// the area type was explicitly set (not RC_WALKABLE_AREA = 63).
-			// mmap-extractor offmesh connections are handled in HandleOffMeshConnection
-			// before reaching here, so this code path is only for HB-compatible tiles.
-			if (_currentAbilityFlags != null && _currentPathIndex < _currentAbilityFlags.Length)
+			// HB 6.2.3 method_19: check AbilityFlags has Run|Jump, else "Invalid offmesh"
+			// MaNGOS mmap-extractor does not set HB-format ability flags (defaults to 0).
+			// Only enforce the check when flags are non-zero (HB-format tiles).
+			if (_currentAbilityFlags != null && (_currentPathIndex - 1) >= 0
+			    && (_currentPathIndex - 1) < _currentAbilityFlags.Length)
 			{
-				var abilityFlags = _currentAbilityFlags[_currentPathIndex];
-
-				// Jump connection — dismount first if mounted (can't jump mounted in WotLK)
-				if ((abilityFlags & TripperNav.AbilityFlags.Jump) != 0)
+				var abilityFlags = _currentAbilityFlags[_currentPathIndex - 1];
+				if (abilityFlags != 0 && (abilityFlags & (TripperNav.AbilityFlags.Run | TripperNav.AbilityFlags.Jump)) == 0)
 				{
-					if (me.Mounted)
-					{
-						Mount.Dismount();
-						return MoveResult.Moved;
-					}
+					Logging.WriteDiagnostic("Invalid offmesh connection encountered at {0}", me.Location);
+					return MoveResult.Failed;
 				}
 			}
 
-			// Standard Run/Jump — click to the target point and advance
+			// Standard Run/Jump — advance normally via the waypoint loop
 			WoWMovement.ClickToMove(targetPoint);
-			return null; // Advance to next waypoint normally
+			return MoveResult.Moved;
 		}
 
 		/// <summary>
-		/// Elevator handling — matches HB 4.3.4 MeshNavigator (AreaType.Elevator).
-		/// Called every tick while at an elevator offmesh connection.
+		/// Elevator handling — exact port of HB 6.2.3 MeshNavigator.method_20.
+		/// Called every tick while on an elevator offmesh segment.
 		/// </summary>
-		private static MoveResult? HandleElevator(LocalPlayer me, WoWPoint targetPoint)
+		private static MoveResult HandleElevator(LocalPlayer me, WoWPoint endPoint, WoWPoint startPoint)
 		{
-			static WoWPoint GetTransportWorldLocation(WoWGameObject transportGo)
-			{
-				if (transportGo.SubType == WoWGameObjectType.Transport
-				    || transportGo.SubType == WoWGameObjectType.MapObjectTransport)
-				{
-					try
-					{
-						Tripper.Tools.Math.Matrix worldMatrix = transportGo.GetWorldMatrix();
-						Matrix4x4 mat = worldMatrix;
-						Vector3 translation = mat.Translation;
-						return new WoWPoint(translation.X, translation.Y, translation.Z);
-					}
-					catch
-					{
-						// Fall back to base position if matrix read fails
-					}
-				}
-				return transportGo.Location;
-			}
-
-			// HB 4.3.4: reset stuck handler every tick
+			// HB 6.2.3 method_20: reset stuck handler every tick
 			try { StuckHandler.Reset(); } catch { }
 			_stuckCheckTimer.Reset();
 
-			// HB 6.2.3-style lock: keep calling elevator handler every tick once entered
-			if (!_inElevatorSequence)
-			{
-				_inElevatorSequence = true;
-				_elevatorTarget = targetPoint;
-				_hbElevatorFlag = false;
-			}
-
 			WoWPoint playerPos = me.Location;
 
-			// HB 4.3.4: find nearest transport GO
+			// HB 6.2.3: find nearest Transport GO (same filter as HB: SubType==Transport, exclude boats)
 			var transport = ObjectManager.GetObjectsOfType<WoWGameObject>(false, false)
 				.Where(go => go.SubType == WoWGameObjectType.Transport
 				              && go.Entry != 20657 && go.Entry != 20656)
-				.OrderBy(go => GetTransportWorldLocation(go).Distance2DSqr(playerPos))
+				.OrderBy(go => go.Location.Distance2DSqr(playerPos))
 				.FirstOrDefault();
-
-			WoWPoint endPoint = targetPoint; // offmesh END
-			WoWPoint startPoint = (_currentPathIndex >= 0 && _currentPathIndex < _currentPath.Count)
-				? _currentPath[_currentPathIndex]
-				: playerPos; // offmesh START (waiting spot)
 
 			if (transport == null)
 			{
@@ -1436,43 +1361,60 @@ namespace Styx.Logic.Pathing
 				return MoveResult.Failed;
 			}
 
-			WoWPoint transportWorldLocation = GetTransportWorldLocation(transport);
-
-			// HB 4.3.4: if at endpoint, complete offmesh and reset flag
-			if (playerPos.DistanceSqr(endPoint) < 4f)
+			// HB 6.2.3: if at endpoint AND not on transport AND not falling → advance past offmesh
+			if (playerPos.DistanceSqr(endPoint) < 4f && !me.IsOnTransport && !me.IsFalling)
 			{
-				_hbElevatorFlag = false;
-				return null;
+				_ridingElevator = false;
+				_currentPathIndex++;
+				if (_currentPathIndex >= _currentPath.Count)
+				{
+					if (_isPartialPath) return MoveResult.Failed;
+					return MoveResult.ReachedDestination;
+				}
+				return MoveResult.Moved;
+			}
+
+			WoWPoint transportLocation = transport.Location;
+
+			// HB 6.2.3 elevator motion detection (bool_2/waitTimer_2):
+			// Every 400ms, check if transport has moved. Prevents exiting while in motion.
+			if (_elevatorMotionTimer.IsFinished)
+			{
+				_elevatorMoving = _lastElevatorPos.DistanceSqr(transportLocation) > 0.0001f;
+				_lastElevatorPos = transportLocation;
+				_elevatorMotionTimer.Reset();
 			}
 
 			if (me.IsOnTransport)
 			{
 				_ridingElevator = true;
-				if (Math.Abs(playerPos.Z - endPoint.Z) > 2f)
+				// HB 6.2.3: if near endpoint Z AND elevator stopped → move out
+				if (Math.Abs(playerPos.Z - endPoint.Z) <= 2f && !_elevatorMoving)
 				{
-					Styx.Logic.BehaviorTree.TreeRoot.StatusText = "Waiting for elevator to reach end point";
+					Logging.WriteDiagnostic("Moving out of elevator");
+					WoWMovement.ClickToMove(endPoint);
 					return MoveResult.Moved;
 				}
-				if (!_hbElevatorFlag)
-					_hbElevatorFlag = true;
-				Logging.WriteDiagnostic("Moving out of elevator");
-				WoWMovement.ClickToMove(endPoint);
+				Styx.Logic.BehaviorTree.TreeRoot.StatusText = "Waiting for elevator to reach end point";
 				return MoveResult.Moved;
 			}
 
 			// NOT on transport
 			_ridingElevator = false;
-			if (Math.Abs(transportWorldLocation.Z - playerPos.Z) > 2f)
+
+			// HB 6.2.3: flag = player closer to end than start (by Z)
+			bool closerToEnd = Math.Abs(startPoint.Z - playerPos.Z) > Math.Abs(endPoint.Z - playerPos.Z);
+
+			if (!closerToEnd && (Math.Abs(transportLocation.Z - playerPos.Z) > 2f || _elevatorMoving))
 			{
-				if (me.Location.DistanceSqr(startPoint) > 4f)
+				// Elevator not at our level or still moving — wait at start point
+				if (playerPos.DistanceSqr(startPoint) > 4f)
 				{
 					Logging.WriteDiagnostic("Woops, we are not in the waiting spot");
 					WoWMovement.ClickToMove(startPoint);
 					return MoveResult.Moved;
 				}
-				// GAP 6 — HB 6.2.3 method_20: face toward elevator while waiting
-				// Prevents the character from standing sideways and falling off when it arrives.
-				// Uses 15° arc (tight) — HB 6.2.3 line ~869.
+				// HB 6.2.3 method_20: face toward elevator while waiting (15° arc)
 				if (!me.IsSafelyFacing(transport, 15f))
 				{
 					WoWMovement.MoveStop();
@@ -1482,32 +1424,40 @@ namespace Styx.Logic.Pathing
 				return MoveResult.Moved;
 			}
 
-			if (!_hbElevatorFlag)
+			if (!closerToEnd)
 			{
+				// Elevator at our level and stopped — board it
 				Logging.WriteDiagnostic("Moving inside elevator");
 				if (me.Mounted)
 					Mount.Dismount();
-				// Center on the platform like HB: move toward transport.Location (world-space)
-				WoWMovement.ClickToMove(transportWorldLocation);
+				WoWMovement.ClickToMove(transportLocation);
 				return MoveResult.Moved;
 			}
 
-			return MoveResult.Failed;
+			// closerToEnd = true: player is already closer to end than start.
+			// HB 6.2.3: just return Moved (do nothing, let the next tick handle it)
+			return MoveResult.Moved;
 		}
 
 		/// <summary>
-		/// Portal handling: find nearest Goober or SpellCaster game object and interact.
-		/// HB 4.3.4 pattern from MeshNavigator.method_4.
+		/// Portal handling — port of HB 6.2.3 MeshNavigator.method_23.
+		/// Find nearest Goober, SpellCaster, or Button game object and interact.
+		/// HB filters Goober/SpellCaster; Button added for 3.3.5a MaNGOS portals.
 		/// </summary>
-		private static MoveResult? HandlePortal(LocalPlayer me)
+		private static MoveResult HandlePortal(LocalPlayer me)
 		{
-			const float maxSearchDistSqr = 900f; // 30 yards squared
-			WoWGameObject? bestPortal = null;
-			float bestDistSqr = maxSearchDistSqr;
+			// HB 6.2.3 method_23: reset stuck handler
+			try { StuckHandler.Reset(); } catch { }
+			_stuckCheckTimer.Reset();
 
-			foreach (var go in ObjectManager.GetObjectsOfType<WoWGameObject>())
+			float bestDistSqr = float.MaxValue;
+			WoWGameObject? bestPortal = null;
+
+			foreach (var go in ObjectManager.GetObjectsOfType<WoWGameObject>(false, false))
 			{
-				if (go.SubType == WoWGameObjectType.Goober || go.SubType == WoWGameObjectType.SpellCaster)
+				if (go.SubType == WoWGameObjectType.Goober
+				    || go.SubType == WoWGameObjectType.SpellCaster
+				    || go.SubType == WoWGameObjectType.Button)
 				{
 					float distSqr = go.Location.DistanceSqr(me.Location);
 					if (distSqr < bestDistSqr)
@@ -1518,41 +1468,35 @@ namespace Styx.Logic.Pathing
 				}
 			}
 
-			if (bestPortal == null)
-			{
-				Logging.WriteDiagnostic("Could not find portal to take.");
-				return MoveResult.Failed;
-			}
-
-			if (bestPortal.WithinInteractRange)
+			// HB 6.2.3 method_23: if found AND within interact range → interact
+			if (bestPortal != null && bestPortal.WithinInteractRange)
 			{
 				Logging.WriteDiagnostic("Interacting with:{0}", bestPortal.Name);
 				bestPortal.Interact();
 				return MoveResult.Moved;
 			}
 
-			WoWMovement.ClickToMove(bestPortal.Location);
-			return MoveResult.Moved;
+			Logging.WriteDiagnostic("Could not find portal to take.");
+			return MoveResult.Failed;
 		}
 
 		/// <summary>
-		/// InteractUnit handling: find nearest non-hostile, alive NPC and interact.
-		/// HB 4.3.4 pattern from MeshNavigator.method_4.
-		/// AUDIT FIX: Filter out hostile units, dead units, and player-controlled units
-		/// to avoid targeting enemy mobs during off-mesh traversal.
+		/// InteractUnit handling — port of HB 6.2.3 MeshNavigator.method_22.
 		/// </summary>
-		private static MoveResult? HandleInteractUnit(LocalPlayer me)
+		private static MoveResult HandleInteractUnit(LocalPlayer me)
 		{
-			// AUDIT FIX: Add 30yd range limit to prevent interacting with distant NPCs
-			const float maxSearchDistSqr = 900f; // 30 yards squared
-var unit = ObjectManager.CachedUnits
-				.Where(u => !u.IsDead && !u.IsHostile && !u.PlayerControlled && !u.IsPlayer
-				            && u.Location.DistanceSqr(me.Location) < maxSearchDistSqr)
+			try { StuckHandler.Reset(); } catch { }
+			_stuckCheckTimer.Reset();
+
+			// HB 6.2.3 method_22: find unit ordered by distance, filtered by ControllingPlayer == null
+			var unit = ObjectManager.CachedUnits
+				.Where(u => !u.IsDead && !u.IsHostile && !u.PlayerControlled && !u.IsPlayer)
 				.OrderBy(u => u.Location.DistanceSqr(me.Location))
 				.FirstOrDefault();
 
 			if (unit == null)
 			{
+				Logging.WriteDiagnostic("Could not find unit to interact with.");
 				return MoveResult.Failed;
 			}
 
@@ -1569,22 +1513,22 @@ var unit = ObjectManager.CachedUnits
 		}
 
 		/// <summary>
-		/// InteractObject handling: find nearest interactable game object and interact.
-		/// HB 4.3.4 pattern from MeshNavigator.method_4.
+		/// InteractObject handling — port of HB 6.2.3 MeshNavigator.method_21.
 		/// </summary>
-		private static MoveResult? HandleInteractObject(LocalPlayer me)
+		private static MoveResult HandleInteractObject(LocalPlayer me)
 		{
-			// AUDIT FIX: Add 30yd range limit + move to object if in range but not interact range
-			const float maxSearchDistSqr = 900f; // 30 yards squared
+			try { StuckHandler.Reset(); } catch { }
+			_stuckCheckTimer.Reset();
+
 			var gameObject = ObjectManager.GetObjectsOfType<WoWGameObject>(false, false)
-				.Where(go => go.Location.DistanceSqr(me.Location) < maxSearchDistSqr)
 				.OrderBy(go => go.Location.DistanceSqr(me.Location))
 				.FirstOrDefault();
 
 			if (gameObject == null)
 			{
-				// No interactable object in range — skip this off-mesh point
-				return null;
+				// HB 6.2.3 method_21: if no object found → advance Index (skip)
+				_currentPathIndex++;
+				return MoveResult.Moved;
 			}
 
 			if (!gameObject.WithinInteractRange)
