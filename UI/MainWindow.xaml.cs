@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -37,6 +39,20 @@ namespace CopilotBuddy.UI
         private const int MaxLogLines = 1000;
         private bool _isRunning;
         private DispatcherTimer? _infoTimer;
+
+        /// <summary>
+        /// Mutex that claims ownership of the attached WoW process.
+        /// Prevents another CopilotBuddy from attaching to the same WoW.
+        /// HB 4.3.4 pattern: held for entire session lifetime.
+        /// </summary>
+        private Mutex? _processMutex;
+
+        /// <summary>
+        /// Selected WoW process ID from the process selector.
+        /// null = pending selection, 0 = user cancelled.
+        /// HB 4.3.4 pattern.
+        /// </summary>
+        private int? _selectedWoWProc;
 
         #endregion
 
@@ -133,38 +149,16 @@ namespace CopilotBuddy.UI
             {
                 try
                 {
-                    Logging.Write("Searching for WoW process...");
-
-                    var wowProcesses = Process.GetProcessesByName("Wow");
-                    if (wowProcesses.Length == 0)
-                        wowProcesses = Process.GetProcessesByName("WoW");
-
-                    if (wowProcesses.Length == 0)
-                    {
-                        Logging.WriteQuiet(Colors.Red, "WoW.exe not found! Please launch WoW 3.3.5a first.");
-                        Dispatcher.Invoke(() => SetStatus("WoW not found"));
+                    if (!FindAndAttachToWoW())
                         return;
-                    }
-
-                    int wowPid = wowProcesses[0].Id;
-                    Logging.Write(Colors.Green, "Please wait a few seconds while CopilotBuddy initializes.");
-                    Logging.WriteDebug("Using WoW with process ID {0}", wowPid);
-                    Logging.WriteDebug("Platform: {0}", Environment.Is64BitProcess ? "x64" : "x86");
-                    Logging.WriteDebug("Executable Path: {0}", AppDomain.CurrentDomain.BaseDirectory);
-
-                    var memory = new Memory(wowPid);
-                    ObjectManager.Initialize(memory);
-                    ObjectManager.HookEndscene();
-
-                    _memory = memory;
-                    _executor = ObjectManager.Executor;
 
                     if (ObjectManager.IsInitialized)
                     {
-                        Logging.Write("Attached to WoW with ID {0}", wowPid);
+                        Logging.Write("Attached to WoW with ID {0}", _selectedWoWProc!.Value);
 
                         // HB 6.2.3 smethod_3: Start minimize guard thread + event handlers
                         TreeRoot.Initialize();
+                        BotEvents.OnBotStopped += BotEvents_OnBotStopped;
 
                         // Log character info (HB 4.3.4 pattern after attach)
                         if (ObjectManager.Me != null)
@@ -278,6 +272,192 @@ namespace CopilotBuddy.UI
             });
         }
 
+        /// <summary>
+        /// Finds available WoW processes, handles auto-attach or process selection.
+        /// Ported from HB 4.3.4 MainWindow.FindAndAttachToWoW() with 6.2.3 improvements.
+        /// 
+        /// Logic:
+        ///   1. Check /pid= command line arg for explicit process selection
+        ///   2. Find all Wow.exe processes matching build 12340
+        ///   3. Filter: logged in + not claimed by another CopilotBuddy (via mutex)
+        ///   4. If 0 available: show error
+        ///   5. If 1 available: auto-attach
+        ///   6. If 2+: show ProcessSelectorWindow
+        ///   7. Attach to selected process
+        /// </summary>
+        private bool FindAndAttachToWoW()
+        {
+            Logging.Write("Searching for WoW process...");
+
+            // Step 1: Check for /pid= command line argument
+            string? pidArg = Environment.GetCommandLineArgs()
+                .FirstOrDefault(s => s.StartsWith("/pid=", StringComparison.OrdinalIgnoreCase));
+
+            _selectedWoWProc = null;
+            var candidates = new List<Process>();
+
+            if (pidArg == null)
+            {
+                // Find ALL Wow processes
+                var wowProcesses = Process.GetProcessesByName("Wow");
+                if (wowProcesses.Length == 0)
+                    wowProcesses = Process.GetProcessesByName("WoW");
+
+                foreach (var proc in wowProcesses)
+                {
+                    try
+                    {
+                        if (proc.HasExited) continue;
+                        int build = proc.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
+                        if (build == ObjectManager.SupportedBuild)
+                            candidates.Add(proc);
+                    }
+                    catch { /* Access denied or process exited */ }
+                }
+            }
+            else
+            {
+                // Explicit PID from command line
+                string pidStr = pidArg.Substring("/pid=".Length).Trim();
+                if (int.TryParse(pidStr, out int pid))
+                {
+                    try
+                    {
+                        var proc = Process.GetProcessById(pid);
+                        if (!proc.HasExited)
+                        {
+                            int build = proc.MainModule?.FileVersionInfo.FilePrivatePart ?? 0;
+                            if (build == ObjectManager.SupportedBuild)
+                                candidates.Add(proc);
+                        }
+                    }
+                    catch
+                    {
+                        Logging.Write(Colors.Red, "Process with PID {0} not found or inaccessible.", pid);
+                    }
+                }
+            }
+
+            if (candidates.Count == 0)
+            {
+                Logging.WriteQuiet(Colors.Red, "WoW.exe not found! Please launch WoW 3.3.5a first.");
+                Dispatcher.Invoke(() => SetStatus("WoW not found"));
+                return false;
+            }
+
+            // Step 2: Filter by logged-in state + mutex availability
+            var available = new List<KeyValuePair<int, Mutex>>();
+            foreach (var proc in candidates)
+            {
+                try
+                {
+                    using var tempMemory = new Memory(proc.Id);
+
+                    // Check if player is logged in
+                    bool isLoggedIn = tempMemory.Read<byte>(Styx.Offsets.GlobalOffsets.InGame) != 0;
+                    if (!isLoggedIn)
+                        continue;
+
+                    // Try to claim the process via mutex
+                    var mutex = ProcessMutex.Create(proc.Id, out bool createdNew);
+                    if (!createdNew)
+                    {
+                        // Another CopilotBuddy already owns this process
+                        mutex.Close();
+                        continue;
+                    }
+
+                    available.Add(new KeyValuePair<int, Mutex>(proc.Id, mutex));
+                }
+                catch { /* Process exited or memory read failed */ }
+            }
+
+            if (available.Count == 0)
+            {
+                Logging.WriteQuiet(Colors.Red, "No available WoW processes. They may not be logged in or already attached by another CopilotBuddy.");
+                Dispatcher.Invoke(() => SetStatus("No available WoW"));
+                return false;
+            }
+
+            // Step 3: Auto-attach if only one, otherwise show selector
+            if (available.Count == 1)
+            {
+                _selectedWoWProc = available[0].Key;
+                _processMutex = available[0].Value;
+            }
+            else
+            {
+                // Release all mutexes — ProcessSelectorWindow will acquire its own
+                foreach (var kvp in available)
+                    kvp.Value.Close();
+
+                // Show selector on UI thread (HB 4.3.4 pattern)
+                _selectedWoWProc = null;
+                ProcessSelectorWindow.ProcessEntry? selectedEntry = null;
+
+                Dispatcher.Invoke(() =>
+                {
+                    var psw = new ProcessSelectorWindow { Owner = this };
+                    if (psw.ShowDialog() == true && psw.Entry != null)
+                    {
+                        selectedEntry = psw.Entry;
+                        _selectedWoWProc = psw.Entry.ProcessId;
+                    }
+                    else
+                    {
+                        _selectedWoWProc = 0; // Cancelled
+                    }
+                });
+
+                if (_selectedWoWProc == null || _selectedWoWProc == 0)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        SetStatus("Cancelled");
+                        Close();
+                    });
+                    return false;
+                }
+
+                // Use the mutex from the dialog directly — it's already acquired
+                _processMutex = selectedEntry!.Mutex;
+            }
+
+            // Step 4: Attach to selected process
+            int wowPid = _selectedWoWProc.Value;
+            Logging.Write(Colors.Green, "Please wait a few seconds while CopilotBuddy initializes.");
+            Logging.WriteDebug("Using WoW with process ID {0}", wowPid);
+            Logging.WriteDebug("Platform: {0}", Environment.Is64BitProcess ? "x64" : "x86");
+            Logging.WriteDebug("Executable Path: {0}", AppDomain.CurrentDomain.BaseDirectory);
+
+            try
+            {
+                var memory = new Memory(wowPid);
+
+                // Verify still logged in before committing
+                if (memory.Read<byte>(Styx.Offsets.GlobalOffsets.InGame) == 0)
+                {
+                    memory.Dispose();
+                    Logging.Write(Colors.Red, "Process ID {0} is not logged in game!", wowPid);
+                    Dispatcher.Invoke(() => SetStatus("Not logged in"));
+                    return false;
+                }
+
+                ObjectManager.Initialize(memory);
+
+                _memory = memory;
+                _executor = ObjectManager.Executor;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logging.Write(Colors.Red, "Error attaching to WoW! - {0}", ex.Message);
+                Logging.WriteException(ex);
+                Dispatcher.Invoke(() => SetStatus("Attach failed"));
+                return false;
+            }
+        }
+
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
             // Stop bot if running
@@ -288,6 +468,14 @@ namespace CopilotBuddy.UI
 
             // Save all settings (HB 4.3.4 pattern - save at close)
             SaveSettings();
+
+            // Release process mutex so another CopilotBuddy can claim this WoW
+            try
+            {
+                _processMutex?.Dispose();
+                _processMutex = null;
+            }
+            catch { /* Mutex may already be released */ }
 
             // Save window position/size
             try
@@ -306,6 +494,7 @@ namespace CopilotBuddy.UI
 
             // Cleanup
             Logging.OnLogMessage -= OnLogMessage;
+            BotEvents.OnBotStopped -= BotEvents_OnBotStopped;
             _infoTimer?.Stop();
         }
 
@@ -477,17 +666,13 @@ namespace CopilotBuddy.UI
         {
             if (!_isRunning) return;
 
-            TreeRoot.Stop();
-
             _isRunning = false;
             btnStart.Visibility = Visibility.Visible;
             btnStop.Visibility = Visibility.Hidden;
-            btnLoadProfile.IsEnabled = true;
-            cmbBotSelector.IsEnabled = true;
-            btnSettings.IsEnabled = true;
+            SetStatus("Stopping...");
 
             Logging.Write("Stopping the bot!");
-            SetStatus("CopilotBuddy Stopped");
+            TreeRoot.Stop();
         }
 
         #endregion
@@ -502,6 +687,23 @@ namespace CopilotBuddy.UI
         private void btnStop_Click(object sender, RoutedEventArgs e)
         {
             StopBot();
+        }
+
+        private void BotEvents_OnBotStopped(EventArgs args)
+        {
+            if (Dispatcher.Thread != Thread.CurrentThread)
+            {
+                Dispatcher.BeginInvoke(new Action<EventArgs>(BotEvents_OnBotStopped), args);
+                return;
+            }
+
+            _isRunning = false;
+            btnStart.Visibility = Visibility.Visible;
+            btnStop.Visibility = Visibility.Hidden;
+            btnLoadProfile.IsEnabled = true;
+            cmbBotSelector.IsEnabled = true;
+            btnSettings.IsEnabled = true;
+            SetStatus("CopilotBuddy Stopped");
         }
 
         private void cmbBotSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
