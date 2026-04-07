@@ -1,55 +1,38 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
+using System.Runtime.InteropServices;
 
 namespace Tripper.Navigation
 {
     /// <summary>
     /// Post-processes paths to move waypoints away from navmesh edges.
-    /// Based on Honorbuddy's MoveAwayFromEdges algorithm.
-    /// This prevents characters from walking too close to walls, stair edges,
-    /// and other terrain features that could cause stuck issues.
+    /// Exact port of HB 6.2.3 Class1458 (method_2/3/5/9/10/11).
     /// </summary>
     internal static class PathPostProcessor
     {
-        /// <summary>
-        /// Default distance threshold for edge detection.
-        /// Points closer than this to a wall will be moved.
-        /// </summary>
         private const float DefaultEdgeDistance = 2.0f;
-
-        /// <summary>
-        /// Maximum recursion depth for path fixing.
-        /// </summary>
         private const int MaxRecursionDepth = 5;
+        private const int MaxRaycastPolys = 512;
 
-        /// <summary>
-        /// Post-processes a path by moving waypoints away from edges.
-        /// </summary>
-        /// <param name="mapId">Map ID for navmesh queries.</param>
-        /// <param name="points">Path points to process (modified in place).</param>
-        /// <param name="flags">Path flags for each point.</param>
-        /// <param name="edgeDistance">Distance threshold for edge detection.</param>
+        private enum MoveResult { NoWallNearPoint, Failed, Succeeded }
+
+        private delegate void FixSubPathCallback(
+            ref Vector3[] points, ref PolygonReference[] polys, ref StraightPathFlags[] flags);
+
+        // ── Public entry points (match HB method_11 / method_8) ──
+
         public static void MoveAwayFromEdges(
             uint mapId,
             ref Vector3[] points,
             ref StraightPathFlags[] flags,
             float edgeDistance = DefaultEdgeDistance)
         {
-            // Call overload with null polygons for backward compatibility
-            PolygonReference[] polygons = null;
+            PolygonReference[] polygons = Array.Empty<PolygonReference>();
             MoveAwayFromEdges(mapId, ref points, ref flags, ref polygons, edgeDistance);
         }
 
-        /// <summary>
-        /// Post-processes a path by moving waypoints away from edges.
-        /// Uses polygon references for more accurate wall distance queries.
-        /// </summary>
-        /// <param name="mapId">Map ID for navmesh queries.</param>
-        /// <param name="points">Path points to process (modified in place).</param>
-        /// <param name="flags">Path flags for each point.</param>
-        /// <param name="polygons">Polygon references for each point (can be null).</param>
-        /// <param name="edgeDistance">Distance threshold for edge detection.</param>
         public static void MoveAwayFromEdges(
             uint mapId,
             ref Vector3[] points,
@@ -60,32 +43,18 @@ namespace Tripper.Navigation
             if (points == null || points.Length < 2)
                 return;
 
-            // Convert to lists for easier manipulation
-            var pointsList = new List<Vector3>(points);
-            var flagsList = new List<StraightPathFlags>(flags);
-            var polyList = polygons != null ? new List<PolygonReference>(polygons) : null;
+            // Ensure polygon array exists (HB always has one from FindStraightPath)
+            if (polygons == null || polygons.Length == 0)
+                polygons = new PolygonReference[points.Length];
+            else if (polygons.Length < points.Length)
+                Array.Resize(ref polygons, points.Length);
 
-            // Pass 1: Move intermediate waypoints away from edges
-            MoveWaypointsFromEdges(mapId, pointsList, flagsList, polyList, edgeDistance);
+            // Fill zero‐polyRefs by snapping each point to the navmesh
+            EnsurePolyRefs(mapId, points, ref polygons);
 
-            // Pass 2: Fix any segments that became unwalkable
-            FixPathWalkability(mapId, pointsList, flagsList, edgeDistance, 0);
-
-            // Convert back to arrays
-            points = pointsList.ToArray();
-            flags = flagsList.ToArray();
-            if (polyList != null)
-                polygons = polyList.ToArray();
+            MoveAwayFromEdgesRecursive(mapId, ref points, ref polygons, ref flags, edgeDistance, 0);
         }
 
-        /// <summary>
-        /// Randomizes path for more human-like movement.
-        /// </summary>
-        /// <param name="mapId">Map ID for navmesh queries.</param>
-        /// <param name="points">Path points to process (modified in place).</param>
-        /// <param name="flags">Path flags for each point.</param>
-        /// <param name="minOffset">Minimum random offset distance.</param>
-        /// <param name="maxOffset">Maximum random offset distance.</param>
         public static void Randomize(
             uint mapId,
             ref Vector3[] points,
@@ -96,252 +65,445 @@ namespace Tripper.Navigation
             if (points == null || points.Length < 2)
                 return;
 
-            var pointsList = new List<Vector3>(points);
-            var flagsList = new List<StraightPathFlags>(flags);
-            var random = new Random();
+            var polys = new PolygonReference[points.Length];
+            EnsurePolyRefs(mapId, points, ref polys);
 
-            // Randomize intermediate points
-            RandomizeWaypoints(mapId, pointsList, flagsList, minOffset, maxOffset, random);
-
-            // Fix any segments that became unwalkable
-            FixPathWalkability(mapId, pointsList, flagsList, minOffset, 0);
-
-            points = pointsList.ToArray();
-            flags = flagsList.ToArray();
+            RandomizeRecursive(mapId, ref points, ref polys, ref flags,
+                               minOffset, maxOffset, 4f, new Random(), 0);
         }
 
-        /// <summary>
-        /// Moves waypoints away from nearby edges/walls.
-        /// Based on HB's method_3.
-        /// </summary>
+        // ── Private: MoveAwayFromEdges recursion (HB method_10) ──
+
+        private static void MoveAwayFromEdgesRecursive(
+            uint mapId,
+            ref Vector3[] points,
+            ref PolygonReference[] polygons,
+            ref StraightPathFlags[] flags,
+            float edgeDistance,
+            int depth)
+        {
+            if (depth > MaxRecursionDepth)
+                return;
+
+            var ptList = points.ToList();
+            var polyList = polygons.ToList();
+            var flagList = flags.ToList();
+
+            // Pass 1: move waypoints away from edges (HB method_3)
+            MoveWaypointsFromEdges(mapId, ptList, polyList, flagList, edgeDistance);
+
+            // Pass 2: fix walkability with recursive callback (HB method_9)
+            int capturedDepth = depth;
+            FixSubPathCallback callback = (ref Vector3[] sp, ref PolygonReference[] spo, ref StraightPathFlags[] sf) =>
+            {
+                MoveAwayFromEdgesRecursive(mapId, ref sp, ref spo, ref sf, edgeDistance, capturedDepth + 1);
+            };
+            FixPathWalkability(mapId, ptList, polyList, flagList, callback);
+
+            points = ptList.ToArray();
+            polygons = polyList.ToArray();
+            flags = flagList.ToArray();
+        }
+
+        // ── Private: Randomize recursion (HB method_7) ──
+
+        private static void RandomizeRecursive(
+            uint mapId,
+            ref Vector3[] points,
+            ref PolygonReference[] polygons,
+            ref StraightPathFlags[] flags,
+            float minOffset,
+            float maxOffset,
+            float maxRandom,
+            Random random,
+            int depth)
+        {
+            if (depth > MaxRecursionDepth)
+                return;
+
+            var ptList = points.ToList();
+            var polyList = polygons.ToList();
+            var flagList = flags.ToList();
+
+            RandomizeWaypoints(mapId, ptList, polyList, flagList, minOffset, maxOffset, maxRandom, random);
+
+            int capturedDepth = depth;
+            FixSubPathCallback callback = (ref Vector3[] sp, ref PolygonReference[] spo, ref StraightPathFlags[] sf) =>
+            {
+                RandomizeRecursive(mapId, ref sp, ref spo, ref sf,
+                                   minOffset, maxOffset, maxRandom, random, capturedDepth + 1);
+            };
+            FixPathWalkability(mapId, ptList, polyList, flagList, callback);
+
+            points = ptList.ToArray();
+            polygons = polyList.ToArray();
+            flags = flagList.ToArray();
+        }
+
+        // ── MoveWaypointsFromEdges (HB method_3) ──
+
         private static void MoveWaypointsFromEdges(
             uint mapId,
             List<Vector3> points,
-            List<StraightPathFlags> flags,
             List<PolygonReference> polygons,
+            List<StraightPathFlags> flags,
             float edgeDistance)
         {
-            // Skip first and last points (start/end positions should not be moved)
             for (int i = 1; i < points.Count - 1; i++)
             {
-                // Skip off-mesh connection points (elevators, portals, etc.)
                 if ((flags[i] & StraightPathFlags.OffMeshConnection) != 0)
                     continue;
-                if (i > 0 && (flags[i - 1] & StraightPathFlags.OffMeshConnection) != 0)
+                if ((flags[i - 1] & StraightPathFlags.OffMeshConnection) != 0)
                     continue;
 
                 Vector3 point = points[i];
-                ulong polyRef = (polygons != null && i < polygons.Count) ? polygons[i].Id : 0;
-                
-                if (TryMoveAwayFromEdge(mapId, ref point, polyRef, edgeDistance))
+                PolygonReference polyRef = polygons[i];
+
+                if (TryMoveAwayFromEdge(mapId, ref point, ref polyRef, edgeDistance) == MoveResult.Succeeded)
                 {
                     points[i] = point;
+                    polygons[i] = polyRef;
                 }
             }
         }
 
-        /// <summary>
-        /// Tries to move a point away from the nearest edge/wall.
-        /// Based on HB's method_2 (TryMoveAwayFromEdge).
-        /// </summary>
-        /// <returns>True if point was successfully moved.</returns>
-        private static bool TryMoveAwayFromEdge(uint mapId, ref Vector3 point, ulong polyRef, float edgeDistance)
+        // ── TryMoveAwayFromEdge (exact port of HB method_2) ──
+
+        private static MoveResult TryMoveAwayFromEdge(
+            uint mapId, ref Vector3 point, ref PolygonReference polyRef, float edgeDistance)
         {
-            // Find distance to nearest wall
-            NativeMethods.XYZ hitPoint;
-            NativeMethods.XYZ hitNormal;
-            float distance;
-            
-            // Use polygon-specific query if we have a valid polyRef (like HB WoD method_2)
-            if (polyRef != 0)
-            {
-                distance = NativeMethods.FindDistanceToWallFromPoly(
+            // Step 1: FindDistanceToWall from polygon
+            float distance = NativeMethods.FindDistanceToWallFromPoly(
+                mapId, polyRef.Id, new NativeMethods.XYZ(point), edgeDistance,
+                out NativeMethods.XYZ hitPointXyz, out NativeMethods.XYZ hitNormalXyz);
+
+            if (distance < 0) // dtStatus failure
+                return MoveResult.Failed;
+
+            if (distance >= edgeDistance)
+                return MoveResult.NoWallNearPoint;
+
+            Vector3 wallHitPoint = hitPointXyz.ToVector3();
+            Vector3 wallNormal = hitNormalXyz.ToVector3();
+
+            // Step 2: snap hitPoint to nearest polygon (HB: FindNearestPolygon with extents 0.5/5/0.5)
+            Vector3 snappedHit = wallHitPoint;
+            if (!NativeMethods.FindNearestPolyRef(
                     mapId,
-                    polyRef,
-                    new NativeMethods.XYZ(point),
-                    edgeDistance,
-                    out hitPoint,
-                    out hitNormal);
+                    new NativeMethods.XYZ(wallHitPoint),
+                    new NativeMethods.XYZ(0.5f, 5f, 0.5f),
+                    out ulong hitPolyRef,
+                    out NativeMethods.XYZ snappedHitXyz))
+                return MoveResult.Failed;
+
+            if (hitPolyRef == 0)
+                return MoveResult.Failed;
+
+            snappedHit = snappedHitXyz.ToVector3();
+
+            // Step 3: raycast from snappedHit toward (hitPoint + normal * edgeDistance * 2)
+            Vector3 rayTarget = wallHitPoint + wallNormal * edgeDistance * 2f;
+            float t = 0f;
+            ulong[] rayPath = new ulong[MaxRaycastPolys];
+            int rayPathCount = 0;
+
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                uint status = NativeMethods.Raycast(
+                    mapId, hitPolyRef,
+                    new NativeMethods.XYZ(snappedHit), new NativeMethods.XYZ(rayTarget),
+                    out t, out _, rayPath, out rayPathCount, MaxRaycastPolys);
+
+                if (NativeMethods.NavStatusIsFailure(status))
+                    return MoveResult.Failed;
+
+                if (rayPathCount > 0)
+                    break; // got polys — proceed
+
+                if (attempt == 2)
+                    return MoveResult.Failed; // three strikes
+
+                // Nudge start along ray direction (HB retry logic)
+                Vector3 dir = rayTarget - snappedHit;
+                float len = dir.Length();
+                if (len > 0.001f)
+                    dir /= len;
+
+                if (attempt == 0)
+                    snappedHit += dir * 0.2f;
+                else
+                    snappedHit -= dir * 0.4f;
+            }
+
+            // Step 4: compute new point
+            if (t >= float.MaxValue * 0.5f)
+            {
+                // Ray reached end — no wall in that direction
+                point = wallHitPoint + wallNormal * edgeDistance;
             }
             else
             {
-                distance = NativeMethods.FindDistanceToWall(
-                    mapId,
-                    new NativeMethods.XYZ(point),
-                    edgeDistance,
-                    out hitPoint);
-                // Calculate normal manually when using basic FindDistanceToWall
-                Vector3 toWall = hitPoint.ToVector3() - point;
-                float len = toWall.Length();
-                hitNormal = len > 0.01f 
-                    ? new NativeMethods.XYZ(-toWall.X / len, -toWall.Y / len, -toWall.Z / len)
-                    : new NativeMethods.XYZ(1, 0, 0);
+                // Ray hit something — midpoint between wallHitPoint and ray hit
+                Vector3 rayHitPos = snappedHit + (rayTarget - snappedHit) * t;
+                point = (wallHitPoint + rayHitPos) * 0.5f;
             }
 
-            // If we're far enough from walls, nothing to do
-            if (distance >= edgeDistance || distance < 0.01f)
-                return false;
-
-            // Use hitNormal to calculate direction away from wall (like HB WoD)
-            Vector3 wallPos = hitPoint.ToVector3();
-            Vector3 awayDir = hitNormal.ToVector3();
-            float awayLength = awayDir.Length();
-            
-            if (awayLength < 0.01f)
+            // Step 5: GetPolyHeight on each visited poly to get correct Y
+            for (int i = 0; i < rayPathCount; i++)
             {
-                // Fallback: calculate from point to wall
-                awayDir = point - wallPos;
-                awayLength = awayDir.Length();
-                if (awayLength < 0.01f)
+                if (NativeMethods.GetPolyHeight(mapId, rayPath[i], new NativeMethods.XYZ(point), out float height))
                 {
-                    awayDir = new Vector3(1, 0, 0);
-                    awayLength = 1f;
+                    point = new Vector3(point.X, point.Y, height);
+                    polyRef = new PolygonReference(rayPath[i]);
+                    return MoveResult.Succeeded;
                 }
             }
-            
-            awayDir /= awayLength; // Normalize
 
-            // Calculate new position: wallPos + normal * edgeDistance * 2 (like HB WoD)
-            Vector3 newPos = wallPos + awayDir * edgeDistance * 2f;
-
-            // Verify new position is on navmesh
-            NativeMethods.XYZ nearestPoint;
-            if (NativeMethods.FindNearestPoly(mapId, new NativeMethods.XYZ(newPos), 1.0f, out nearestPoint))
-            {
-                // Use the snapped navmesh point directly — it's already verified navigable.
-                // HasLineOfSight check removed: both branches yielded the same result,
-                // and the snapped point from FindNearestPoly is safe regardless.
-                point = nearestPoint.ToVector3();
-                return true;
-            }
-
-            // Fallback: just move slightly away from wall
-            newPos = wallPos + awayDir * (edgeDistance * 0.5f);
-            if (NativeMethods.FindNearestPoly(mapId, new NativeMethods.XYZ(newPos), 1.0f, out nearestPoint))
-            {
-                point = nearestPoint.ToVector3();
-                return true;
-            }
-
-            return false;
+            return MoveResult.Failed;
         }
 
-        /// <summary>
-        /// Randomizes waypoint positions for more human-like movement.
-        /// Based on HB's method_4.
-        /// </summary>
+        // ── RandomizeWaypoints (HB method_4) ──
+
         private static void RandomizeWaypoints(
             uint mapId,
             List<Vector3> points,
+            List<PolygonReference> polygons,
             List<StraightPathFlags> flags,
-            float minOffset,
-            float maxOffset,
+            float minOffset, float maxOffset, float maxRandom,
             Random random)
         {
             for (int i = 1; i < points.Count - 1; i++)
             {
-                // Skip off-mesh connections
                 if ((flags[i] & StraightPathFlags.OffMeshConnection) != 0)
                     continue;
-                if (i > 0 && (flags[i - 1] & StraightPathFlags.OffMeshConnection) != 0)
+                if ((flags[i - 1] & StraightPathFlags.OffMeshConnection) != 0)
                     continue;
 
-                float offset = (float)(random.NextDouble() * (maxOffset - minOffset) + minOffset);
-                Vector3 point = points[i];
-
-                // First try to move away from edge
-                NativeMethods.XYZ hitPoint;
-                float distance = NativeMethods.FindDistanceToWall(
-                    mapId,
-                    new NativeMethods.XYZ(point),
-                    offset,
-                    out hitPoint);
-
+                float dist = (float)(random.NextDouble() * (maxOffset - minOffset) + minOffset);
+                Vector3 pt = points[i];
+                PolygonReference pr = polygons[i];
                 bool moved = false;
-                if (distance < offset && distance >= 0.01f)
+
+                MoveResult result = TryMoveAwayFromEdge(mapId, ref pt, ref pr, dist);
+                if (result == MoveResult.NoWallNearPoint)
                 {
-                    // Near wall, move away from it
-                    if (TryMoveAwayFromEdge(mapId, ref point, 0, offset))
+                    float r = (float)random.NextDouble() * Math.Min(dist, maxRandom);
+                    if (NativeMethods.FindRandomPointAroundCircle(
+                            mapId, new NativeMethods.XYZ(pt), r, out NativeMethods.XYZ rndPt))
                     {
+                        pt = rndPt.ToVector3();
+                        // Re-snap to get poly ref
+                        if (NativeMethods.FindNearestPolyRef(mapId,
+                                new NativeMethods.XYZ(pt), new NativeMethods.XYZ(0.5f, 5f, 0.5f),
+                                out ulong rndRef, out _) && rndRef != 0)
+                            pr = new PolygonReference(rndRef);
                         moved = true;
                     }
                 }
-                else
+                else if (result == MoveResult.Succeeded)
                 {
-                    // Not near wall, find random point around
-                    float randomOffset = (float)random.NextDouble() * Math.Min(offset, maxOffset * 0.5f);
-                    NativeMethods.XYZ randomPoint;
-                    if (NativeMethods.FindRandomPointAroundCircle(mapId, new NativeMethods.XYZ(point), randomOffset, out randomPoint))
-                    {
-                        point = randomPoint.ToVector3();
-                        moved = true;
-                    }
+                    moved = true;
                 }
 
                 if (moved)
                 {
-                    points[i] = point;
+                    points[i] = pt;
+                    polygons[i] = pr;
                 }
             }
         }
 
-        /// <summary>
-        /// Fixes path segments that may have become unwalkable after modifications.
-        /// Based on HB's method_5/method_9 (FixPathWalkability).
-        /// AUDIT FIX: When a segment is blocked (no line of sight), insert a midpoint on navmesh
-        /// between the two endpoints and recurse. This prevents post-MoveAwayFromEdges paths
-        /// from silently becoming invalid.
-        /// </summary>
+        // ── FixPathWalkability (exact port of HB method_5) ──
+
         private static void FixPathWalkability(
             uint mapId,
             List<Vector3> points,
+            List<PolygonReference> polygons,
             List<StraightPathFlags> flags,
-            float edgeDistance,
-            int recursionDepth)
+            FixSubPathCallback? callback)
         {
-            if (recursionDepth > MaxRecursionDepth)
-                return;
-
             for (int i = 0; i < points.Count - 1; i++)
             {
-                // Skip off-mesh connections
                 if ((flags[i] & StraightPathFlags.OffMeshConnection) != 0)
                     continue;
                 if ((flags[i + 1] & StraightPathFlags.OffMeshConnection) != 0)
                     continue;
 
-                Vector3 start = points[i];
-                Vector3 end = points[i + 1];
+                Vector3 segStart = points[i];
+                Vector3 segEnd = points[i + 1];
 
-                // Skip very short segments
-                float segmentLengthSqr = Vector3.DistanceSquared(start, end);
-                if (segmentLengthSqr < 0.01f)
+                if (Vector3.DistanceSquared(segStart, segEnd) < 0.01f)
                     continue;
 
-                // Check if we can walk directly between points
-                if (!NativeMethods.HasLineOfSight(mapId, new NativeMethods.XYZ(start), new NativeMethods.XYZ(end)))
+                // Raycast along the segment
+                ulong startPolyId = polygons[i].Id;
+                if (startPolyId == 0)
+                    continue;
+
+                ulong[] rayPath = new ulong[MaxRaycastPolys];
+                uint rcStatus = NativeMethods.Raycast(
+                    mapId, startPolyId,
+                    new NativeMethods.XYZ(segStart), new NativeMethods.XYZ(segEnd),
+                    out float t, out _, rayPath, out _, MaxRaycastPolys);
+
+                if (NativeMethods.NavStatusIsFailure(rcStatus))
+                    continue;
+
+                // If raycast blocked at the very start (t ≈ 0), nudge start forward 0.1
+                if (t <= 1e-7f)
                 {
-                    // Path segment is blocked — insert a midpoint on the navmesh between start and end.
-                    // This splits the blocked segment into two, which may be individually walkable.
-                    // If not, the recursion will continue splitting until MaxRecursionDepth.
-                    Vector3 midpoint = (start + end) * 0.5f;
-                    NativeMethods.XYZ snappedMid;
-                    if (NativeMethods.FindNearestPoly(mapId, new NativeMethods.XYZ(midpoint), 5.0f, out snappedMid))
+                    Vector3 dir = segEnd - segStart;
+                    float len = dir.Length();
+                    if (len > 0.001f)
+                        dir /= len;
+
+                    Vector3 nudged = segStart + dir * 0.1f;
+
+                    if (NativeMethods.FindNearestPolyRef(mapId,
+                            new NativeMethods.XYZ(nudged), new NativeMethods.XYZ(0.5f, 5f, 0.5f),
+                            out ulong nudgedRef, out NativeMethods.XYZ nudgedSnapped) && nudgedRef != 0)
                     {
-                        Vector3 newPoint = snappedMid.ToVector3();
-                        // Only insert if the midpoint is meaningfully different from both endpoints
-                        if (Vector3.DistanceSquared(newPoint, start) > 1.0f &&
-                            Vector3.DistanceSquared(newPoint, end) > 1.0f)
+                        nudged = nudgedSnapped.ToVector3();
+
+                        rcStatus = NativeMethods.Raycast(
+                            mapId, nudgedRef,
+                            new NativeMethods.XYZ(nudged), new NativeMethods.XYZ(segEnd),
+                            out t, out _, rayPath, out _, MaxRaycastPolys);
+
+                        if (NativeMethods.NavStatusIsFailure(rcStatus))
+                            continue;
+
+                        if (t > 1e-7f)
                         {
-                            points.Insert(i + 1, newPoint);
-                            flags.Insert(i + 1, StraightPathFlags.None);
-                            // Don't increment i — re-check the start→midpoint segment on next iteration
-                            // Recurse on the modified path to fix remaining blocked sub-segments
-                            FixPathWalkability(mapId, points, flags, edgeDistance, recursionDepth + 1);
-                            return; // Recursion handles the rest
+                            points[i] = nudged;
+                            polygons[i] = new PolygonReference(nudgedRef);
                         }
                     }
-                    // If snap failed or midpoint too close, skip — can't fix this segment
+                    // If snap failed, fall through — reroute block below fires with original t ≈ 0
+                }
+
+                // If still blocked (t < FLT_MAX), reroute the segment
+                if (t < float.MaxValue * 0.5f)
+                {
+                    // Get end polygon
+                    ulong endPolyId = (i + 1 < polygons.Count) ? polygons[i + 1].Id : 0;
+                    if (endPolyId == 0)
+                    {
+                        if (!NativeMethods.FindNearestPolyRef(mapId,
+                                new NativeMethods.XYZ(segEnd), new NativeMethods.XYZ(0.5f, 5f, 0.5f),
+                                out endPolyId, out _) || endPolyId == 0)
+                            continue;
+                    }
+
+                    // Use CalculatePathEx to find an alternative route for this segment
+                    // (replaces HB's FindPath + FindStraightPath pair)
+                    if (!CalculateSubPath(mapId, points[i], segEnd,
+                            out Vector3[] subPts, out StraightPathFlags[] subFlags, out PolygonReference[] subPolys))
+                        continue;
+
+                    if (subPts.Length <= 1)
+                        continue;
+
+                    // Recursive callback on the sub-path (HB delegate12_0)
+                    if (callback != null)
+                        callback(ref subPts, ref subPolys, ref subFlags);
+
+                    // Insert intermediate points (skip first and last — they overlap with existing path)
+                    int insertCount = subPts.Length - 2;
+                    if (insertCount > 0)
+                    {
+                        points.InsertRange(i + 1, subPts.Skip(1).Take(insertCount));
+                        polygons.InsertRange(i + 1, subPolys.Skip(1).Take(insertCount));
+                        flags.InsertRange(i + 1, subFlags.Skip(1).Take(insertCount));
+                        i += insertCount;
+                    }
+                }
+            }
+        }
+
+        // ── Helpers ──
+
+        /// <summary>
+        /// Computes a sub-path between two points using CalculatePathEx.
+        /// Replaces HB's FindPath + FindStraightPath pair.
+        /// </summary>
+        private static bool CalculateSubPath(
+            uint mapId, Vector3 start, Vector3 end,
+            out Vector3[] points, out StraightPathFlags[] flags, out PolygonReference[] polygons)
+        {
+            points = Array.Empty<Vector3>();
+            flags = Array.Empty<StraightPathFlags>();
+            polygons = Array.Empty<PolygonReference>();
+
+            IntPtr resultPtr = NativeMethods.CalculatePathEx(
+                mapId, new NativeMethods.XYZ(start), new NativeMethods.XYZ(end), true);
+
+            if (resultPtr == IntPtr.Zero)
+                return false;
+
+            try
+            {
+                var result = Marshal.PtrToStructure<NativeMethods.PathResult>(resultPtr);
+
+                if (NativeMethods.NavStatusIsFailure(result.Status) || result.Length <= 0)
+                    return false;
+
+                // Reject partial paths (HB checks HasFlag(64) = DT_PARTIAL_RESULT)
+                if ((result.Status & 0x40) != 0)
+                    return false;
+
+                int len = result.Length;
+                points = new Vector3[len];
+                flags = new StraightPathFlags[len];
+                polygons = new PolygonReference[len];
+
+                unsafe
+                {
+                    var pts = (NativeMethods.XYZ*)result.Points.ToPointer();
+                    for (int i = 0; i < len; i++)
+                        points[i] = pts[i].ToVector3();
+
+                    if (result.StraightPathFlags != IntPtr.Zero)
+                    {
+                        byte* fl = (byte*)result.StraightPathFlags.ToPointer();
+                        for (int i = 0; i < len; i++)
+                            flags[i] = (StraightPathFlags)fl[i];
+                    }
+
+                    if (result.PolyRefs != IntPtr.Zero)
+                    {
+                        ulong* pr = (ulong*)result.PolyRefs.ToPointer();
+                        for (int i = 0; i < len; i++)
+                            polygons[i] = new PolygonReference(pr[i]);
+                    }
+                }
+
+                return true;
+            }
+            finally
+            {
+                NativeMethods.FreePathResult(resultPtr);
+            }
+        }
+
+        /// <summary>
+        /// Ensures every element in the polygons array has a valid poly ref.
+        /// Snaps points with zero refs to the navmesh.
+        /// </summary>
+        private static void EnsurePolyRefs(uint mapId, Vector3[] points, ref PolygonReference[] polygons)
+        {
+            for (int i = 0; i < points.Length; i++)
+            {
+                if (i >= polygons.Length || polygons[i].Id == 0)
+                {
+                    if (NativeMethods.FindNearestPolyRef(mapId,
+                            new NativeMethods.XYZ(points[i]),
+                            new NativeMethods.XYZ(0.5f, 5f, 0.5f),
+                            out ulong refId, out _) && refId != 0)
+                    {
+                        if (i < polygons.Length)
+                            polygons[i] = new PolygonReference(refId);
+                    }
                 }
             }
         }
