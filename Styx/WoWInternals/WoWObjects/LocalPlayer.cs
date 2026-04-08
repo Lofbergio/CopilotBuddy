@@ -1952,44 +1952,38 @@ namespace Styx.WoWInternals.WoWObjects
 
         /// <summary>
         /// Gets the GUID of the bag at the specified index (0-10).
+        /// Reads from global bag GUID array at 12727616 + 8 * index.
+        /// HB 3.3.5a: ObjectManager.Wow.Read&lt;ulong&gt;(12727616U + 8U * index)
         /// </summary>
         public ulong GetBagGuidAtIndex(uint index)
         {
-            ulong result;
             try
             {
                 if (index > 10U)
                 {
                     throw new ArgumentOutOfRangeException("index");
                 }
+
+                Memory? wow = ObjectManager.Wow;
+                if (wow == null) return 0UL;
+
+                // Bank bags (4-10): bail if bank frame not open
                 if (index >= 4U)
                 {
-                    Memory? wow = ObjectManager.Wow;
-                    if (wow == null) return 0UL;
-                    uint[] array = new uint[]
-                    {
-                        12499360U
-                    };
-                    if (wow.Read<ulong>(array) == 0UL)
+                    if (wow.Read<ulong>(new uint[] { 12499360U }) == 0UL)
                     {
                         return 0UL;
                     }
                 }
-                Memory? wow2 = ObjectManager.Wow;
-                if (wow2 == null) return 0UL;
-                uint[] array2 = new uint[]
-                {
-                    12727616U + 8U * index
-                };
-                ulong raidMemberGuid = wow2.Read<ulong>(array2);
-                result = raidMemberGuid;
+
+                // All bags: read from global bag GUID array (HB 3.3.5a offset 12727616)
+                return wow.Read<ulong>(new uint[] { 12727616U + 8U * index });
             }
             catch (Exception ex)
             {
                 Logging.WriteException(ex);
                 throw;
             }
-            return result;
         }
 
         /// <summary>
@@ -2039,13 +2033,14 @@ namespace Styx.WoWInternals.WoWObjects
                 {
                     List<ulong> list = new List<ulong>();
                     
-                    // Add backpack items
+                    // Add backpack items (16 slots)
                     if (Inventory != null && Inventory.Backpack != null)
                     {
                         list.AddRange(Inventory.Backpack.PhysicalItemGuids);
                     }
 
-                    // Add items from 4 bag slots
+                    // Add items from equipped bags (0-3)
+                    // HB 4.3.4: iterates bags 0-3, calls GetBagAtIndex → container.PhysicalItemGuids
                     for (uint i = 0U; i < 4U; i++)
                     {
                         WoWContainer bag = GetBagAtIndex(i);

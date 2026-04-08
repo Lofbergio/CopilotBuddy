@@ -1,34 +1,48 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using GreenMagic;
 
 namespace Styx.WoWInternals.WoWObjects
 {
+    /// <summary>
+    /// Represents an equipped bag container in the player's inventory.
+    /// Ported from HB 4.3.4 WoWContainer — delegates all item access to an internal WoWBag
+    /// constructed from BagStructure at containerBaseAddress + 1888 (3.3.5a offset).
+    /// </summary>
     public class WoWContainer : WoWItem
     {
-        #region Descriptor Offsets - CONTAINER_FIELD
-        
-        // Container descriptors start after OBJECT_END (6 indices) + ITEM_END (0x43 = 67 indices) = 73 absolute indices.
-        // Byte offset from descriptor base: 73 * 4 = 292 (0x124)
-        private const int CONTAINER_FIELDS_BASE = (6 + 0x43) * 4;  // 292 (0x124)
-
-        // Relative indices within the container descriptor section (from WoWContainerFields.cs)
-        private const int CONTAINER_FIELD_NUM_SLOTS = 0x0;     // uint — number of slots
-        private const int CONTAINER_ALIGN_PAD = 0x1;           // padding
-        private const int CONTAINER_FIELD_SLOT_1 = 0x2;        // Array of 36 x 2 indices (ulong each)
-        
-        #endregion
-        
         #region Constructor
+
         public WoWContainer(uint baseAddress) : base(baseAddress)
         {
         }
-        
+
+        #endregion
+
+        #region Bag — core delegation target
+
+        /// <summary>
+        /// Internal WoWBag built from BagStructure at BaseAddress + 1888.
+        /// HB 4.3.4: new WoWBag(ObjectManager.Wow.ReadStruct&lt;Struct58&gt;(base.BaseAddress + offset(4998)))
+        /// HB 3.3.5a offset 4998 = 1888.
+        /// </summary>
+        public WoWBag Bag
+        {
+            get
+            {
+                Memory? wow = ObjectManager.Wow;
+                if (wow == null) return null!;
+                return new WoWBag(wow.Read<BagStructure>(new uint[] { BaseAddress + 1888U }));
+            }
+        }
+
         #endregion
 
         #region BagType
 
         /// <summary>
-        /// FEAT-31: Gets the bag type from the item's SubClass.
+        /// Gets the bag type from the item's SubClass.
         /// WotLK bag SubClass mapping: 0=Normal, 1=SoulShard, 2=Herb, 3=Enchanting,
         /// 4=Engineering, 5=Gem, 6=Mining, 7=Leatherworking, 8=Inscription, 9=Ammo.
         /// </summary>
@@ -36,81 +50,34 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
-                try
-                {
-                    var info = ItemInfo;
-                    if (info != null)
-                    {
-                        int subClass = (int)info.SubClassId;
-                        if (Enum.IsDefined(typeof(BagType), subClass))
-                            return (BagType)subClass;
-                    }
-                }
-                catch { }
-                return BagType.Normal;
+                return (BagType)(ItemInfo?.SubClassId ?? 0);
             }
         }
 
         #endregion
-        
-        #region Container Properties
-        public uint NumSlots
-        {
-            get
-            {
-                return GetDescriptorField<uint>(CONTAINER_FIELDS_BASE + CONTAINER_FIELD_NUM_SLOTS * 4);
-            }
-        }
-        public uint FreeSlotsCount
-        {
-            get
-            {
-                uint free = 0;
-                uint slots = NumSlots;
-                for (uint i = 0; i < slots; i++)
-                {
-                    if (GetSlotGuid(i) == 0)
-                        free++;
-                }
-                return free;
-            }
-        }
+
+        #region Container Properties — delegated to Bag
 
         /// <summary>
-        /// Gets the number of free slots.
-        /// Ported from HB 3.3.5a WoWContainer.FreeSlots
+        /// Number of slots in this container. Ported from HB 4.3.4 WoWContainer.Slots.
         /// </summary>
-        public uint FreeSlots
-        {
-            get
-            {
-                try
-                {
-                    return FreeSlotsCount;
-                }
-                catch (Exception ex)
-                {
-                    Styx.Helpers.Logging.WriteException(ex);
-                    return 0;
-                }
-            }
-        }
-
-        public bool IsFull => FreeSlotsCount == 0;
-        public bool IsEmpty => FreeSlotsCount == NumSlots;
-
-        /// <summary>
-        /// Alias for NumSlots. Ported from HB 4.3.4 WoWContainer.Slots.
-        /// </summary>
-        public uint Slots => NumSlots;
+        public uint Slots => Bag.Slots;
 
         /// <summary>
         /// Number of occupied slots. Ported from HB 4.3.4 WoWContainer.UsedSlots.
         /// </summary>
-        public uint UsedSlots => NumSlots - FreeSlotsCount;
+        public uint UsedSlots => Bag.UsedSlots;
 
         /// <summary>
-        /// Gets the bag slot index (0–10) this container occupies, or -1 if not found.
+        /// Number of free slots. Ported from HB 4.3.4 WoWContainer.FreeSlots.
+        /// </summary>
+        public uint FreeSlots => Bag.FreeSlots;
+
+        public bool IsFull => FreeSlots == 0;
+        public bool IsEmpty => FreeSlots == Slots;
+
+        /// <summary>
+        /// Gets the bag slot index (0-10) this container occupies, or -1 if not found.
         /// Ported from HB 4.3.4 WoWContainer.BagIndex.
         /// </summary>
         public new int BagIndex
@@ -125,143 +92,93 @@ namespace Styx.WoWInternals.WoWObjects
                 return -1;
             }
         }
-        
+
         #endregion
-        
-        #region Slot Access
-        public ulong GetSlotGuid(uint slotIndex)
-        {
-            if (slotIndex >= NumSlots)
-                return 0;
-            
-            // Each slot is 2 descriptor indices (8 bytes for ulong GUID)
-            int offset = CONTAINER_FIELDS_BASE + (CONTAINER_FIELD_SLOT_1 + (int)(slotIndex * 2)) * 4;
-            return GetDescriptorField<ulong>(offset);
-        }
-        public WoWItem? GetSlotItem(uint slotIndex)
-        {
-            ulong guid = GetSlotGuid(slotIndex);
-            if (guid == 0)
-                return null;
-                
-            return ObjectManager.GetObjectByGuid<WoWItem>(guid);
-        }
-        public List<WoWItem> Items
-        {
-            get
-            {
-                var items = new List<WoWItem>();
-                uint slots = NumSlots;
-                for (uint i = 0; i < slots; i++)
-                {
-                    var item = GetSlotItem(i);
-                    if (item != null)
-                        items.Add(item);
-                }
-                return items;
-            }
-        }
 
-        public ulong[] ItemGuids
-        {
-            get
-            {
-                uint slots = NumSlots;
-                var guids = new ulong[slots];
-                for (uint i = 0; i < slots; i++)
-                    guids[i] = GetSlotGuid(i);
-                return guids;
-            }
-        }
+        #region Slot Access — delegated to Bag
 
         /// <summary>
-        /// Gets GUIDs of physical (non-zero) items.
-        /// Ported from HB 3.3.5a WoWContainer.PhysicalItemGuids
+        /// All item GUIDs (including empty slots as 0). Ported from HB 4.3.4.
         /// </summary>
-        public ulong[] PhysicalItemGuids
-        {
-            get
-            {
-                try
-                {
-                    var guids = new List<ulong>();
-                    uint slots = NumSlots;
-                    for (uint i = 0; i < slots; i++)
-                    {
-                        ulong guid = GetSlotGuid(i);
-                        if (guid != 0UL)
-                            guids.Add(guid);
-                    }
-                    return guids.ToArray();
-                }
-                catch (Exception ex)
-                {
-                    Styx.Helpers.Logging.WriteException(ex);
-                    throw;
-                }
-            }
-        }
+        public ulong[] ItemGuids => Bag.ItemGuids;
 
         /// <summary>
-        /// Gets non-null items as an array. Ported from HB 4.3.4 WoWContainer.PhysicalItems.
+        /// All items in the container (non-null only). Ported from HB 4.3.4.
         /// </summary>
-        public WoWItem[] PhysicalItems => Items.ToArray();
+        public new List<WoWItem> Items => Bag.Items.Where(i => i != null).ToList();
 
         /// <summary>
-        /// Returns the item GUID at the given slot. Ported from HB 4.3.4 WoWContainer.GetItemGuidBySlot.
+        /// GUIDs of physical (non-zero) items. Ported from HB 4.3.4.
         /// </summary>
-        public ulong GetItemGuidBySlot(uint slot) => GetSlotGuid(slot);
+        public ulong[] PhysicalItemGuids => Bag.PhysicalItemGuids;
 
         /// <summary>
-        /// Returns the item at the given slot. Ported from HB 4.3.4 WoWContainer.GetItemBySlot.
+        /// Non-null items as an array. Ported from HB 4.3.4.
         /// </summary>
-        public WoWItem? GetItemBySlot(uint slot) => GetSlotItem(slot);
-        
+        public WoWItem[] PhysicalItems => Bag.PhysicalItems;
+
+        /// <summary>
+        /// Returns the item GUID at the given slot. Ported from HB 4.3.4.
+        /// </summary>
+        public ulong GetItemGuidBySlot(uint slot) => Bag.GetItemGuidBySlot(slot);
+
+        /// <summary>
+        /// Returns the item at the given slot. Ported from HB 4.3.4.
+        /// </summary>
+        public WoWItem? GetItemBySlot(uint slot) => Bag.GetItemBySlot(slot);
+
         #endregion
-        
+
         #region Search Methods
+
         public int FindFirstFreeSlot()
         {
-            uint slots = NumSlots;
-            for (uint i = 0; i < slots; i++)
+            ulong[] guids = ItemGuids;
+            for (int i = 0; i < guids.Length; i++)
             {
-                if (GetSlotGuid(i) == 0)
-                    return (int)i;
+                if (guids[i] == 0UL)
+                    return i;
             }
             return -1;
         }
+
         public WoWItem? FindItemByEntry(uint entryId)
         {
-            uint slots = NumSlots;
-            for (uint i = 0; i < slots; i++)
-            {
-                var item = GetSlotItem(i);
-                if (item != null && item.Entry == entryId)
-                    return item;
-            }
-            return null;
+            return Items.FirstOrDefault(item => item.Entry == entryId);
         }
+
         public uint CountItemsByEntry(uint entryId)
         {
             uint count = 0;
-            uint slots = NumSlots;
-            for (uint i = 0; i < slots; i++)
+            foreach (var item in Items)
             {
-                var item = GetSlotItem(i);
-                if (item != null && item.Entry == entryId)
+                if (item.Entry == entryId)
                     count += item.StackCount;
             }
             return count;
         }
-        
+
         #endregion
-        
+
+        #region Implicit Conversion
+
+        /// <summary>
+        /// Implicit conversion to WoWBag. Ported from HB 4.3.4.
+        /// </summary>
+        public static implicit operator WoWBag(WoWContainer container)
+        {
+            return container?.Bag!;
+        }
+
+        #endregion
+
         #region ToString
+
         public override string ToString()
         {
-            return $"[Container: {Name} (Slots: {NumSlots}, Free: {FreeSlotsCount})]";
+            return $"[Container: {Name} (Slots: {Slots}, Free: {FreeSlots})]";
         }
-        
+
         #endregion
     }
 }
