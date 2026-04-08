@@ -691,7 +691,7 @@ namespace Styx.Logic
                 if (!inCombat)
                 {
                     // Elite distance-gated removal (HB 4.3.4)
-                    if (!currentProfile.TargetElites && unit.Elite)
+                    if (currentProfile != null && !currentProfile.TargetElites && unit.Elite)
                     {
                         if (distance > 20.0)
                         {
