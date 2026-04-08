@@ -295,11 +295,18 @@ namespace Styx.WoWInternals
 		{
 			StyxWoW.ResetAfk();
 
-			// Validate coordinates - NaN would crash WoW with INT_DIVIDE_BY_ZERO
+			// HB 3.3.5a passes WoWPoint.Empty (NaN) for GUID-based ops (Face, LeftClick, etc.)
+			// WoW ignores clickPos for those ops, but NaN in memory can cause issues.
+			// Replace Empty with Zero for safety — only reject NaN for actual Move commands.
 			if (float.IsNaN(clickPos.X) || float.IsNaN(clickPos.Y) || float.IsNaN(clickPos.Z))
 			{
-				Logging.WriteDebug("[CTM] ERROR: ClickPos contains NaN coordinates, aborting CTM");
-				return;
+				if (clickToMoveType == ClickToMoveType.Move)
+				{
+					Logging.WriteDebug("[CTM] ERROR: Move destination contains NaN coordinates, aborting CTM");
+					return;
+				}
+				// GUID-based ops don't use clickPos — substitute Zero
+				clickPos = WoWPoint.Zero;
 			}
 
 			ExecutorRand? executor = ObjectManager.Executor;
