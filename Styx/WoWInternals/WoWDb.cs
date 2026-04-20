@@ -52,6 +52,20 @@ namespace Styx.WoWInternals
                     
                     addr += 17; // Each entry is 17 bytes
                 }
+                
+                // Diagnostic: log what was loaded
+                Helpers.Logging.WriteDebug($"[WoWDb] Loaded {_tables.Count} DBC tables");
+                int logged = 0;
+                foreach (var kvp in _tables)
+                {
+                    if (logged++ < 5)
+                        Helpers.Logging.WriteDebug($"[WoWDb]   Key={(int)kvp.Key} (0x{(int)kvp.Key:X8}) Rows={kvp.Value.NumRows}");
+                }
+                
+                // Check if Lock DBC is accessible
+                var lockDb = this[ClientDb.Lock];
+                Helpers.Logging.WriteDebug($"[WoWDb] Lock DBC lookup: {(lockDb != null ? $"FOUND (rows={lockDb.NumRows})" : "NOT FOUND")}");
+                Helpers.Logging.WriteDebug($"[WoWDb] ClientDb.Lock enum value = {(int)ClientDb.Lock} (0x{(int)ClientDb.Lock:X8})");
             }
             catch (Exception)
             {
