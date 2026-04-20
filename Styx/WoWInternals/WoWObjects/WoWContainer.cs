@@ -61,17 +61,17 @@ namespace Styx.WoWInternals.WoWObjects
         /// <summary>
         /// Number of slots in this container. Ported from HB 4.3.4 WoWContainer.Slots.
         /// </summary>
-        public uint Slots => Bag.Slots;
+        public uint Slots { get { WoWBag bag = Bag; return bag?.Slots ?? 0; } }
 
         /// <summary>
         /// Number of occupied slots. Ported from HB 4.3.4 WoWContainer.UsedSlots.
         /// </summary>
-        public uint UsedSlots => Bag.UsedSlots;
+        public uint UsedSlots { get { WoWBag bag = Bag; return bag?.UsedSlots ?? 0; } }
 
         /// <summary>
         /// Number of free slots. Ported from HB 4.3.4 WoWContainer.FreeSlots.
         /// </summary>
-        public uint FreeSlots => Bag.FreeSlots;
+        public uint FreeSlots { get { WoWBag bag = Bag; return bag?.FreeSlots ?? 0; } }
 
         public bool IsFull => FreeSlots == 0;
         public bool IsEmpty => FreeSlots == Slots;
@@ -100,32 +100,40 @@ namespace Styx.WoWInternals.WoWObjects
         /// <summary>
         /// All item GUIDs (including empty slots as 0). Ported from HB 4.3.4.
         /// </summary>
-        public ulong[] ItemGuids => Bag.ItemGuids;
+        public ulong[] ItemGuids { get { WoWBag bag = Bag; return bag?.ItemGuids ?? Array.Empty<ulong>(); } }
 
         /// <summary>
         /// All items in the container (non-null only). Ported from HB 4.3.4.
         /// </summary>
-        public new List<WoWItem> Items => Bag.Items.Where(i => i != null).ToList();
+        public new List<WoWItem> Items
+        {
+            get
+            {
+                WoWBag bag = Bag;
+                if (bag == null) return new List<WoWItem>();
+                return bag.Items.Where(i => i != null).ToList();
+            }
+        }
 
         /// <summary>
         /// GUIDs of physical (non-zero) items. Ported from HB 4.3.4.
         /// </summary>
-        public ulong[] PhysicalItemGuids => Bag.PhysicalItemGuids;
+        public ulong[] PhysicalItemGuids { get { WoWBag bag = Bag; return bag?.PhysicalItemGuids ?? Array.Empty<ulong>(); } }
 
         /// <summary>
         /// Non-null items as an array. Ported from HB 4.3.4.
         /// </summary>
-        public WoWItem[] PhysicalItems => Bag.PhysicalItems;
+        public WoWItem[] PhysicalItems { get { WoWBag bag = Bag; return bag?.PhysicalItems ?? Array.Empty<WoWItem>(); } }
 
         /// <summary>
         /// Returns the item GUID at the given slot. Ported from HB 4.3.4.
         /// </summary>
-        public ulong GetItemGuidBySlot(uint slot) => Bag.GetItemGuidBySlot(slot);
+        public ulong GetItemGuidBySlot(uint slot) { WoWBag bag = Bag; return bag?.GetItemGuidBySlot(slot) ?? 0UL; }
 
         /// <summary>
         /// Returns the item at the given slot. Ported from HB 4.3.4.
         /// </summary>
-        public WoWItem? GetItemBySlot(uint slot) => Bag.GetItemBySlot(slot);
+        public WoWItem? GetItemBySlot(uint slot) { WoWBag bag = Bag; return bag?.GetItemBySlot(slot); }
 
         #endregion
 
