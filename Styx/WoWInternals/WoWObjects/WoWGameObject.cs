@@ -288,34 +288,29 @@ namespace Styx.WoWInternals.WoWObjects
                 // Check herbs (herbalism skill)
                 if (IsHerb)
                 {
-                    WoWSkill skill = ObjectManager.Me.GetSkill(SkillLine.Herbalism);
-                    if (skill != null && skill.MaxValue > 0)
-                    {
-                        int effectiveSkill = skill.CurrentValue;
-                        // Tauren racial: +15 Herbalism
-                        if (StyxWoW.Me.Race == WoWRace.Tauren)
-                            effectiveSkill += 15;
-                        
-                        uint? required = RequiredSkill;
-                        if (!required.HasValue || effectiveSkill >= required.Value)
-                            return true;
-                    }
+                    if (State != WoWGameObjectState.Ready) return false; // Already harvested.
+                    WoWSkill? skill = ObjectManager.Me.GetSkill(SkillLine.Herbalism);
+                    if (skill == null) return false;
+                    int effectiveSkill = skill.CurrentValue;
+                    // Tauren racial: +15 Herbalism
+                    if (StyxWoW.Me.Race == WoWRace.Tauren)
+                        effectiveSkill += 15;
+                    uint? required = RequiredSkill;
+                    return !required.HasValue || required.Value == 0 || effectiveSkill >= required.Value;
                 }
                 // Check minerals (mining skill)
                 else if (IsMineral)
                 {
-                    WoWSkill skill = ObjectManager.Me.GetSkill(SkillLine.Mining);
-                    if (skill != null && skill.MaxValue > 0)
-                    {
-                        uint? required = RequiredSkill;
-                        if (!required.HasValue || skill.CurrentValue >= required.Value)
-                            return true;
-                    }
+                    if (State != WoWGameObjectState.Ready) return false; // Already mined.
+                    WoWSkill? skill = ObjectManager.Me.GetSkill(SkillLine.Mining);
+                    if (skill == null) return false;
+                    uint? required = RequiredSkill;
+                    return !required.HasValue || required.Value == 0 || skill.CurrentValue >= required.Value;
                 }
                 // Check locked chests (lockpicking skill)
                 else if (IsChest && Locked)
                 {
-                    WoWSkill skill = ObjectManager.Me.GetSkill(SkillLine.Lockpicking);
+                    WoWSkill? skill = ObjectManager.Me.GetSkill(SkillLine.Lockpicking);
                     if (skill != null && skill.MaxValue > 0)
                     {
                         uint? required = RequiredSkill;
@@ -332,11 +327,11 @@ namespace Styx.WoWInternals.WoWObjects
             }
         }
         
-        // HB 4.3.4: CanMine uses IsMineral (which checks LockType)
-        public bool CanMine => IsMineral && State == WoWGameObjectState.Ready;
+        // HB 4.3.4: CanMine just checks LockType (no State check in HB)
+        public bool CanMine => IsMineral;
         
-        // HB 4.3.4: CanHarvest uses IsHerb (which checks LockType) 
-        public bool CanHarvest => IsHerb && State == WoWGameObjectState.Ready;
+        // HB 4.3.4: CanHarvest just checks LockType (no State check in HB)
+        public bool CanHarvest => IsHerb;
         
         public bool CanFish => SubType == WoWGameObjectType.FishingBobber;
         
@@ -667,8 +662,8 @@ namespace Styx.WoWInternals.WoWObjects
     }
     public enum WoWGameObjectState : byte
     {
-        Ready = 0,
-        Active = 1,
+        Active = 0,
+        Ready = 1,
         ActiveAlternative = 2,
         Destroyed = 3
     }
