@@ -680,10 +680,7 @@ namespace Styx.WoWInternals.WoWObjects
 
         #region Skills
 
-        // Static addresses for skills 3.3.5a
-        private const uint SkillsBasePtr = 0xBE55C8;      // Base address for skill data
         private const int MaxSkills = 128;
-        private const int SkillEntrySize = 12;            // sizeof(SkillInfo)
 
         /// <summary>
         /// Gets a skill by skill line.
@@ -703,26 +700,17 @@ namespace Styx.WoWInternals.WoWObjects
 
         /// <summary>
         /// Gets a skill by skill line ID.
+        /// Scans the player descriptor's skill block at BaseAddress+8 → descriptorBase+0x9F0.
         /// </summary>
         public WoWSkill? GetSkill(uint skillLineId)
         {
-            if (Memory == null) return null;
-
-            // Scan through skill slots to find matching skill
-            for (int i = 0; i < MaxSkills; i++)
+            for (uint i = 0; i < MaxSkills; i++)
             {
-                uint skillPtr = SkillsBasePtr + (uint)(i * SkillEntrySize);
-                ushort id = Memory.Read<ushort>(skillPtr);
-
-                if (id == skillLineId)
-                {
-                    return new WoWSkill(skillPtr);
-                }
-
-                // Empty slot, stop scanning
-                if (id == 0) break;
+                WoWSkill? skill = GetSkillByIndex(i);
+                if (skill == null) break;         // Memory failure — stop.
+                if (!skill.IsValid) continue;     // Empty slot — keep scanning.
+                if ((uint)skill.Id == skillLineId) return skill;
             }
-
             return null;
         }
 
@@ -732,20 +720,13 @@ namespace Styx.WoWInternals.WoWObjects
         public List<WoWSkill> GetAllSkills()
         {
             List<WoWSkill> skills = new List<WoWSkill>();
-            if (Memory == null) return skills;
 
-            for (int i = 0; i < MaxSkills; i++)
+            for (uint i = 0; i < MaxSkills; i++)
             {
-                uint skillPtr = SkillsBasePtr + (uint)(i * SkillEntrySize);
-                ushort id = Memory.Read<ushort>(skillPtr);
-
-                if (id == 0) break;
-
-                WoWSkill skill = new WoWSkill(skillPtr);
-                if (skill.IsValid)
-                {
-                    skills.Add(skill);
-                }
+                WoWSkill? skill = GetSkillByIndex(i);
+                if (skill == null) break;         // Memory failure — stop.
+                if (!skill.IsValid) continue;     // Empty slot — keep scanning.
+                skills.Add(skill);
             }
 
             return skills;
