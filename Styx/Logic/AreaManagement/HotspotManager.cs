@@ -63,7 +63,7 @@ namespace Styx.Logic.AreaManagement
 									{
 										if (text == "X")
 										{
-											if (!float.TryParse(xattribute.Value, out float parsedX))
+											if (!float.TryParse(xattribute.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float parsedX))
 											{
 												throw new ProfileAttributeExpectedException<float>(xattribute);
 											}
@@ -71,7 +71,7 @@ namespace Styx.Logic.AreaManagement
 										}
 										else if (text == "Y")
 										{
-											if (!float.TryParse(xattribute.Value, out float parsedY))
+											if (!float.TryParse(xattribute.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out float parsedY))
 											{
 												throw new ProfileAttributeExpectedException<float>(xattribute);
 											}
