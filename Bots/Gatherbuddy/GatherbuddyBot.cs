@@ -656,99 +656,85 @@ namespace Bots.Gatherbuddy
 
         private Composite CreateGatherBehavior()
         {
-            return new PrioritySelector(
-                // ContextChanger: find best node each tick
+            // Decorator: find best node each tick — if null, fall through to movement
+            return new Decorator(
                 ctx =>
                 {
                     _currentNode = FindBestNode();
-                    return ctx;
+                    return _currentNode != null;
                 },
 
-                // No node found - fall through to movement
-                new Decorator(
-                    ctx => _currentNode == null,
-                    new ActionAlwaysFail()
-                ),
-
-                // Node found - move to it and harvest
-                new Sequence(
-                    new Action(ctx =>
-                    {
-                        TreeRoot.StatusText = $"Gathering {_currentNode!.Name} ({_currentNode.Distance:F0}y)";
-                        Logging.WriteDiagnostic($"[GatherBuddy] Found {_currentNode.Name} at {_currentNode.Distance:F0}y");
-                        return RunStatus.Success;
-                    }),
-
-                    new PrioritySelector(
-                        // Too far - move closer
-                        new Decorator(
-                            ctx => _currentNode != null && _currentNode.DistanceSqr > 5 * 5,
-                            new Sequence(
-                                // Dismount if getting close (ground or descend if flying)
-                                new DecoratorContinue(
-                                    ctx => StyxWoW.Me != null && StyxWoW.Me.Mounted && _currentNode!.DistanceSqr < 15 * 15,
-                                    new Action(ctx =>
-                                    {
-                                        Mount.Dismount("Gathering");
-                                        return RunStatus.Success;
-                                    })
-                                ),
+                new PrioritySelector(
+                    // Too far - move closer
+                    new Decorator(
+                        ctx => _currentNode != null && _currentNode.DistanceSqr > 5 * 5,
+                        new Sequence(
+                            // Dismount if getting close (ground or descend if flying)
+                            new DecoratorContinue(
+                                ctx => StyxWoW.Me != null && StyxWoW.Me.Mounted && _currentNode!.DistanceSqr < 15 * 15,
                                 new Action(ctx =>
                                 {
-                                    if (GatherBuddySettings.Instance.UseFlying && Flightor.MountHelper.CanMount)
-                                        Flightor.MoveTo(_currentNode!.Location);
-                                    else
-                                        Navigator.MoveTo(_currentNode!.Location);
-                                    return RunStatus.Running;
-                                })
-                            )
-                        ),
-
-                        // Close enough - interact
-                        new Decorator(
-                            ctx => _currentNode != null && _currentNode.DistanceSqr <= 5 * 5 &&
-                                   StyxWoW.Me != null && !StyxWoW.Me.IsCasting,
-                            new Sequence(
-                                new Action(ctx =>
-                                {
-                                    WoWMovement.MoveStop();
-
-                                    if (StyxWoW.Me!.Mounted)
-                                        Mount.Dismount("Gathering");
-
-                                    if (GatherBuddySettings.Instance.FaceNodes)
-                                        WoWMovement.Face(_currentNode!.Location);
-
-                                    _currentNode!.Interact();
-                                    Logging.Write($"[GatherBuddy] Gathering {_currentNode.Name}");
+                                    Mount.Dismount("Gathering");
                                     return RunStatus.Success;
-                                }),
+                                })
+                            ),
+                            new Action(ctx =>
+                            {
+                                TreeRoot.StatusText = $"Moving to {_currentNode!.Name} ({_currentNode.Distance:F0}y)";
+                                if (GatherBuddySettings.Instance.UseFlying && Flightor.MountHelper.CanMount)
+                                    Flightor.MoveTo(_currentNode.Location);
+                                else
+                                    Navigator.MoveTo(_currentNode.Location);
+                                return RunStatus.Running;
+                            })
+                        )
+                    ),
 
-                                // Wait for cast to finish
-                                new WaitContinue(
-                                    5,
-                                    ctx => StyxWoW.Me != null && !StyxWoW.Me.IsCasting,
-                                    new Action(ctx =>
+                    // Close enough - interact
+                    new Decorator(
+                        ctx => _currentNode != null && _currentNode.DistanceSqr <= 5 * 5 &&
+                               StyxWoW.Me != null && !StyxWoW.Me.IsCasting,
+                        new Sequence(
+                            new Action(ctx =>
+                            {
+                                WoWMovement.MoveStop();
+
+                                if (StyxWoW.Me!.Mounted)
+                                    Mount.Dismount("Gathering");
+
+                                if (GatherBuddySettings.Instance.FaceNodes)
+                                    WoWMovement.Face(_currentNode!.Location);
+
+                                _currentNode!.Interact();
+                                Logging.Write($"[GatherBuddy] Gathering {_currentNode.Name}");
+                                SleepForLag(); // Allow server to start the cast before WaitContinue checks IsCasting
+                                return RunStatus.Success;
+                            }),
+
+                            // Wait for cast to finish
+                            new WaitContinue(
+                                5,
+                                ctx => StyxWoW.Me != null && !StyxWoW.Me.IsCasting,
+                                new Action(ctx =>
+                                {
+                                    if (_currentNode != null)
                                     {
-                                        if (_currentNode != null)
-                                        {
-                                            _nodesGathered++;
-                                            if (_currentNode.IsHerb) _herbsGathered++;
-                                            if (_currentNode.IsMineral) _mineralsGathered++;
-                                            NodeTracker.MarkHarvested(_currentNode);
+                                        _nodesGathered++;
+                                        if (_currentNode.IsHerb) _herbsGathered++;
+                                        if (_currentNode.IsMineral) _mineralsGathered++;
+                                        NodeTracker.MarkHarvested(_currentNode);
 
-                                            // Auto-loot the gather (LOOT_OPENED)
-                                            SleepForLag();
-                                            Lua.DoString(
-                                                "for i=GetNumLootItems(),1,-1 do " +
-                                                "  LootSlot(i); ConfirmBindOnUse(); " +
-                                                "end; " +
-                                                "CloseLoot()");
-                                        }
-                                        _currentNode = null;
-                                        return RunStatus.Success;
-                                    })
-                                )
+                                        // Auto-loot the gather (LOOT_OPENED)
+                                        SleepForLag();
+                                        Lua.DoString(
+                                            "for i=GetNumLootItems(),1,-1 do " +
+                                            "  LootSlot(i); ConfirmBindOnUse(); " +
+                                            "end; " +
+                                            "CloseLoot()");
+                                    }
+                                    _currentNode = null;
+                                    return RunStatus.Success;
+                                })
                             )
                         )
                     )
