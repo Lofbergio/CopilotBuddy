@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Threading;
 using GreenMagic;
 using Styx.Helpers;
@@ -313,15 +314,15 @@ namespace Styx.WoWInternals
 			if (executor == null)
 				throw new Exception("Invalid executor used in CGPlayer_C__ClickToMove");
 
-			// HB 3.3.5a/4.3.4: Transform world coordinates to transport-local
+			// HB 4.3.4: Transform world coordinates to transport-local
 			// when the player is on a transport (boat, zeppelin, elevator).
 			WoWGameObject? transport = ObjectManager.Me?.Transport;
 			if (transport != null)
 			{
 				Matrix worldMatrix = transport.GetWorldMatrix();
-				Matrix.Invert(ref worldMatrix, out worldMatrix);
+				Matrix4x4.Invert((Matrix4x4)worldMatrix, out Matrix4x4 inv);
 				Vector3 vec = new Vector3(clickPos.X, clickPos.Y, clickPos.Z);
-				Vector3 transformed = Vector3.Transform(vec, worldMatrix);
+				Vector3 transformed = Vector3.Transform(vec, inv);
 				clickPos = new WoWPoint(transformed.X, transformed.Y, transformed.Z);
 			}
 
