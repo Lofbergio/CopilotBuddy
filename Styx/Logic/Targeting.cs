@@ -581,16 +581,13 @@ namespace Styx.Logic
 
         protected virtual void DefaultIncludeTargetsFilter(List<WoWObject> incomingUnits, HashSet<WoWObject> outgoingUnits)
         {
-            // HB 4.3.4: flag2 = me.Combat || me.Minions.Any(m => m.Combat)
-            bool isInCombat;
-            if (!StyxWoW.Me.Combat)
-            {
-                isInCombat = StyxWoW.Me.Minions.Any(m => m.Combat);
-            }
-            else
-            {
-                isInCombat = true;
-            }
+            // HB 6.2.3 fix: use IsBeingAttacked (threat table read) alongside Combat.
+            // StyxWoW.Me.Combat can drop to false for 1-3 frames after a kill while
+            // a second mob is still actively attacking — IsBeingAttacked stays true
+            // because the threat entry persists, so adds are never missed mid-combat.
+            bool isInCombat = StyxWoW.Me.Combat
+                || StyxWoW.Me.IsBeingAttacked
+                || StyxWoW.Me.Minions.Any(m => m.Combat);
 
             foreach (WoWObject woWObject in incomingUnits)
             {

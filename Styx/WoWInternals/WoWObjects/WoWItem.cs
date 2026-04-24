@@ -31,7 +31,7 @@ namespace Styx.WoWInternals.WoWObjects
         private const int ITEM_FIELD_ENCHANTMENT = 16;         // 36 fields (12 enchants * 3)
         private const int ITEM_FIELD_PROPERTY_SEED = 52;       // 1 field (0x34)
         private const int ITEM_FIELD_RANDOM_PROPERTIES_ID = 53; // 1 field (0x35)
-        private const int ITEM_FIELD_DURABILITY = 54;          // 1 field (0x36)  
+        private const int ITEM_FIELD_DURABILITY = 54;          // 1 field (0x36)
         private const int ITEM_FIELD_MAXDURABILITY = 55;       // 1 field (0x37)
         private const int ITEM_FIELD_CREATE_PLAYED_TIME = 56;  // 1 field (0x38)
 

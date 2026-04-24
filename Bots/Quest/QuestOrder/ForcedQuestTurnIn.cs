@@ -182,7 +182,7 @@ public class ForcedQuestTurnIn : ForcedBehavior
         Logging.WriteDebug("[InteractWithNpc] Interacting...");
         woWobject.Interact();
         StyxWoW.Sleep(300);
-        return RunStatus.Running;
+        return RunStatus.Running; 
     }
 
     private static LocalPlayer Me => ObjectManager.Me;

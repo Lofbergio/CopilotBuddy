@@ -61,7 +61,7 @@ namespace Styx.Logic.Pathing
 			4820, // Halls of Reflection
 		};
 
-		public static float PathPrecision { get; set; } = 2.0f;
+		public static float PathPrecision { get; set; } = 1.6f; // HB 3.3.5a / 6.2.3 exact value
 		public static int LoadTilesAroundRadius { get; set; } = 2;
 		public static float FlyingMountHeight { get; set; } = 25f;
 
