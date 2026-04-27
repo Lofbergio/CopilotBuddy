@@ -3,6 +3,8 @@ using System.Linq;
 using Styx;
 using Styx.WoWInternals;
 using Styx.WoWInternals.WoWObjects;
+using Styx.Logic.Pathing;
+using Styx.Helpers;
 using Bots.DungeonBuddy.Profiles;
 
 namespace Bots.DungeonBuddy
@@ -14,14 +16,24 @@ namespace Bots.DungeonBuddy
     public static class BossManager
     {
         private static readonly HashSet<uint> _killedBossIds = new();
-        private static readonly List<BossInfo> _bosses = new();
+        private static readonly List<Boss> _bosses = new();
 
-        public class BossInfo
+        public class Boss
         {
-            public uint EntryId { get; set; }
+            public uint Entry { get; set; }
+            public uint EntryId { get { return Entry; } set { Entry = value; } }
             public string Name { get; set; }
             public bool IsOptional { get; set; }
+            public bool Optional { get { return IsOptional; } set { IsOptional = value; } }
             public bool IsDead { get; set; }
+            public bool IsAlive => !IsDead;
+            public int CastingSpellId { get; set; }
+            public CircularQueue<WoWPoint> PathBreadCrumbs { get; set; } = new CircularQueue<WoWPoint>();
+
+            public WoWUnit ToWoWUnit()
+            {
+                return ObjectManager.GetObjectsOfType<WoWUnit>().FirstOrDefault(u => u.Entry == this.Entry);
+            }
         }
 
         /// <summary>
@@ -41,7 +53,8 @@ namespace Bots.DungeonBuddy
         /// <summary>
         /// Liste de tous les boss du donjon
         /// </summary>
-        public static IReadOnlyList<BossInfo> Bosses => _bosses;
+        public static IReadOnlyList<Boss> Bosses => _bosses;
+        public static IReadOnlyList<Boss> BossEncounters => _bosses;
 
         /// <summary>
         /// Initialise les boss pour le donjon actuel
@@ -50,8 +63,6 @@ namespace Bots.DungeonBuddy
         {
             _killedBossIds.Clear();
             _bosses.Clear();
-            
-            // Les boss sont découverts dynamiquement via les handlers
         }
 
         /// <summary>
@@ -73,7 +84,7 @@ namespace Bots.DungeonBuddy
         {
             if (!_bosses.Any(b => b.EntryId == entryId))
             {
-                _bosses.Add(new BossInfo
+                _bosses.Add(new Boss
                 {
                     EntryId = entryId,
                     Name = name,

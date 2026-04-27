@@ -72,18 +72,12 @@ namespace Bots.DungeonBuddy
         /// </summary>
         public static void QueueForRandomDungeon()
         {
-            Logging.Write("[DungeonBuddy] Queuing for Random Dungeon...");
+            Logging.Write("[DungeonBuddy] Queuing for Random Dungeon via UI (Instancebuddy style)...");
             
-            // WotLK 3.3.5a: LFG_Dungeons.dbc IDs fixes:
-            //   261 = Random Lich King Dungeon (normal)
-            //   262 = Random Lich King Heroic Dungeon
-            // NOTE: GetLFGDungeonInfo() n'existe PAS en WotLK. Utiliser les IDs fixes.
-            // ClearAllLFGDungeons(1) — reset sélections précédentes (pattern HB)
-            // SetLFGDungeon(category, dungeonID) — category 1 = LFD
+            // Just like Instancebuddy, we rely on the user having selected their roles and the random dungeon manually.
             Lua.DoString(@"
-                ClearAllLFGDungeons(1);
-                SetLFGDungeon(1, 261);
-                JoinLFG(1);
+                if not LFDQueueFrame then LoadAddOn('Blizzard_LFGUI') end
+                LFDQueueFrame_Join();
             ");
         }
 
@@ -92,14 +86,11 @@ namespace Bots.DungeonBuddy
         /// </summary>
         public static void QueueForRandomHeroic()
         {
-            Logging.Write("[DungeonBuddy] Queuing for Random Heroic...");
+            Logging.Write("[DungeonBuddy] Queuing for Random Heroic via UI (Instancebuddy style)...");
             
-            // WotLK 3.3.5a: LFG_Dungeons.dbc ID 262 = Random Lich King Heroic Dungeon
-            // Pas besoin de boucle sur GetDungeonInfo(), l'ID est fixe.
             Lua.DoString(@"
-                ClearAllLFGDungeons(1);
-                SetLFGDungeon(1, 262);
-                JoinLFG(1);
+                if not LFDQueueFrame then LoadAddOn('Blizzard_LFGUI') end
+                LFDQueueFrame_Join();
             ");
         }
 
@@ -111,9 +102,9 @@ namespace Bots.DungeonBuddy
             Logging.Write($"[DungeonBuddy] Queuing for dungeon ID {dungeonId}...");
             
             Lua.DoString($@"
-                ClearAllLFGDungeons(1);
-                SetLFGDungeon(1, {dungeonId});
-                JoinLFG(1);
+                ClearAllLFGDungeons();
+                SetLFGDungeon({dungeonId}, true);
+                JoinLFG();
             ");
         }
 
@@ -150,7 +141,7 @@ namespace Bots.DungeonBuddy
         public static void LeaveQueue()
         {
             Logging.Write("[DungeonBuddy] Leaving LFG queue...");
-            Lua.DoString("LeaveLFG(1)");
+            Lua.DoString("LeaveLFG()");
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -181,16 +172,16 @@ namespace Bots.DungeonBuddy
         // ROLE SELECTION
         // ═══════════════════════════════════════════════════════════
 
+        private static PartyRole _currentRole = PartyRole.Dps;
+
         /// <summary>
         /// Définit le rôle pour le LFG
         /// </summary>
         public static void SetRole(PartyRole role)
         {
-            bool tank = (role & PartyRole.Tank) != 0;
-            bool healer = (role & PartyRole.Healer) != 0;
-            bool dps = (role & PartyRole.Dps) != 0;
-            
-            Lua.DoString($"SetLFGRoles(false, {(tank ? "true" : "false")}, {(healer ? "true" : "false")}, {(dps ? "true" : "false")})");
+            // Removed to prevent "You did not select any valid slots" error.
+            // The user manually selects their role in the UI, just like in the original Instancebuddy.
+            _currentRole = role;
         }
 
         /// <summary>
@@ -224,6 +215,13 @@ namespace Bots.DungeonBuddy
         /// Obtient le MapID du donjon actuel
         /// </summary>
         public static uint CurrentMapId => (uint)StyxWoW.Me.MapId;
+
+        /// <summary>
+        /// ID du donjon LFG actuel (depuis GetPartyLFGID()).
+        /// Retourne 0 si pas dans un groupe LFG.
+        /// HB 4.3.4: DungeonManager utilise cette valeur pour choisir le script de donjon.
+        /// </summary>
+        public static uint CurrentLfgDungeonId => Lua.GetReturnVal<uint>("return GetPartyLFGID() or 0", 0);
 
         /// <summary>
         /// Obtient la difficulté du donjon actuel (1=Normal, 2=Heroic)

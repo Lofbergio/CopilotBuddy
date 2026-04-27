@@ -22,6 +22,19 @@ namespace Bots.DungeonBuddy.Attributes
             Mode = CallBehaviorMode.Combat;
         }
 
+        public EncounterHandlerAttribute(int bossEntryId, string bossDisplayName, CallBehaviorMode mode)
+            : this(bossEntryId, bossDisplayName)
+        {
+            Mode = mode;
+        }
+
+        public EncounterHandlerAttribute(int bossEntryId, string bossDisplayName, int bossRange, CallBehaviorMode mode)
+            : this(bossEntryId, bossDisplayName)
+        {
+            BossRange = bossRange;
+            Mode = mode;
+        }
+
         /// <summary>
         /// Entry ID du boss (from creature_template)
         /// </summary>

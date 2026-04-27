@@ -1,18 +1,18 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using Bots.DungeonBuddy.Avoidance;
 using Styx.Logic;
 using Styx.Logic.Pathing;
+using Styx.WoWInternals.DBC;
 using Styx.WoWInternals.WoWObjects;
 
-namespace Bots.DungeonBuddy.Profiles
+namespace Bots.DungeonBuddy
 {
     /// <summary>
     /// Classe de base pour tous les scripts de donjon.
     /// Chaque donjon hérite de cette classe.
-    /// NOTE: Namespace = Bots.DungeonBuddy.Profiles pour compatibilité avec les 32 scripts
-    /// existants qui font "using Bots.DungeonBuddy.Profiles;"
     /// </summary>
     public abstract class Dungeon : IDisposable
     {
@@ -22,7 +22,15 @@ namespace Bots.DungeonBuddy.Profiles
         /// <summary>
         /// Nom du donjon (affiché depuis LFG_Dungeons.dbc)
         /// </summary>
-        public virtual string Name => DungeonId > 0 ? $"Dungeon {DungeonId}" : "Unknown";
+        public virtual string Name
+        {
+            get
+            {
+                if (LfgDungeon != null && LfgDungeon.IsValid)
+                    return LfgDungeon.Name;
+                return string.Empty;
+            }
+        }
 
         /// <summary>
         /// ID du donjon dans LFG_Dungeons.dbc
@@ -32,17 +40,46 @@ namespace Bots.DungeonBuddy.Profiles
         /// <summary>
         /// Position de l'entrée du donjon (pour corpse run)
         /// </summary>
-        public virtual WoWPoint Entrance => WoWPoint.Empty;
+        private LfgDungeons? _lfgDungeon;
+
+        private LfgDungeons LfgDungeon
+        {
+            get
+            {
+                return _lfgDungeon ??= new LfgDungeons(this.DungeonId);
+            }
+        }
+
+        public virtual WoWPoint Entrance
+        {
+            get
+            {
+                var map = this.LfgDungeon.Map;
+                if (map == null)
+                {
+                    return WoWPoint.Zero;
+                }
+
+                Vector2 ghostEntranceLocation = map.GhostEntranceLocation;
+                if (Navigator.FindHeight(ghostEntranceLocation.X, ghostEntranceLocation.Y, out float z))
+                {
+                    return new WoWPoint(ghostEntranceLocation.X, ghostEntranceLocation.Y, z);
+                }
+                return WoWPoint.Zero;
+            }
+        }
 
         /// <summary>
         /// Position de la sortie du donjon
         /// </summary>
-        public virtual WoWPoint ExitLocation => WoWPoint.Empty;
+        public virtual WoWPoint ExitLocation => WoWPoint.Zero;
 
         /// <summary>
         /// True si le corpse run peut se faire en volant
         /// </summary>
         public virtual bool IsFlyingCorpseRun => false;
+
+        public virtual Styx.Helpers.CircularQueue<WoWPoint> CorpseRunBreadCrumb => new Styx.Helpers.CircularQueue<WoWPoint>();
 
         /// <summary>
         /// True si le donjon est terminé (tous les boss tués)
@@ -86,7 +123,9 @@ namespace Bots.DungeonBuddy.Profiles
             Targeting.Instance.IncludeTargetsFilter += IncludeTargetsFilter;
             Targeting.Instance.WeighTargetsFilter += WeighTargetsFilter;
             Targeting.Instance.RemoveTargetsFilter += RemoveTargetsFilter;
-            
+
+            ScriptHelpers.EventInProcess = false;
+
             // Ajouter les avoids
             Bots.DungeonBuddy.Avoidance.AvoidanceManager.AddRange(_avoidInfos.Where(a => !Bots.DungeonBuddy.Avoidance.AvoidanceManager.AvoidInfos.Contains(a)));
             
@@ -134,8 +173,18 @@ namespace Bots.DungeonBuddy.Profiles
 
         protected void AddAvoidRange(IEnumerable<AvoidInfo> avoidInfos)
         {
-            foreach (var a in avoidInfos)
-                AddAvoid(a);
+            _avoidInfos.AddRange(avoidInfos);
+        }
+
+        protected void RemoveAvoid(AvoidInfo avoidInfo)
+        {
+            _avoidInfos.Remove(avoidInfo);
+        }
+
+        protected void ClearAvoids()
+        {
+            Bots.DungeonBuddy.Avoidance.AvoidanceManager.RemoveAll(a => _avoidInfos.Contains(a));
+            _avoidInfos.Clear();
         }
 
         // ═══════════════════════════════════════════════════════════

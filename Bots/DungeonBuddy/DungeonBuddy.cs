@@ -8,6 +8,7 @@ using Styx;
 using Styx.Combat.CombatRoutine;
 using Styx.Helpers;
 using Styx.Logic;
+using Styx.Logic.BehaviorTree;
 using Styx.Logic.Combat;
 using Styx.Logic.Pathing;
 using Styx.WoWInternals;
@@ -43,7 +44,7 @@ namespace Bots.DungeonBuddy
         /// </summary>
         public override object ConfigurationForm => new Forms.FormConfig();
 
-        private PrioritySelector _root;
+        private PrioritySelector? _root;
         private static CombatRoutine Routine => RoutineManager.Current;
         
         // Timers
@@ -56,6 +57,12 @@ namespace Bots.DungeonBuddy
         private uint _lastMapId;
         private bool _hasSetRole;
 
+        // Active dungeon behavior — updated when dungeon changes (fixes stale reference at tree-build time)
+        private Composite? _activeDungeonBehavior;
+
+        // Debug throttle — log SoloFarm condition once per 3s to avoid spam
+        private readonly WaitTimer _dbgSoloFarmThrottle = new WaitTimer(TimeSpan.FromSeconds(3));
+
         public override Composite Root => _root ??= CreateRootBehavior();
 
         // ═══════════════════════════════════════════════════════════
@@ -66,6 +73,9 @@ namespace Bots.DungeonBuddy
         {
             Logging.Write("[DungeonBuddy] Starting...");
             
+            var settings = DungeonBuddySettings.Instance;
+            Logging.Write($"[DungeonBuddy] Config: QueueType={settings.QueueType}, SelectedDungeons=[{string.Join(",", settings.SelectedDungeonIds)}]");
+            
             // Charger les scripts de donjon (réflection sur l'assembly)
             DungeonManager.LoadDungeonScripts();
             
@@ -73,7 +83,16 @@ namespace Bots.DungeonBuddy
             LfgManager.AttachLfgEvents();
             
             _hasSetRole = false;
-            _lastMapId = 0;
+            _lastMapId = StyxWoW.Me.MapId;
+            _activeDungeonBehavior = null;
+            
+            // SoloFarm: if already inside the selected dungeon, activate the script immediately
+            if (settings.QueueType == QueueType.SoloFarm &&
+                settings.SelectedDungeonIds.Length > 0 &&
+                StyxWoW.Me.IsInInstance)
+            {
+                DungeonManager.SetDungeonById(settings.SelectedDungeonIds[0]);
+            }
             
             Logging.Write("[DungeonBuddy] Started successfully!");
         }
@@ -86,6 +105,7 @@ namespace Bots.DungeonBuddy
             DungeonManager.Clear();
             BossManager.Reset();
             Bots.DungeonBuddy.Avoidance.AvoidanceManager.Clear();
+            _activeDungeonBehavior = null;
         }
 
         public override void Pulse()
@@ -112,7 +132,21 @@ namespace Bots.DungeonBuddy
             if (StyxWoW.Me.IsInInstance)
             {
                 Logging.Write($"[DungeonBuddy] Entered instance (MapId={newMapId})");
-                DungeonManager.SetDungeon(newMapId);
+                
+                var settings = DungeonBuddySettings.Instance;
+                if (settings.QueueType == QueueType.SoloFarm && settings.SelectedDungeonIds.Length > 0)
+                {
+                    // SoloFarm: player walked in manually — use the selected dungeon ID directly.
+                    // LfgManager.CurrentLfgDungeonId == 0 in SoloFarm (no LFG queue), so
+                    // GetLfgDungeonIdFromMapId fallback can't be relied on.
+                    DungeonManager.SetDungeonById(settings.SelectedDungeonIds[0]);
+                }
+                else
+                {
+                    DungeonManager.SetDungeon(newMapId);
+                }
+                
+                _activeDungeonBehavior = null;  // force re-Start on the new dungeon behavior
                 LfgManager.DungeonCompleted = false;
             }
             else
@@ -120,6 +154,7 @@ namespace Bots.DungeonBuddy
                 Logging.Write($"[DungeonBuddy] Left instance");
                 DungeonManager.Clear();
                 BossManager.Reset();
+                _activeDungeonBehavior = null;
             }
         }
 
@@ -132,23 +167,29 @@ namespace Bots.DungeonBuddy
             return new PrioritySelector(
                 // 1. Death handling
                 CreateDeathBehavior(),
-                
+
                 // 2. LFG State Machine (queue, proposal, teleport)
                 CreateLfgBehavior(),
-                
-                // 3. IN DUNGEON: Avoidance (priorité sur combat)
+
+                // 3. SOLO FARM: Move to dungeon entrance
+                CreateSoloFarmBehavior(),
+
+                // 4. IN DUNGEON: Avoidance
                 CreateAvoidanceBehavior(),
-                
-                // 4. IN DUNGEON: Combat (avec encounter handlers)
+
+                // 5. IN DUNGEON: Dungeon script behavior
+                CreateDungeonBehavior(),
+
+                // 6. IN DUNGEON: Combat (encounter handlers via DungeonManager)
                 CreateCombatBehavior(),
-                
-                // 5. IN DUNGEON: Loot
+
+                // 6. IN DUNGEON: Loot
                 CreateLootBehavior(),
-                
-                // 6. IN DUNGEON: Follow tank (si DPS/Healer)
+
+                // 8. Follow tank
                 CreateFollowBehavior(),
-                
-                // 7. Idle
+
+                // 9. Idle
                 new ActionIdle()
             );
         }
@@ -267,7 +308,7 @@ namespace Bots.DungeonBuddy
                                             LfgManager.QueueForSpecificDungeon(settings.SelectedDungeonIds[0]);
                                         break;
                                 }
-                                _requeueDelay.Reset();
+                                _requeueDelay.Restart();
                                 return RunStatus.Success;
                             })
                         )
@@ -278,7 +319,14 @@ namespace Bots.DungeonBuddy
                 new Decorator(
                     ctx => LfgManager.CurrentState == LfgState.InQueue,
                     new ActionAlwaysFail()
-                )
+                ),
+
+                // Debug: log when LFG behavior falls through completely
+                new Action(ctx =>
+                {
+                    Logging.WriteDebug($"[DB:LFG] fallthrough — LfgState={LfgManager.CurrentState} QueueType={DungeonBuddySettings.Instance.QueueType}");
+                    return RunStatus.Failure;
+                })
             );
         }
 
@@ -305,12 +353,86 @@ namespace Bots.DungeonBuddy
                     new Sequence(
                         new Action(ctx =>
                         {
-                            var entrance = DungeonManager.CurrentDungeon?.Entrance ?? WoWPoint.Empty;
-                            if (entrance != WoWPoint.Empty)
+                            var entrance = DungeonManager.CurrentDungeon?.Entrance ?? WoWPoint.Zero;
+                            if (entrance != WoWPoint.Zero)
                                 Navigator.MoveTo(entrance);
                             return RunStatus.Running;
                         })
                     )
+                )
+            );
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        // SOLO FARM BEHAVIOR
+        // ═══════════════════════════════════════════════════════════
+
+        private Composite CreateSoloFarmBehavior()
+        {
+            return new Decorator(
+                ctx =>
+                {
+                    var me = StyxWoW.Me;
+                    if (me == null) return false;
+                    bool notDungeon = !me.CurrentMap.IsDungeon;
+                    bool isSoloFarm = DungeonBuddySettings.Instance.QueueType == QueueType.SoloFarm;
+                    if (_dbgSoloFarmThrottle.IsFinished)
+                    {
+                        _dbgSoloFarmThrottle.Reset();
+                        Logging.WriteDebug($"[DB:SoloFarm] cond: notDungeon={notDungeon} isSoloFarm={isSoloFarm} MapId={me.MapId} MapType={me.CurrentMap.MapType} IsInInstance={me.IsInInstance}");
+                    }
+                    return notDungeon && isSoloFarm;
+                },
+                new Sequence(
+                    new Action(ctx =>
+                    {
+                        var settings = DungeonBuddySettings.Instance;
+                        if (settings.SelectedDungeonIds.Length == 0)
+                        {
+                            Logging.WriteDebug("[DB:SoloFarm] No dungeon selected in settings");
+                            TreeRoot.StatusText = "SoloFarm: No dungeon selected";
+                            return RunStatus.Failure;
+                        }
+
+                        uint selectedDungeonId = settings.SelectedDungeonIds[0];
+                        Logging.WriteDebug($"[DB:SoloFarm] selectedDungeonId={selectedDungeonId}");
+
+                        // Set CurrentDungeon if not set or wrong dungeon
+                        if (DungeonManager.CurrentDungeon == null ||
+                            DungeonManager.CurrentDungeon.DungeonId != selectedDungeonId)
+                        {
+                            Logging.WriteDebug($"[DB:SoloFarm] Calling SetDungeonById({selectedDungeonId})");
+                            DungeonManager.SetDungeonById(selectedDungeonId);
+                        }
+
+                        if (DungeonManager.CurrentDungeon == null)
+                        {
+                            Logging.WriteDebug($"[DB:SoloFarm] CurrentDungeon still null after SetDungeonById");
+                            TreeRoot.StatusText = "SoloFarm: Dungeon not found in scripts";
+                            return RunStatus.Failure;
+                        }
+
+                        var entrance = DungeonManager.CurrentDungeon.Entrance;
+                        Logging.WriteDebug($"[DB:SoloFarm] entrance={entrance} dungeon={DungeonManager.CurrentDungeon.Name}");
+                        if (entrance == WoWPoint.Zero)
+                        {
+                            Logging.WriteDebug($"[DB:SoloFarm] Entrance is Zero for {DungeonManager.CurrentDungeon.Name}");
+                            TreeRoot.StatusText = $"SoloFarm: No entrance for {DungeonManager.CurrentDungeon.Name}";
+                            return RunStatus.Failure;
+                        }
+
+                        float distSq = StyxWoW.Me.Location.DistanceSqr(entrance);
+                        Logging.WriteDebug($"[DB:SoloFarm] distSq={distSq:F1} MyPos={StyxWoW.Me.Location}");
+                        if (distSq > 5 * 5)
+                        {
+                            TreeRoot.StatusText = $"SoloFarm: Moving to {DungeonManager.CurrentDungeon.Name} entrance";
+                            Navigator.MoveTo(entrance);
+                            return RunStatus.Running;
+                        }
+
+                        TreeRoot.StatusText = $"SoloFarm: At {DungeonManager.CurrentDungeon.Name} entrance - enter manually";
+                        return RunStatus.Success;
+                    })
                 )
             );
         }
@@ -322,16 +444,59 @@ namespace Bots.DungeonBuddy
         private Composite CreateAvoidanceBehavior()
         {
             return new Decorator(
-                ctx => StyxWoW.Me.IsInInstance && 
-                       Bots.DungeonBuddy.Avoidance.AvoidanceManager.IsInAvoidance(StyxWoW.Me.Location),
+                ctx =>
+                {
+                    var me = StyxWoW.Me;
+                    return me != null && me.IsInInstance &&
+                           Bots.DungeonBuddy.Avoidance.AvoidanceManager.IsInAvoidance(me.Location);
+                },
                 new Action(ctx =>
                 {
-                    var safePoint = Bots.DungeonBuddy.Avoidance.AvoidanceManager.GetSafePoint(StyxWoW.Me.Location);
+                    var me = StyxWoW.Me;
+                    if (me == null)
+                        return RunStatus.Failure;
+
+                    var safePoint = Bots.DungeonBuddy.Avoidance.AvoidanceManager.GetSafePoint(me.Location);
                     Navigator.MoveTo(safePoint);
                     return RunStatus.Running;
                 })
             );
         }
+
+        private Composite CreateDungeonBehavior()
+        {
+            // IMPORTANT: do NOT pass DungeonManager.CurrentDungeonBehavior as a constructor argument —
+            // that evaluates the property ONCE at tree-build time (when CurrentDungeon is still null),
+            // storing a permanent empty PrioritySelector.  Instead, re-evaluate each tick via Action
+            // and manage Start/Stop manually using the _activeDungeonBehavior instance field.
+            return new Decorator(
+                ctx =>
+                {
+                    var me = StyxWoW.Me;
+                    return me != null && me.IsInInstance && DungeonManager.CurrentDungeon != null;
+                },
+                new Action(ctx =>
+                {
+                    var current = DungeonManager.CurrentDungeonBehavior;
+                    if (current == null)
+                        return RunStatus.Failure;
+
+                    // Call Start() once when the behavior instance changes (new dungeon loaded).
+                    // HB equivalent: composite_0, nulled only on dungeon change (method_41/method_43),
+                    // not on tick result. Do NOT Stop/null here on Failure — that would cause a
+                    // tight Start/Stop loop every pulse when the script has nothing to do.
+                    if (_activeDungeonBehavior != current)
+                    {
+                        _activeDungeonBehavior?.Stop(ctx);
+                        _activeDungeonBehavior = current;
+                        _activeDungeonBehavior.Start(ctx);
+                    }
+
+                    return _activeDungeonBehavior.Tick(ctx);
+                })
+            );
+        }
+
 
         // ═══════════════════════════════════════════════════════════
         // COMBAT BEHAVIOR
@@ -343,60 +508,77 @@ namespace Bots.DungeonBuddy
         // On doit Start() UNE SEULE FOIS quand le boss change, puis Tick() à chaque pulse.
         // Référence: HB 4.3.4 construit les encounter behaviors dans le Root tree
         // via réflection, pas manuellement. Ici on simule ce pattern.
-        private Composite _activeEncounterBehavior;
+        private Composite? _activeEncounterBehavior;
         private uint _activeEncounterBossEntry;
 
         private Composite CreateCombatBehavior()
         {
+            // HB 4.3.4 DungeonBot.method_0() pattern:
+            //   Non-combat: Rest → PreCombatBuff → [find target, move, pull]
+            //   In combat:  [boss encounter handler] → CombatBehavior
             return new PrioritySelector(
-                // Rest si hors combat
+                // ── Hors combat ────────────────────────────────────────────
                 new Decorator(
-                    ctx => StyxWoW.Me.IsInInstance && !StyxWoW.Me.Combat && 
-                           Routine?.RestBehavior != null,
-                    Routine.RestBehavior
-                ),
-                // Encounter handler pour boss
-                new Decorator(
-                    ctx => StyxWoW.Me.IsInInstance && StyxWoW.Me.Combat &&
-                           StyxWoW.Me.CurrentTarget != null,
+                    ctx => StyxWoW.Me.IsInInstance && !StyxWoW.Me.Combat,
                     new PrioritySelector(
-                        // Vérifier si un encounter handler existe pour la cible
+                        // Se reposer si HP/mana faible
+                        Routine?.RestBehavior ?? new ActionAlwaysFail(),
+                        // Buffs pré-combat (Lightning Shield, etc.)
+                        Routine?.PreCombatBuffBehavior ?? new ActionAlwaysFail(),
+                        // Trouver une cible hostile, se rapprocher et pull
+                        new Sequence(
+                            new Action(ctx =>
+                            {
+                                // Mettre à jour la liste de cibles via le système Targeting
+                                Targeting.Instance.Pulse();
+                                var target = Targeting.Instance.FirstUnit;
+                                if (target == null)
+                                    return RunStatus.Failure;
+                                // Cibler uniquement si ce n'est pas déjà la cible actuelle
+                                if (StyxWoW.Me.CurrentTargetGuid != target.Guid)
+                                    target.Target();
+                                return RunStatus.Success;
+                            }),
+                            // Se déplacer vers la cible si hors portée de mêlée
+                            new Decorator(
+                                ctx => StyxWoW.Me.CurrentTarget != null &&
+                                       StyxWoW.Me.CurrentTarget.DistanceSqr > 5f * 5f,
+                                new Action(ctx =>
+                                {
+                                    Navigator.MoveTo(StyxWoW.Me.CurrentTarget.Location);
+                                    return RunStatus.Running;
+                                })
+                            ),
+                            // Pull via la routine de combat
+                            Routine?.PullBehavior ?? new ActionAlwaysFail()
+                        )
+                    )
+                ),
+                // ── En combat ──────────────────────────────────────────────
+                new Decorator(
+                    ctx => StyxWoW.Me.IsInInstance && StyxWoW.Me.Combat,
+                    new PrioritySelector(
+                        // Encounter handler spécifique si c'est un boss
                         new Decorator(
-                            ctx => StyxWoW.Me.CurrentTarget.IsBoss,
+                            ctx => StyxWoW.Me.CurrentTarget != null && StyxWoW.Me.CurrentTarget.IsBoss,
                             new Action(ctx =>
                             {
                                 var boss = StyxWoW.Me.CurrentTarget;
-                                
-                                // Si le boss a changé, charger le nouveau behavior
+
                                 if (boss.Entry != _activeEncounterBossEntry)
                                 {
-                                    // Stop l'ancien behavior proprement
-                                    if (_activeEncounterBehavior != null)
-                                    {
-                                        try { _activeEncounterBehavior.Stop(boss); } catch { }
-                                        _activeEncounterBehavior = null;
-                                    }
-                                    
+                                    try { _activeEncounterBehavior?.Stop(boss); } catch { }
+                                    _activeEncounterBehavior = null;
                                     _activeEncounterBossEntry = boss.Entry;
-                                    _activeEncounterBehavior = DungeonManager.GetEncounterBehavior(
-                                        (int)boss.Entry);
-                                    
-                                    // Start() UNE SEULE FOIS pour initialiser le Composite
-                                    if (_activeEncounterBehavior != null)
-                                    {
-                                        // Passer le boss comme contexte car les scripts font
-                                        // "ctx => boss = ctx as WoWUnit" dans leur PrioritySelector.
-                                        _activeEncounterBehavior.Start(boss);
-                                    }
+                                    _activeEncounterBehavior = DungeonManager.GetEncounterBehavior((int)boss.Entry);
+                                    _activeEncounterBehavior?.Start(boss);
                                 }
-                                
+
                                 if (_activeEncounterBehavior != null)
                                 {
-                                    // Tick() à chaque pulse avec le boss comme contexte
                                     var result = _activeEncounterBehavior.Tick(boss);
                                     if (result != RunStatus.Running)
                                     {
-                                        // Encounter terminé → cleanup
                                         _activeEncounterBehavior.Stop(boss);
                                         _activeEncounterBehavior = null;
                                         _activeEncounterBossEntry = 0;

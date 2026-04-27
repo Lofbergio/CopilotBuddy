@@ -9,6 +9,8 @@ using Bots.DungeonBuddy.Profiles;
 using Styx;
 using Styx.Helpers;
 using Styx.Loaders;
+using Styx.WoWInternals;
+using Styx.WoWInternals.WoWObjects;
 using TreeSharp;
 
 namespace Bots.DungeonBuddy
@@ -23,12 +25,143 @@ namespace Bots.DungeonBuddy
         private static readonly Dictionary<uint, Dictionary<int, MethodInfo>> _encounterHandlers = new();
         private static readonly Dictionary<uint, Dictionary<int, MethodInfo>> _objectHandlers = new();
         
-        private static Dungeon _currentDungeon;
+        private static Dungeon? _currentDungeon;
+        private static Composite? _currentDungeonBehavior;
 
         /// <summary>
         /// Donjon actif
         /// </summary>
-        public static Dungeon CurrentDungeon => _currentDungeon;
+        public static Dungeon? CurrentDungeon
+        {
+            get => _currentDungeon;
+            set
+            {
+                _currentDungeon = value;
+                _currentDungeonBehavior = null;
+            }
+        }
+
+        public static Composite CurrentDungeonBehavior => _currentDungeonBehavior ??= BuildDungeonBehavior();
+
+        /// <summary>
+        /// Port de HB 4.3.4 ns26.Class147.smethod_0(Dungeon).
+        /// Construit le comportement de script de donjon en enveloppant les handlers
+        /// EncounterHandler et ObjectHandler avec leur contexte approprié.
+        /// </summary>
+        private static Composite BuildDungeonBehavior()
+        {
+            if (_currentDungeon == null)
+                return new PrioritySelector();
+
+            var methodInfos = _currentDungeon.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                .Where(m => m.GetParameters().Length == 0 &&
+                            (m.ReturnType == typeof(Composite) || m.ReturnType.IsSubclassOf(typeof(Composite))))
+                .Where(m => m.GetCustomAttributes(typeof(EncounterHandlerAttribute), false).Any() ||
+                            m.GetCustomAttributes(typeof(ObjectHandlerAttribute), false).Any());
+
+            var behaviors = new List<Composite>();
+
+            foreach (var method in methodInfos)
+            {
+                try
+                {
+                    var composite = method.Invoke(_currentDungeon, null) as Composite;
+                    if (composite == null)
+                    {
+                        Logging.WriteDiagnostic("[DungeonBuddy] Error building dungeon behavior for {0}.{1}: returned null composite", _currentDungeon.Name, method.Name);
+                        continue;
+                    }
+
+                    var encounterAttrs = method.GetCustomAttributes<EncounterHandlerAttribute>(false).ToList();
+                    var objectAttrs = method.GetCustomAttributes<ObjectHandlerAttribute>(false).ToList();
+
+                    if (encounterAttrs.Count > 0)
+                    {
+                        if (encounterAttrs.Any(attr => attr.BossEntry == 0))
+                        {
+                            behaviors.Add(new PrioritySelector(
+                                new ContextChangeHandler(context => ObjectManager.GetObjectsOfType<WoWUnit>(false, false)),
+                                composite));
+                        }
+                        else
+                        {
+                            behaviors.Add(new PrioritySelector(
+                                new ContextChangeHandler(context => (object)FindBestEncounterUnit(encounterAttrs)!),
+                                new Decorator(
+                                    ctx => ctx != null || ShouldRunCurrentBossHandler(encounterAttrs),
+                                    composite)));
+                        }
+                    }
+                    else if (objectAttrs.Count > 0)
+                    {
+                        if (objectAttrs[0].ObjectEntry == 0)
+                        {
+                            var objectRangeSqr = objectAttrs[0].ObjectRangeSqr;
+                            behaviors.Add(new PrioritySelector(
+                                new ContextChangeHandler(context => ObjectManager.GetObjectsOfType<WoWGameObject>(false, false)
+                                    .Where(o => o.IsValid && o.DistanceSqr <= objectRangeSqr)),
+                                composite));
+                        }
+                        else
+                        {
+                            behaviors.Add(new PrioritySelector(
+                                new ContextChangeHandler(context => (object)FindNearestObject(objectAttrs)!),
+                                new Decorator(ctx => ctx != null, composite)));
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logging.WriteDiagnostic("[DungeonBuddy] Error building dungeon behavior for {0}.{1}: {2}",
+                        _currentDungeon.Name, method.Name, ex.Message);
+                }
+            }
+
+            return new PrioritySelector(behaviors.ToArray());
+        }
+
+        private static WoWUnit? FindBestEncounterUnit(List<EncounterHandlerAttribute> encounterAttrs)
+        {
+            return ObjectManager.GetObjectsOfType<WoWUnit>(false, false)
+                .Where(unit => unit.IsValid && unit.IsAlive && encounterAttrs.Any(attr => IsEncounterMatch(unit, attr)))
+                .OrderBy(unit => unit.DistanceSqr)
+                .FirstOrDefault();
+        }
+
+        private static bool IsEncounterMatch(WoWUnit unit, EncounterHandlerAttribute attr)
+        {
+            if ((long)attr.BossEntry != (long)unit.Entry)
+                return false;
+
+            if (attr.Mode == CallBehaviorMode.Combat && !unit.Combat)
+                return false;
+
+            if (attr.Mode == CallBehaviorMode.CurrentBoss)
+            {
+                var currentBoss = BossManager.CurrentBoss;
+                if (currentBoss == null || currentBoss.Entry != (uint)attr.BossEntry)
+                    return false;
+            }
+
+            return unit.DistanceSqr <= attr.BossRangeSqr;
+        }
+
+        private static bool ShouldRunCurrentBossHandler(List<EncounterHandlerAttribute> encounterAttrs)
+        {
+            var currentBoss = BossManager.CurrentBoss;
+            if (currentBoss == null)
+                return false;
+
+            return encounterAttrs.Any(attr => attr.Mode == CallBehaviorMode.CurrentBoss && currentBoss.Entry == (uint)attr.BossEntry);
+        }
+
+        private static WoWGameObject? FindNearestObject(List<ObjectHandlerAttribute> objectAttrs)
+        {
+            return ObjectManager.GetObjectsOfType<WoWGameObject>(false, false)
+                .Where(obj => obj.IsValid && objectAttrs.Any(attr => obj.Entry == attr.ObjectEntry && obj.DistanceSqr <= attr.ObjectRangeSqr))
+                .OrderBy(obj => obj.DistanceSqr)
+                .FirstOrDefault();
+        }
 
         /// <summary>
         /// Charge les scripts de donjon depuis Dungeon Scripts\ (compilation dynamique, pattern HB 4.3.4),
@@ -62,6 +195,13 @@ namespace Bots.DungeonBuddy
                         {
                             errors++;
                             Logging.Write("[DungeonBuddy] Could not compile dungeon script from {0}", path);
+                            foreach (CompilerError err in loader.CompilerResults.Errors)
+                            {
+                                if (!err.IsWarning)
+                                {
+                                    Logging.Write($"File: {err.FileName} Line: {err.Line} Error: {err.ErrorText}");
+                                }
+                            }
                         }
                         else
                         {
@@ -119,7 +259,9 @@ namespace Bots.DungeonBuddy
                 {
                     try
                     {
-                        var instance = (Dungeon)Activator.CreateInstance(type);
+if (Activator.CreateInstance(type) is not Dungeon instance)
+                    continue;
+
                         var dungeonId = instance.DungeonId;
                         instance.Dispose();
 
@@ -166,46 +308,68 @@ namespace Bots.DungeonBuddy
         }
 
         /// <summary>
-        /// Active le script de donjon approprié
+        /// Active le script de donjon approprié.
+        /// HB 4.3.4: utilise LfgManager.CurrentLfgDungeonId quand on est en groupe LFG,
+        /// sinon GetLfgDungeonIdFromMapId pour faire la correspondance MapId → LFG DungeonId.
         /// </summary>
         public static void SetDungeon(uint mapId)
         {
-            // Détacher l'ancien donjon
-            _currentDungeon?.Detach();
-            _currentDungeon = null;
-
-            // Trouver le type de donjon correspondant au MapId
-            Type matchedType = null;
-            uint matchedDungeonId = 0;
-            foreach (var kvp in _dungeonTypes)
+            uint dungeonId;
+            if (LfgManager.CurrentLfgDungeonId > 0)
             {
-                var dungeonId = kvp.Key;
-                if (dungeonId == mapId || GetMapIdForDungeon(dungeonId) == mapId)
-                {
-                    matchedType = kvp.Value;
-                    matchedDungeonId = dungeonId;
-                    break;
-                }
-            }
-
-            if (matchedType != null)
-            {
-                _currentDungeon = (Dungeon)Activator.CreateInstance(matchedType);
-                _currentDungeon.Attach();
-                BossManager.Initialize(_currentDungeon);
-                ProfileManager.LoadProfileForDungeon(matchedDungeonId);
-                Logging.Write($"[DungeonBuddy] Activated script: {_currentDungeon.Name}");
+                dungeonId = LfgManager.CurrentLfgDungeonId;
             }
             else
             {
-                Logging.Write($"[DungeonBuddy] No script found for map {mapId}");
+                dungeonId = ProfileManager.GetLfgDungeonIdFromMapId(mapId);
+            }
+
+            SetDungeonById(dungeonId);
+        }
+
+        /// <summary>
+        /// Active un script de donjon à partir de son ID.
+        /// Ce flux est le même que HB 4.3.4 method_43.
+        /// </summary>
+        public static void SetDungeonById(uint dungeonId)
+        {
+            if (_currentDungeon?.DungeonId == dungeonId)
+            {
+                return;
+            }
+
+            _currentDungeon?.Detach();
+            _currentDungeon?.Dispose();
+            _currentDungeon = null;
+            _currentDungeonBehavior = null;
+
+            if (_dungeonTypes.TryGetValue(dungeonId, out var dungeonType))
+            {
+                if (Activator.CreateInstance(dungeonType) is not Dungeon dungeon)
+                {
+                    Logging.Write("[DungeonBuddy] Failed to instantiate dungeon script type {0}", dungeonType.Name);
+                    return;
+                }
+
+                _currentDungeon = dungeon;
+                _currentDungeon.Attach();
+                BossManager.Initialize(_currentDungeon);
+                if (ProfileManager.CurrentProfile == null || ProfileManager.CurrentProfile.DungeonId != dungeonId)
+                {
+                    ProfileManager.LoadProfileForDungeon(dungeonId);
+                }
+                Logging.Write("Entered dungeon: {0}", _currentDungeon.Name);
+            }
+            else
+            {
+                Logging.Write($"[DungeonBuddy] No script found for dungeon {dungeonId}");
             }
         }
 
         /// <summary>
         /// Obtient le behavior pour un boss spécifique
         /// </summary>
-        public static Composite GetEncounterBehavior(int bossEntryId)
+        public static Composite? GetEncounterBehavior(int bossEntryId)
         {
             if (_currentDungeon == null)
                 return null;
@@ -224,7 +388,7 @@ namespace Bots.DungeonBuddy
         /// <summary>
         /// Obtient le behavior pour un objet spécifique
         /// </summary>
-        public static Composite GetObjectBehavior(int objectEntryId)
+        public static Composite? GetObjectBehavior(int objectEntryId)
         {
             if (_currentDungeon == null)
                 return null;
@@ -240,54 +404,11 @@ namespace Bots.DungeonBuddy
             return null;
         }
 
-        private static uint GetMapIdForDungeon(uint lfgDungeonId)
-        {
-            // Mapping LFG DungeonId → MapId pour WotLK
-            // Ces IDs viennent de LFG_Dungeons.dbc
-            // Note: Les IDs normaux et héroïques mappent vers le même MapId
-            // DungeonIds vérifiés depuis les 32 scripts dans Dungeon Scripts\Wrath of the Lich King\
-            return lfgDungeonId switch
-            {
-                202 => 574,  // Utgarde Keep (Normal)
-                242 => 574,  // Utgarde Keep (Heroic)
-                203 => 575,  // Utgarde Pinnacle (Normal)
-                205 => 575,  // Utgarde Pinnacle (Heroic)
-                204 => 601,  // Azjol-Nerub (Normal)
-                241 => 601,  // Azjol-Nerub (Heroic)
-                206 => 578,  // The Oculus (Normal)
-                211 => 578,  // The Oculus (Heroic)
-                207 => 602,  // Halls of Lightning (Normal)
-                212 => 602,  // Halls of Lightning (Heroic)
-                208 => 599,  // Halls of Stone (Normal)
-                213 => 599,  // Halls of Stone (Heroic)
-                209 => 595,  // Culling of Stratholme (Normal)
-                210 => 595,  // Culling of Stratholme (Heroic)
-                214 => 600,  // Drak'Tharon Keep (Normal)
-                215 => 600,  // Drak'Tharon Keep (Heroic)
-                216 => 604,  // Gundrak (Normal)
-                217 => 604,  // Gundrak (Heroic)
-                218 => 619,  // Ahn'kahet (Normal)
-                219 => 619,  // Ahn'kahet (Heroic)
-                220 => 608,  // Violet Hold (Normal)
-                221 => 608,  // Violet Hold (Heroic)
-                225 => 576,  // The Nexus (Normal)
-                226 => 576,  // The Nexus (Heroic)
-                245 => 650,  // Trial of the Champion (Normal)
-                249 => 650,  // Trial of the Champion (Heroic)
-                251 => 632,  // Forge of Souls (Normal)
-                252 => 632,  // Forge of Souls (Heroic)
-                253 => 658,  // Pit of Saron (Normal)
-                254 => 658,  // Pit of Saron (Heroic)
-                255 => 668,  // Halls of Reflection (Normal)
-                256 => 668,  // Halls of Reflection (Heroic)
-                _ => 0
-            };
-        }
-
         public static void Clear()
         {
             _currentDungeon?.Detach();
             _currentDungeon = null;
+            _currentDungeonBehavior = null;
             ProfileManager.UnloadProfile();
         }
 
@@ -299,6 +420,7 @@ namespace Bots.DungeonBuddy
             Logging.Write("[DungeonBuddy] Reloading dungeon scripts...");
             _currentDungeon?.Detach();
             _currentDungeon = null;
+            _currentDungeonBehavior = null;
             LoadDungeonScripts();
         }
     }
