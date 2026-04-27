@@ -30,6 +30,10 @@ namespace Bots.DungeonBuddy.Forms
 
             // connect WindowsForms PropertyGrid usage
             propertyGridMain.SelectedObject = DungeonBuddySettings.Instance;
+
+            // Auto-save whenever any setting is changed in the PropertyGrid so the correct
+            // QueueType / SelectedDungeonIds are on disk before the bot is started.
+            propertyGridMain.PropertyValueChanged += (s, e) => DungeonBuddySettings.Instance.Save();
         }
 
         private void FormConfig_Load(object sender, RoutedEventArgs e)

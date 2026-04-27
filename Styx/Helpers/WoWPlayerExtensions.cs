@@ -21,92 +21,56 @@ namespace Styx.Helpers
     /// </summary>
     public static class WoWPlayerExtensions
     {
+        private static WoWPartyMember GetPartyMember(WoWPlayer p) => StyxWoW.Me.GroupInfo.RaidMembers.FirstOrDefault(m => m.Guid == p.Guid);
+
         /// <summary>
         /// True si le joueur a le rôle TANK assigné dans le LFG/groupe.
-        /// Utilise UnitGroupRolesAssigned() Lua API.
         /// </summary>
-        public static bool IsTank(this LocalPlayer me)
+        public static bool IsTank(this WoWPlayer me)
         {
-            string role = Lua.GetReturnVal<string>("return UnitGroupRolesAssigned('player')", 0);
-            if (!string.IsNullOrEmpty(role) && role != "NONE")
-                return role == "TANK";
-            // Fallback: détection par spells de spec (pattern HB 4.3.4)
-            return me.Class switch
-            {
-                WoWClass.Warrior => SpellManager.HasSpell("Shield Slam"),
-                WoWClass.Paladin => SpellManager.HasSpell("Avenger's Shield"),
-                WoWClass.DeathKnight => SpellManager.HasSpell("Heart Strike"),
-                WoWClass.Druid => SpellManager.HasSpell("Mangle") && !SpellManager.HasSpell("Moonkin Form"),
-                _ => false
-            };
+            if (me.IsMe) {
+                string role = Lua.GetReturnVal<string>("return UnitGroupRolesAssigned('player')", 0);
+                if (!string.IsNullOrEmpty(role) && role != "NONE") return role == "TANK";
+                return me.Class switch { WoWClass.Warrior => SpellManager.HasSpell("Shield Slam"), WoWClass.Paladin => SpellManager.HasSpell("Avenger's Shield"), WoWClass.DeathKnight => SpellManager.HasSpell("Heart Strike"), WoWClass.Druid => SpellManager.HasSpell("Mangle") && !SpellManager.HasSpell("Moonkin Form"), _ => false };
+            }
+            var pm = GetPartyMember(me); return pm != null && (pm.Role & WoWPartyMember.GroupRole.Tank) != 0;
         }
 
         /// <summary>
         /// True si le joueur a le rôle HEALER assigné dans le LFG/groupe.
         /// </summary>
-        public static bool IsHealer(this LocalPlayer me)
+        public static bool IsHealer(this WoWPlayer me)
         {
-            string role = Lua.GetReturnVal<string>("return UnitGroupRolesAssigned('player')", 0);
-            if (!string.IsNullOrEmpty(role) && role != "NONE")
-                return role == "HEALER";
-            // Fallback par spec
-            return me.Class switch
-            {
-                WoWClass.Priest => !SpellManager.HasSpell("Shadowform"),
-                WoWClass.Paladin => SpellManager.HasSpell("Holy Shock"),
-                WoWClass.Shaman => SpellManager.HasSpell("Riptide"),
-                WoWClass.Druid => SpellManager.HasSpell("Swiftmend"),
-                _ => false
-            };
+            if (me.IsMe) {
+                string role = Lua.GetReturnVal<string>("return UnitGroupRolesAssigned('player')", 0);
+                if (!string.IsNullOrEmpty(role) && role != "NONE") return role == "HEALER";
+                return me.Class switch { WoWClass.Priest => !SpellManager.HasSpell("Shadowform"), WoWClass.Paladin => SpellManager.HasSpell("Holy Shock"), WoWClass.Shaman => SpellManager.HasSpell("Riptide"), WoWClass.Druid => SpellManager.HasSpell("Swiftmend"), _ => false };
+            }
+            var pm = GetPartyMember(me); return pm != null && (pm.Role & WoWPartyMember.GroupRole.Healer) != 0;
         }
 
         /// <summary>
         /// True si le joueur a le rôle DPS (DAMAGER) assigné.
         /// </summary>
-        public static bool IsDps(this LocalPlayer me)
+        public static bool IsDps(this WoWPlayer me)
         {
-            string role = Lua.GetReturnVal<string>("return UnitGroupRolesAssigned('player')", 0);
-            if (!string.IsNullOrEmpty(role) && role != "NONE")
-                return role == "DAMAGER";
-            // Fallback: ni tank ni healer
-            return !me.IsTank() && !me.IsHealer();
+            if (me.IsMe) {
+                string role = Lua.GetReturnVal<string>("return UnitGroupRolesAssigned('player')", 0);
+                if (!string.IsNullOrEmpty(role) && role != "NONE") return role == "DAMAGER";
+                return !me.IsTank() && !me.IsHealer();
+            }
+            var pm = GetPartyMember(me); return pm != null && (pm.Role & WoWPartyMember.GroupRole.Damage) != 0;
         }
 
-        /// <summary>
-        /// True si le joueur est un "follower" (suit le tank).
-        /// En contexte donjon DungeonBuddy: !IsTank() = follower.
-        /// Référence HB 4.3.4 ScriptHelpers.cs L1395
-        /// </summary>
-        public static bool IsFollower(this LocalPlayer me)
+        public static bool IsFollower(this WoWPlayer me) => !me.IsTank();
+        public static bool IsRange(this WoWPlayer me) => !me.IsMelee();
+
+        public static bool IsMelee(this WoWPlayer me)
         {
-            return !me.IsTank();
+            if (!me.IsMe) return true; // fallback
+            return me.Class switch { WoWClass.Warrior => true, WoWClass.Rogue => true, WoWClass.DeathKnight => true, WoWClass.Paladin => !SpellManager.HasSpell("Holy Shock"), WoWClass.Shaman => SpellManager.HasSpell("Lava Lash"), WoWClass.Druid => SpellManager.HasSpell("Mangle"), _ => false };
         }
 
-        /// <summary>
-        /// True si le joueur est un DPS/healer ranged.
-        /// Référence HB 4.3.4 ScriptHelpers.cs L1501
-        /// </summary>
-        public static bool IsRange(this LocalPlayer me)
-        {
-            return !me.IsMelee();
-        }
-
-        /// <summary>
-        /// True si le joueur est melee (warrior, rogue, DK, feral druid, ret pally, enh shaman).
-        /// Référence HB 4.3.4 ScriptHelpers.cs L1487
-        /// </summary>
-        public static bool IsMelee(this LocalPlayer me)
-        {
-            return me.Class switch
-            {
-                WoWClass.Warrior => true,
-                WoWClass.Rogue => true,
-                WoWClass.DeathKnight => true,
-                WoWClass.Paladin => !SpellManager.HasSpell("Holy Shock"),
-                WoWClass.Shaman => SpellManager.HasSpell("Lava Lash"),
-                WoWClass.Druid => SpellManager.HasSpell("Mangle"),
-                _ => false
-            };
-        }
+        public static bool IsLeader(this WoWPlayer me) => me.IsTank();
     }
 }

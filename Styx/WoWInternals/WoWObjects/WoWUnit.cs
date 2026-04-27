@@ -2199,6 +2199,8 @@ namespace Styx.WoWInternals.WoWObjects
             return string.Empty;
         }
 
+        public WoWUnit ToWoWUnit() => this;
+
         #endregion
     }
 }

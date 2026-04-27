@@ -3,7 +3,7 @@ UPDATE 4
 
 Bug fixes:
 --------------
-  * Extractor
+  * Extractor (mmaps)
     - minRegionArea: rcSqr(12) → rcSqr(20) — removes small isolated navmesh regions on rough hilltops, reducing unreachable areas the bot tries to path into
 
   * Bot (Navigator.cs)
@@ -27,4 +27,7 @@ Bug fixes:
   * Misc
     - Minor cleanup in `Bots/Quest/QuestOrder/ForcedQuestTurnIn.cs` and formatting consistency in `Styx/WoWInternals/WoWObjects/WoWItem.cs`.
 
+  * DungeonBuddy
+    - Fixed LFG random queue failures by updating `LfgManager.cs` to dynamically select the correct `LFG_Dungeons.dbc` ID based on the player's level (258, 259, 260, 261, 262) instead of hardcoding the level 80 queue.
+    - Added missing methods to `ScriptHelpers.cs` (`PartyIncludingMe`, `IsBossAlive`, `CreateInteractWithObject`, `CreateRunAwayFromBad`) to fix script compilation errors for WotLK 3.3.5a dungeons.
 

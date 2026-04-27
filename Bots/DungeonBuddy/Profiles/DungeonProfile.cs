@@ -18,6 +18,7 @@ namespace Bots.DungeonBuddy.Profiles
         public uint DungeonId { get; private set; }
         public List<WoWPoint> HotSpots { get; } = new();
         public List<Blackspot> Blackspots { get; } = new();
+        public IReadOnlyList<BossManager.Boss> BossEncounters => BossManager.BossEncounters;
 
         private DungeonProfile() { }
 

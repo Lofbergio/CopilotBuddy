@@ -187,6 +187,11 @@ namespace Bots.DungeonBuddy
             _avoidInfos.Clear();
         }
 
+        public virtual MoveResult MoveTo(WoWPoint location)
+        {
+            return MoveResult.Failed;
+        }
+
         // ═══════════════════════════════════════════════════════════
         // IDISPOSABLE
         // ═══════════════════════════════════════════════════════════

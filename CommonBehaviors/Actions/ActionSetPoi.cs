@@ -43,11 +43,7 @@ namespace CommonBehaviors.Actions
 
 			if (newPoi != null)
 			{
-				if (BotPoi.Current.Type != newPoi.Type)
-				{
-					BotPoi.Current = newPoi;
-				}
-				else if (_ignorePreviousPoi)
+				if (BotPoi.Current.Type != newPoi.Type || _ignorePreviousPoi)
 				{
 					BotPoi.Current = newPoi;
 				}

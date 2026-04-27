@@ -52,6 +52,11 @@ namespace Styx.Helpers
 			base.Enqueue(item);
 		}
 
+		public void Add(T item)
+		{
+			Enqueue(item);
+		}
+
 		public void CycleTo(T item)
 		{
 			T current = Peek();

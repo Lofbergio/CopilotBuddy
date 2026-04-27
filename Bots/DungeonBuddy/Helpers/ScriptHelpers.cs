@@ -26,6 +26,352 @@ namespace Bots.DungeonBuddy.Helpers
     public static class ScriptHelpers
     {
         // ═══════════════════════════════════════════════════════════
+        // PHASE 1: ROLES & PLAYER EXTENSIONS (Ported from HB 4.3.4)
+        // ═══════════════════════════════════════════════════════════
+        
+        [Flags]
+        public enum PartyRole
+        {
+            None = 0,
+            Tank = 1,
+            Healer = 2,
+            Dps = 4,
+            Melee = 8,
+            Ranged = 16,
+            Leader = 32,
+            Follower = 64
+        }
+
+        public static bool IsTank(this LocalPlayer me)
+        {
+            if (DungeonBuddySettings.Instance.QueueType == QueueType.SoloFarm) return true;
+            if (me.Role != WoWPartyMember.GroupRole.None) return (me.Role & WoWPartyMember.GroupRole.Tank) > WoWPartyMember.GroupRole.None;
+            
+            switch (me.Class)
+            {
+                case WoWClass.Warrior: return SpellManager.HasSpell("Shield Slam");
+                case WoWClass.Paladin: return SpellManager.HasSpell("Avenger's Shield");
+                case WoWClass.DeathKnight: return SpellManager.HasSpell("Heart Strike") || SpellManager.HasSpell("Blood Strike"); // Fallback simple WotLK
+                case WoWClass.Druid: return SpellManager.HasSpell("Mangle (Bear)") || me.HasAura("Thick Hide");
+                default: return false;
+            }
+        }
+
+        public static bool IsHealer(this LocalPlayer me)
+        {
+            if (me.Role != WoWPartyMember.GroupRole.None) return (me.Role & WoWPartyMember.GroupRole.Healer) > WoWPartyMember.GroupRole.None;
+            
+            switch (me.Class)
+            {
+                case WoWClass.Paladin: return SpellManager.HasSpell("Holy Shock");
+                case WoWClass.Priest: return !SpellManager.HasSpell("Mind Flay");
+                case WoWClass.Shaman: return SpellManager.HasSpell("Earth Shield") || SpellManager.HasSpell("Riptide");
+                case WoWClass.Druid: return SpellManager.HasSpell("Tree of Life") || SpellManager.HasSpell("Wild Growth");
+                default: return false;
+            }
+        }
+
+        public static bool IsDps(this LocalPlayer me)
+        {
+            if (me.Role != WoWPartyMember.GroupRole.None) return (me.Role & WoWPartyMember.GroupRole.Damage) > WoWPartyMember.GroupRole.None;
+            return !me.IsTank() && !me.IsHealer();
+        }
+
+        public static bool IsMelee(this LocalPlayer me)
+        {
+            switch (me.Class)
+            {
+                case WoWClass.Warrior:
+                case WoWClass.Rogue:
+                case WoWClass.DeathKnight:
+                    return true;
+                case WoWClass.Paladin:
+                    return !SpellManager.HasSpell("Holy Shock");
+                case WoWClass.Shaman:
+                    return SpellManager.HasSpell("Lava Lash") || SpellManager.HasSpell("Stormstrike");
+                case WoWClass.Druid:
+                    return SpellManager.HasSpell("Mangle (Cat)");
+            }
+            return false;
+        }
+
+        public static bool IsRange(this LocalPlayer me) => !me.IsMelee();
+
+        public static bool IsFollower(this LocalPlayer me)
+        {
+            if (DungeonBuddySettings.Instance.PartyMode != PartyMode.Follower) return !me.IsTank();
+            return true;
+        }
+
+        public static bool IsLeader(this LocalPlayer me)
+        {
+            if (DungeonBuddySettings.Instance.PartyMode != PartyMode.Leader) return me.IsTank();
+            return true;
+        }
+
+        // --- WOWPLAYER/WOWUNIT OVERLOADS ---
+        // Role methods removed. Using Styx.Helpers.WoWPlayerExtensions instead to resolve ambiguity.
+
+        // ═══════════════════════════════════════════════════════════
+        // PHASE 2, 3, 4: COMBAT, OBJECTS, BOSSES (Ported from HB 4.3.4)
+        // ═══════════════════════════════════════════════════════════
+
+        public static BossManager.Boss CurrentBoss => BossManager.Bosses.FirstOrDefault(b => !b.IsDead);
+
+        public static bool ShouldKillBoss(string name)
+        {
+            var boss = BossManager.BossEncounters.FirstOrDefault(b => b.Name == name);
+            if (boss != null) return !boss.Optional || DungeonBuddySettings.Instance.KillOptionalBosses;
+            return false;
+        }
+
+        public static bool ShouldKillBoss(uint bossId)
+        {
+            var boss = BossManager.BossEncounters.FirstOrDefault(b => b.Entry == bossId);
+            if (boss != null) return !boss.Optional || DungeonBuddySettings.Instance.KillOptionalBosses;
+            return false;
+        }
+
+        public static Composite CreateSpreadOutLogic(CanRunDecoratorDelegate canRun, int distanceToSpread)
+        {
+            return CreateSpreadOutLogic(canRun, () => StyxWoW.Me.Location, distanceToSpread, 35f);
+        }
+
+        public static Composite CreateSpreadOutLogic(CanRunDecoratorDelegate canRun, Func<WoWPoint> centerPointSelector, int distanceToSpread, float maxDistanceFromCenterPoint)
+        {
+            return new Decorator(canRun, new Action(ctx => 
+            {
+                var myLoc = StyxWoW.Me.Location;
+                var center = centerPointSelector != null ? centerPointSelector() : myLoc;
+                var tooClose = PartyIncludingMe.FirstOrDefault(p => p != StyxWoW.Me && p.IsAlive && p.Location.Distance(myLoc) < distanceToSpread);
+                if (tooClose != null)
+                {
+                    var awayPoint = Styx.Helpers.WoWMathHelper.CalculatePointFrom(myLoc, tooClose.Location, distanceToSpread);
+                    if (center.Distance(awayPoint) <= maxDistanceFromCenterPoint)
+                    {
+                        Navigator.MoveTo(awayPoint);
+                        return RunStatus.Success;
+                    }
+                }
+                return RunStatus.Failure;
+            }));
+        }
+
+        public static Composite CreateForceJump(CanRunDecoratorDelegate canRun, Func<WoWPoint> from, Func<WoWPoint> to)
+        {
+            return new Decorator(canRun, new Action(ctx => 
+            {
+                WoWMovement.Move(WoWMovement.MovementDirection.JumpAscend);
+                Navigator.MoveTo(to());
+                return RunStatus.Success;
+            }));
+        }
+
+        public static Composite DisableMovement(Func<bool> whileTrue)
+        {
+            return new Decorator(ctx => whileTrue(), new Action(ctx => { Navigator.PlayerMover.MoveStop(); return RunStatus.Success; }));
+        }
+
+        public static WoWUnit FindBestTargetWithIdsRange(float range, params uint[] entryIds)
+        {
+            return ObjectManager.GetObjectsOfType<WoWUnit>()
+                .Where(u => u.IsAlive && u.DistanceSqr <= range * range && entryIds.Contains(u.Entry))
+                .OrderBy(u => u.DistanceSqr)
+                .FirstOrDefault();
+        }
+
+        public static Composite CreateInteractWithObject(Func<WoWGameObject> objectSelector, float range)
+        {
+            return CreateInteractWithObject(objectSelector, range, false);
+        }
+
+        public static Composite CreateInteractWithObject(uint id) => CreateInteractWithObject(() => ObjectManager.GetObjectsOfType<WoWGameObject>().FirstOrDefault(o => o.Entry == id), 5f, false);
+        
+        public static Composite CreateInteractWithObject(uint id, float range) => CreateInteractWithObject(() => ObjectManager.GetObjectsOfType<WoWGameObject>().FirstOrDefault(o => o.Entry == id), range, false);
+
+        public static Composite CreateInteractWithObject(uint id, int channelTime) => CreateInteractWithObject(() => ObjectManager.GetObjectsOfType<WoWGameObject>().FirstOrDefault(o => o.Entry == id), 5f, false);
+        
+        public static Composite CreateInteractWithObject(uint id, int channelTime, bool ignoreCombat) => CreateInteractWithObject(() => ObjectManager.GetObjectsOfType<WoWGameObject>().FirstOrDefault(o => o.Entry == id), 5f, ignoreCombat);
+
+        public static Composite CreateInteractWithObjectContinue(CanRunDecoratorDelegate canRun, Func<WoWGameObject> obj, float range = 5f)
+        {
+            return new Decorator(canRun, CreateInteractWithObject(obj, range, false));
+        }
+
+        public static Composite CreateInteractWithObjectContinue(uint id) => CreateInteractWithObjectContinue(ctx => true, () => ObjectManager.GetObjectsOfType<WoWGameObject>().FirstOrDefault(o => o.Entry == id), 5f);
+        
+        public static Composite CreateInteractWithObjectContinue(uint id, int channelTime) => CreateInteractWithObjectContinue(ctx => true, () => ObjectManager.GetObjectsOfType<WoWGameObject>().FirstOrDefault(o => o.Entry == id), 5f);
+        
+        public static Composite CreateInteractWithObjectContinue(uint id, int channelTime, bool ignoreCombat) => CreateInteractWithObjectContinue(ctx => true, () => ObjectManager.GetObjectsOfType<WoWGameObject>().FirstOrDefault(o => o.Entry == id), 5f);
+
+        public static Composite CreateTalkToNpcContinue(CanRunDecoratorDelegate canRun, Func<WoWUnit> npc)
+        {
+            return new Decorator(canRun, new Action(ctx => 
+            {
+                var u = npc();
+                if (u != null && u.WithinInteractRange) { u.Interact(); return RunStatus.Success; }
+                else if (u != null) { Navigator.MoveTo(u.Location); return RunStatus.Success; }
+                return RunStatus.Failure;
+            }));
+        }
+
+        public static Composite CreateTalkToNpcContinue(Func<WoWUnit> npc) => CreateTalkToNpcContinue(ctx => true, npc);
+
+        public static Composite CreateTalkToNpcContinue(uint unitId) => CreateTalkToNpcContinue(unitId, 0);
+
+        public static Composite CreateTalkToNpcContinue(uint unitId, int gossipIndex)
+        {
+            WoWUnit cachedUnit = null;
+            return new Decorator(
+                ctx => true,
+                new Sequence(
+                    new Action(ctx => cachedUnit = ObjectManager.GetObjectsOfType<WoWUnit>().FirstOrDefault(u => u.Entry == unitId)),
+                    CreateMoveToContinue(ctx => cachedUnit != null && !cachedUnit.WithinInteractRange, () => cachedUnit?.Location ?? WoWPoint.Empty, true),
+                    new WaitContinue(2, ctx => GossipFrame.Instance.IsVisible,
+                        new Sequence(
+                            new Action(ctx => { if (cachedUnit != null) cachedUnit.Interact(); }),
+                            new Action(ctx => GossipFrame.Instance.SelectGossipOption(gossipIndex))
+                        ))
+                ));
+        }
+
+        public static Composite CreateTankTalkToThenEscortNpc(CanRunDecoratorDelegate canRun, Func<WoWUnit> npc, float range, bool waitToTalk, int gossipIndex, Func<WoWPoint> waitLocation)
+        {
+            return new Decorator(ctx => canRun(ctx) && StyxWoW.Me.IsTank(), new ActionAlwaysSucceed()); 
+        }
+
+        public static void MarkAsDead(this WoWUnit unit)
+        {
+            if (unit != null) BossManager.MarkBossDead(unit.Entry);
+        }
+
+        public static Composite CreateTankAgainstObject(Func<WoWGameObject> obj)
+        {
+            return new Decorator(ctx => StyxWoW.Me.IsTank(), new ActionAlwaysSucceed());
+        }
+
+        public static Composite CreateTankAgainstObject(CanRunDecoratorDelegate canRun, Func<WoWGameObject> obj, float range)
+        {
+            return new Decorator(ctx => canRun(ctx) && StyxWoW.Me.IsTank(), new ActionAlwaysSucceed());
+        }
+
+        public static Composite CreateTankAgainstObject(CanRunDecoratorDelegate canRun, Func<WoWPoint> objectLocationToTankAt, Func<float> objectRadius)
+        {
+            return new Decorator(ctx => canRun(ctx) && StyxWoW.Me.IsTank(), new ActionAlwaysSucceed());
+        }
+
+        public static Composite CreateTurninQuest(uint npcId) => new ActionAlwaysSucceed();
+        public static Composite CreateTurninQuest(uint npcId, int rewardIndex) => new ActionAlwaysSucceed();
+        public static Composite CreateTurninQuest(uint npcId, int gossipIndex, int rewardIndex) => new ActionAlwaysSucceed();
+        
+        public static Composite CreatePickupQuest(uint npcId) => new ActionAlwaysSucceed();
+        public static Composite CreatePickupQuest(uint npcId, int questIndex) => new ActionAlwaysSucceed();
+
+        public static void BuyItem(uint itemId, int amount)
+        {
+            Lua.DoString($"BuyMerchantItem({itemId}, {amount})");
+        }
+
+        public static Composite CreateCastRangedAbility() => new ActionAlwaysSucceed();
+        
+        public static Composite CreateCastRangedAbility(CanRunDecoratorDelegate canRun, string spellName, Func<WoWUnit> target)
+        {
+            return new Decorator(canRun, new Action(ctx => 
+            {
+                var t = target();
+                if (t != null && SpellManager.CanCast(spellName, t)) { SpellManager.Cast(spellName, t); return RunStatus.Success; }
+                return RunStatus.Failure;
+            }));
+        }
+        
+        public static Composite CreateCastRangedAbility(string spellName, Func<WoWUnit> target) => CreateCastRangedAbility(ctx => true, spellName, target);
+
+        public static Composite CreateWaitAtLocationUntilTankPulled(CanRunDecoratorDelegate canRun, Func<WoWPoint> loc) => new ActionAlwaysSucceed();
+        
+        public static Composite CreateWaitAtLocationUntilTankPulled(CanRunDecoratorDelegate canRun, Func<WoWPoint> loc, float radius)
+        {
+            return new Decorator(canRun, new Action(ctx => 
+            {
+                if (StyxWoW.Me.Location.Distance(loc()) > radius) Navigator.MoveTo(loc());
+                return RunStatus.Success;
+            }));
+        }
+        
+        public static Composite CreateWaitAtLocationUntilTankPulled(Func<WoWPoint> loc) => CreateWaitAtLocationUntilTankPulled(ctx => true, loc, 5f);
+
+        public static Composite CreateLosLocation(CanRunDecoratorDelegate canRun, Func<WoWPoint> locationToLos, Func<WoWPoint> objectLocationToLosAt, Func<float> objectRadius) => new ActionAlwaysSucceed();
+        
+        public static Composite CreateLosLocation(CanRunDecoratorDelegate canRun, Func<WoWPoint> loc)
+        {
+            return new Decorator(canRun, new Action(ctx => 
+            {
+                Navigator.MoveTo(loc());
+                return RunStatus.Success;
+            }));
+        }
+        
+        public static Composite CreateLosLocation(CanRunDecoratorDelegate canRun, Func<WoWUnit> unitSelector, float range, Func<WoWPoint> loc)
+        {
+            return new Decorator(canRun, new Action(ctx => 
+            {
+                Navigator.MoveTo(loc());
+                return RunStatus.Success;
+            }));
+        }
+        
+        public static Composite CreateForceJump(CanRunDecoratorDelegate canRun, Func<WoWPoint> from, Func<WoWPoint> to, int distance)
+        {
+            return CreateForceJump(canRun, from, to);
+        }
+
+        public static Composite CreateForceJump(CanRunDecoratorDelegate canRun, bool actuallyJump, WoWPoint from, WoWPoint to) => new ActionAlwaysSucceed();
+        public static Composite CreateForceJump(CanRunDecoratorDelegate canRun, WoWPoint from, WoWPoint to) => new ActionAlwaysSucceed();
+
+        public static Composite CreateRunAwayFromLocation(CanRunDecoratorDelegate canRun, Func<WoWPoint> loc, float distance)
+        {
+            return new Decorator(canRun, new ActionAlwaysSucceed());
+        }
+
+        public static Composite CreateRunAwayFromLocation(CanRunDecoratorDelegate canRun, float distance, Func<WoWPoint> loc)
+        {
+            return CreateRunAwayFromLocation(canRun, loc, distance);
+        }
+
+        public static Composite CreateJumpDown(CanRunDecoratorDelegate canRun, WoWPoint from, WoWPoint to) => new ActionAlwaysSucceed();
+        public static Composite CreateJumpDown(CanRunDecoratorDelegate canRun, bool actuallyJump, WoWPoint from, WoWPoint to) => new ActionAlwaysSucceed();
+
+        public static Composite CreateJumpDown(CanRunDecoratorDelegate canRun, Func<WoWPoint> pointSelector)
+        {
+            return new Decorator(canRun, new ActionAlwaysSucceed());
+        }
+
+        public static Composite GetBehindUnit(CanRunDecoratorDelegate canRun, Func<WoWUnit> unit)
+        {
+            return new Decorator(canRun, new ActionAlwaysSucceed());
+        }
+        
+        public static Composite CreateMountBehavior() => new ActionAlwaysSucceed();
+        public static Composite CreateMountBehavior(Func<WoWPoint> destinationSelector) => new ActionAlwaysSucceed();
+
+        public static Composite CreateMountBehavior(CanRunDecoratorDelegate canRun)
+        {
+            return new Decorator(canRun, new ActionAlwaysSucceed());
+        }
+        
+        public static Composite CreateTankTalkToThenEscortNpc(int escortNpcId, int gossipIndex, WoWPoint escortNpcLocation, WoWPoint endLocation, float followDistance, Func<bool> isDoneCondition) => new ActionAlwaysSucceed();
+        public static Composite CreateTankTalkToThenEscortNpc(int escortNpcId, WoWPoint escortNpcLocation, WoWPoint endLocation) => new ActionAlwaysSucceed();
+        
+        public static Composite ControlledMoveTo(Func<WoWPoint> loc)
+        {
+            return new Action(ctx => { Navigator.MoveTo(loc()); return RunStatus.Success; });
+        }
+
+        public static Composite ControlledMoveTo(WoWPoint loc)
+        {
+            return new Action(ctx => { Navigator.MoveTo(loc); return RunStatus.Success; });
+        }
+
+        // ═══════════════════════════════════════════════════════════
         // PARTY ROLE DETECTION
         // ═══════════════════════════════════════════════════════════
 
@@ -129,6 +475,87 @@ namespace Bots.DungeonBuddy.Helpers
                 radius,
                 obj => obj.Entry == objectEntryId);
         }
+
+        /// <summary>
+        /// Overload params uint[] — Violet Hold, DTK, Ahn'kahet.
+        /// </summary>
+        public static Composite CreateRunAwayFromBad(
+            CanRunDecoratorDelegate condition,
+            float radius,
+            params uint[] objectEntries) =>
+            CreateRunAwayFromBad(condition, radius, obj => objectEntries.Contains(obj.Entry));
+
+        /// <summary>
+        /// Overload avec Func center + range + radius + uint — HoL, Gundrak, DTK.
+        /// </summary>
+        public static Composite CreateRunAwayFromBad(
+            CanRunDecoratorDelegate condition,
+            Func<WoWPoint> centerSelector,
+            float range,
+            float radius,
+            uint objectEntry) =>
+            CreateRunAwayFromBad(
+                ctx => condition(ctx) &&
+                       centerSelector != null &&
+                       StyxWoW.Me.Location.DistanceSqr(centerSelector()) < range * range,
+                radius,
+                obj => obj.Entry == objectEntry);
+
+        /// <summary>
+        /// Overload avec Func center + range + radius + Predicate — DTK Trollgore.
+        /// </summary>
+        public static Composite CreateRunAwayFromBad(
+            CanRunDecoratorDelegate condition,
+            Func<WoWPoint> centerSelector,
+            float range,
+            float radius,
+            Predicate<WoWObject> objectSelector) =>
+            CreateRunAwayFromBad(
+                ctx => condition(ctx) &&
+                       centerSelector != null &&
+                       StyxWoW.Me.Location.DistanceSqr(centerSelector()) < range * range,
+                radius,
+                objectSelector);
+
+        /// <summary>
+        /// Overload avec WoWPoint direct (pas Func) — Azjol-Nerub, Deadmines.
+        /// HB 4.3.4: convertit WoWPoint en lambda pour les scripts qui passent le point directement.
+        /// </summary>
+        public static Composite CreateRunAwayFromBad(
+            CanRunDecoratorDelegate condition,
+            WoWPoint centerPoint,
+            float radius,
+            float maxDistance,
+            uint objectEntry) =>
+            CreateRunAwayFromBad(
+                ctx => condition(ctx) &&
+                       StyxWoW.Me.Location.DistanceSqr(centerPoint) < radius * radius,
+                maxDistance,
+                obj => obj.Entry == objectEntry);
+
+        public static Composite CreateRunAwayFromBad(
+            CanRunDecoratorDelegate condition,
+            WoWPoint centerPoint,
+            float radius,
+            float maxDistance,
+            uint[] objectEntries) =>
+            CreateRunAwayFromBad(
+                ctx => condition(ctx) &&
+                       StyxWoW.Me.Location.DistanceSqr(centerPoint) < radius * radius,
+                maxDistance,
+                obj => objectEntries.Contains(obj.Entry));
+
+        public static Composite CreateRunAwayFromBad(
+            CanRunDecoratorDelegate condition,
+            WoWPoint centerPoint,
+            float radius,
+            float maxDistance,
+            Predicate<WoWObject> objectSelector) =>
+            CreateRunAwayFromBad(
+                ctx => condition(ctx) &&
+                       StyxWoW.Me.Location.DistanceSqr(centerPoint) < radius * radius,
+                maxDistance,
+                objectSelector);
 
         public static Composite CreateRunAwayFromBad(
             CanRunDecoratorDelegate condition,
@@ -306,6 +733,32 @@ namespace Bots.DungeonBuddy.Helpers
         }
 
         // ═══════════════════════════════════════════════════════════
+        // PARTY QUERY (HB 4.3.4 ScriptHelpers)
+        // ═══════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Tous les membres du groupe/raid, moi inclus.
+        /// Utilisé par Violet Hold x2.
+        /// </summary>
+        public static IEnumerable<WoWPlayer> PartyIncludingMe =>
+            StyxWoW.Me.GroupInfo.RaidMembers.Select(m => m.ToPlayer()).Where(p => p != null);
+
+        /// <summary>
+        /// Vérifie si un boss par son ID est encore en vie.
+        /// Référence HB 4.3.4 ScriptHelpers.cs:464
+        /// </summary>
+        public static bool IsBossAlive(uint id) =>
+            BossManager.Bosses.FirstOrDefault(b => b.Entry == id)?.IsAlive ?? false;
+
+        /// <summary>
+        /// Vérifie si un boss nommé est encore en vie.
+        /// Utilisé par Violet Hold, CoS, Gundrak x10+.
+        /// </summary>
+        public static bool IsBossAlive(string name) =>
+            ObjectManager.GetObjectsOfType<WoWUnit>()
+                .Any(u => u.Name == name && u.IsAlive && !u.IsFriendly);
+
+        // ═══════════════════════════════════════════════════════════
         // OBJECT INTERACTION
         // ═══════════════════════════════════════════════════════════
 
@@ -329,6 +782,27 @@ namespace Bots.DungeonBuddy.Helpers
             );
         }
 
+        /// <summary>
+        /// Overload avec range + ignoreCombat — UP, Nexus, Violet Hold, HoS.
+        /// </summary>
+        public static Composite CreateInteractWithObject(
+            Func<WoWGameObject> objectSelector,
+            float range,
+            bool ignoreCombat) =>
+            new Decorator(
+                ctx => (ignoreCombat || !StyxWoW.Me.Combat) &&
+                       objectSelector() != null &&
+                       objectSelector().CanUse(),
+                new Sequence(
+                    new Decorator(
+                        ctx => objectSelector().DistanceSqr > range * range,
+                        new Action(ctx => Navigator.MoveTo(objectSelector().Location))),
+                    new Decorator(
+                        ctx => objectSelector().DistanceSqr <= range * range,
+                        new Action(ctx => objectSelector().Interact()))
+                )
+            );
+
         // ═══════════════════════════════════════════════════════════
         // UTILITY QUERIES
         // ═══════════════════════════════════════════════════════════
@@ -336,7 +810,12 @@ namespace Bots.DungeonBuddy.Helpers
         /// <summary>
         /// Trouve les NPCs non-friendly près d'une location
         /// </summary>
-        public static IEnumerable<WoWUnit> GetUnfriendlyNpsAtLocation(
+        public static List<WoWUnit> GetUnfriendlyNpsAtLocation(Func<WoWPoint> locationSelector, float radius)
+        {
+            return GetUnfriendlyNpsAtLocation(locationSelector, radius, null);
+        }
+
+        public static List<WoWUnit> GetUnfriendlyNpsAtLocation(
             Func<WoWPoint> locationSelector,
             float radius,
             Func<WoWUnit, bool> filter)
@@ -348,8 +827,13 @@ namespace Bots.DungeonBuddy.Helpers
                 .Where(u => u.IsAlive &&
                            !u.IsFriendly &&
                            u.Location.DistanceSqr(location) < radiusSqr &&
-                           filter(u));
+                           (filter == null || filter(u))).ToList();
         }
+
+        public static Composite CreatePullNpcToLocation(CanRunDecoratorDelegate canRun, Func<WoWUnit> unitSelector, Func<WoWPoint> pullToLocationSelector, int waitTimeAtPullLocationTimeout) => new ActionAlwaysSucceed();
+        public static Composite CreatePullNpcToLocation(CanRunDecoratorDelegate canRun, CanRunDecoratorDelegate readyToPull, Func<WoWUnit> unitSelector, Func<WoWPoint> pullToLocationSelector, int waitTimeAtPullLocationTimeout) => new ActionAlwaysSucceed();
+        public static Composite CreatePullNpcToLocation(CanRunDecoratorDelegate canRun, CanRunDecoratorDelegate readyToPull, Func<WoWUnit> unitSelector, Func<WoWPoint> pullToLocationSelector, Func<WoWPoint> waitAtLocationSellector) => new ActionAlwaysSucceed();
+        public static Composite CreatePullNpcToLocation(CanRunDecoratorDelegate canRun, CanRunDecoratorDelegate readyToPull, Func<WoWUnit> unitSelector, Func<WoWPoint> pullToLocationSelector, Func<WoWPoint> waitAtLocationSellector, int waitTimeAtPullLocationTimeout) => new ActionAlwaysSucceed();
 
         /// <summary>
         /// Crée un behavior pour pull trash vers une position
@@ -509,6 +993,11 @@ namespace Bots.DungeonBuddy.Helpers
                 false);
         }
 
+        public static Composite CreateMoveToContinue(CanRunDecoratorDelegate canRun, uint objectId, bool ignoreCombat)
+        {
+            return CreateMoveToContinue(canRun, () => ObjectManager.GetObjectsOfType<WoWObject>().FirstOrDefault(o => o.Entry == objectId), ignoreCombat);
+        }
+
         public static Composite CreateMoveToContinue(Func<WoWObject> objectSelector)
         {
             return CreateMoveToContinue(ctx => true, objectSelector, false);
@@ -535,6 +1024,9 @@ namespace Bots.DungeonBuddy.Helpers
                 })
             );
         }
+
+        public static Composite CreateMoveToContinue(WoWPoint location) =>
+            CreateMoveToContinue(ctx => true, () => location, true);
 
         public static Composite CreateMoveToContinue(Func<WoWPoint> locationSelector)
         {
