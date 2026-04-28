@@ -278,17 +278,52 @@ namespace Bots.DungeonBuddy
         // ═══════════════════════════════════════════════════════════
 
         /// <summary>
-        /// Flag: un proposal est en attente (set par événement Lua)
+        /// Flag: un proposal est en attente (HB bool_6)
         /// </summary>
         public static bool ProposalPending { get; set; }
 
         /// <summary>
-        /// Flag: le donjon est terminé (reward reçu)
+        /// Flag: proposal failed (HB bool_4)
         /// </summary>
-        public static bool DungeonCompleted { get; set; }
+        public static bool ProposalFailed { get; set; }
 
         /// <summary>
-        /// Flag: un vote kick est en cours
+        /// Flag: proposal succeeded (HB bool_5)
+        /// </summary>
+        public static bool ProposalSucceeded { get; set; }
+
+        /// <summary>
+        /// Flag: resurrect request (HB bool_3)
+        /// </summary>
+        public static bool ResurrectRequestPending { get; set; }
+
+        /// <summary>
+        /// Flag: role check popup shown (HB bool_8)
+        /// </summary>
+        public static bool RoleCheckPending { get; set; }
+
+        /// <summary>
+        /// Flag: party invite request (HB bool_9)
+        /// </summary>
+        public static bool PartyInvitePending { get; set; }
+
+        /// <summary>
+        /// Exit delay timer (HB waitTimer_7) — set on DungeonCompleted to trigger leave
+        /// </summary>
+        public static readonly WaitTimer ExitDelayTimer = new WaitTimer(TimeSpan.FromSeconds(60));
+
+        /// <summary>
+        /// Post-proposal delay timer (HB waitTimer_9) — reset when proposal succeeds
+        /// </summary>
+        internal static readonly WaitTimer PostProposalTimer = new WaitTimer(TimeSpan.FromSeconds(8.0));
+
+        /// <summary>
+        /// Completion reason enum (HB completeReason_0)
+        /// </summary>
+        public static CompleteReason DungeonCompletedReason { get; set; } = CompleteReason.None;
+
+        /// <summary>
+        /// Flag: LFG_COMPLETION_REWARD received (HB bool_7)
         /// </summary>
         public static bool BootProposalActive { get; set; }
 
@@ -299,16 +334,23 @@ namespace Bots.DungeonBuddy
         public static void AttachLfgEvents()
         {
             ProposalPending = false;
-            DungeonCompleted = false;
+            ProposalFailed = false;
+            ProposalSucceeded = false;
+            ResurrectRequestPending = false;
+            RoleCheckPending = false;
+            PartyInvitePending = false;
+            DungeonCompletedReason = CompleteReason.None;
             BootProposalActive = false;
 
             Lua.Events.AttachEvent("LFG_PROPOSAL_SHOW", OnProposalShow);
-            Lua.Events.AttachEvent("LFG_PROPOSAL_SUCCEEDED", OnProposalSucceeded);
             Lua.Events.AttachEvent("LFG_PROPOSAL_FAILED", OnProposalFailed);
-            Lua.Events.AttachEvent("LFG_COMPLETION_REWARD", OnCompletionReward);
+            Lua.Events.AttachEvent("LFG_PROPOSAL_SUCCEEDED", OnProposalSucceeded);
             Lua.Events.AttachEvent("LFG_OFFER_CONTINUE", OnOfferContinue);
             Lua.Events.AttachEvent("LFG_ROLE_CHECK_SHOW", OnRoleCheck);
-            Lua.Events.AttachEvent("LFG_BOOT_PROPOSAL_UPDATE", OnBootProposal);
+            Lua.Events.AttachEvent("LFG_COMPLETION_REWARD", OnCompletionReward);
+            Lua.Events.AttachEvent("RESURRECT_REQUEST", OnResurrectRequest);
+            Lua.Events.AttachEvent("PARTY_INVITE_REQUEST", OnPartyInviteRequest);
+            Lua.Events.AttachEvent("LFG_INVALID_ERROR_MESSAGE", OnLfgInvalidErrorMessage);
         }
 
         /// <summary>
@@ -318,12 +360,14 @@ namespace Bots.DungeonBuddy
         public static void DetachLfgEvents()
         {
             Lua.Events.DetachEvent("LFG_PROPOSAL_SHOW", OnProposalShow);
-            Lua.Events.DetachEvent("LFG_PROPOSAL_SUCCEEDED", OnProposalSucceeded);
             Lua.Events.DetachEvent("LFG_PROPOSAL_FAILED", OnProposalFailed);
-            Lua.Events.DetachEvent("LFG_COMPLETION_REWARD", OnCompletionReward);
+            Lua.Events.DetachEvent("LFG_PROPOSAL_SUCCEEDED", OnProposalSucceeded);
             Lua.Events.DetachEvent("LFG_OFFER_CONTINUE", OnOfferContinue);
             Lua.Events.DetachEvent("LFG_ROLE_CHECK_SHOW", OnRoleCheck);
-            Lua.Events.DetachEvent("LFG_BOOT_PROPOSAL_UPDATE", OnBootProposal);
+            Lua.Events.DetachEvent("LFG_COMPLETION_REWARD", OnCompletionReward);
+            Lua.Events.DetachEvent("RESURRECT_REQUEST", OnResurrectRequest);
+            Lua.Events.DetachEvent("PARTY_INVITE_REQUEST", OnPartyInviteRequest);
+            Lua.Events.DetachEvent("LFG_INVALID_ERROR_MESSAGE", OnLfgInvalidErrorMessage);
         }
 
         private static void OnProposalShow(object sender, LuaEventArgs args)
@@ -332,44 +376,81 @@ namespace Bots.DungeonBuddy
             ProposalPending = true;
         }
 
-        private static void OnProposalSucceeded(object sender, LuaEventArgs args)
-        {
-            Logging.Write("[DungeonBuddy] LFG proposal accepted by all! Teleporting...");
-            ProposalPending = false;
-            // Téléport imminent — pas d'action requise, le serveur gère
-        }
-
         private static void OnProposalFailed(object sender, LuaEventArgs args)
         {
             Logging.Write("[DungeonBuddy] LFG proposal failed/declined");
-            ProposalPending = false;
+            ProposalFailed = true;
         }
 
-        private static void OnCompletionReward(object sender, LuaEventArgs args)
+        private static void OnProposalSucceeded(object sender, LuaEventArgs args)
         {
-            Logging.Write("[DungeonBuddy] Dungeon completed! Reward received.");
-            DungeonCompleted = true;
+            Logging.Write("[DungeonBuddy] LFG proposal accepted by all! Teleporting...");
+            PostProposalTimer.Reset();
+            ProposalSucceeded = true;
         }
 
         private static void OnOfferContinue(object sender, LuaEventArgs args)
         {
             Logging.Write("[DungeonBuddy] LFG offer to continue (requeue)");
-            // Le behavior tree dans DungeonBuddy.cs gère le requeue
+            BootProposalActive = true;
         }
 
         private static void OnRoleCheck(object sender, LuaEventArgs args)
         {
             Logging.Write("[DungeonBuddy] Role check requested, accepting...");
-            // Accepter automatiquement le role check
-            Lua.DoString("LFDRoleCheckPopupAcceptButton:Click()");
+            RoleCheckPending = true;
         }
 
-        private static void OnBootProposal(object sender, LuaEventArgs args)
+        private static void OnCompletionReward(object sender, LuaEventArgs args)
         {
-            Logging.Write("[DungeonBuddy] Vote kick in progress");
-            BootProposalActive = true;
-            // Voter oui par défaut (ne pas bloquer le groupe)
-            Lua.DoString("SetLFGBootVote(true)");
+            int delay = DungeonBuddySettings.Instance.PartyMode == PartyMode.Off ? 30 : 10;
+            SetDungeonCompleted(CompleteReason.Completed, delay);
+            Logging.Write("[DungeonBuddy] Dungeon completed! Leaving in {0} seconds.", delay);
+        }
+
+        private static void OnResurrectRequest(object sender, LuaEventArgs args)
+        {
+            Logging.Write("[DungeonBuddy] Resurrection request received");
+            ResurrectRequestPending = true;
+        }
+
+        private static void OnPartyInviteRequest(object sender, LuaEventArgs args)
+        {
+            Logging.Write("[DungeonBuddy] Party invite request received");
+            PartyInvitePending = true;
+        }
+
+        public static void ResetProposalFlags()
+        {
+            ProposalPending = false;
+            ProposalFailed = false;
+            ProposalSucceeded = false;
+        }
+
+        private static void OnLfgInvalidErrorMessage(object sender, LuaEventArgs args)
+        {
+            try
+            {
+                var error = (LfgInvalidError)args.Args[0];
+                string text = args.Args[1] as string;
+                string text2 = args.Args[2] as string;
+                Logging.Write("[DungeonBuddy] Lfg queue failed. {0}: {1}, {2}", error, text ?? "", text2 ?? "");
+            }
+            catch
+            {
+                Logging.Write("[DungeonBuddy] Lfg queue failed (error parsing args)");
+            }
+        }
+
+        /// <summary>
+        /// HB smethod_23: set DungeonCompleted + reset ExitDelayTimer
+        /// </summary>
+        public static void SetDungeonCompleted(CompleteReason reason, int delaySeconds = 60)
+        {
+            ExitDelayTimer.WaitTime = TimeSpan.FromSeconds(delaySeconds);
+            if (reason != CompleteReason.None)
+                ExitDelayTimer.Reset();
+            DungeonCompletedReason = reason;
         }
     }
 }

@@ -8,14 +8,12 @@ using Styx.WoWInternals.WoWObjects;
 
 namespace Bots.DungeonBuddy.Avoidance
 {
-    /// <summary>
-    /// Gestionnaire global des zones à éviter
-    /// </summary>
     public static class AvoidanceManager
     {
         public static readonly List<AvoidInfo> AvoidInfos = new();
         public static readonly List<Avoid> Avoids = new();
-        
+        public static readonly List<AvoidCluster> AvoidClusters = new();
+
         public static void Add(AvoidInfo avoid)
         {
             AvoidInfos.Add(avoid);
@@ -36,113 +34,80 @@ namespace Bots.DungeonBuddy.Avoidance
             AvoidInfos.RemoveAll(match);
         }
 
+        // HB: ClearAvoidPath lives in Helpers.cs, not here.
+        // HB AvoidanceManager.Clear() only clears AvoidInfos.
         public static void Clear()
         {
             AvoidInfos.Clear();
-            Avoids.Clear();
         }
 
-        /// <summary>
-        /// Met à jour les zones d'évitement actives.
-        /// Appelé à chaque pulse du bot.
-        /// </summary>
-        public static void Update()
+        public static void ClearAvoidPath()
         {
-            // Supprimer les avoids invalides
-            Avoids.RemoveAll(a => !a.IsValid);
+            Helpers.ClearAvoidPath();
+        }
 
-            // Parcourir les objets du monde pour créer de nouveaux avoids
+        // HB smethod_0
+        internal static void Update()
+        {
+            bool changed = Avoids.RemoveAll(a => !a.IsValid) > 0;
+
             foreach (var obj in ObjectManager.ObjectList)
             {
-                foreach (var avoidInfo in AvoidInfos.Where(ai => ai.ObjectSelector != null))
+                foreach (var ai in AvoidInfos.Where(ai => ai.ObjectSelector != null))
                 {
-                    if (avoidInfo.ObjectSelector(obj) && avoidInfo.CanRun(obj))
+                    if (ai.ObjectSelector(obj) && ai.CanRun(obj) && !Avoids.Any(a => a is AvoidObject ao && ao.AvoidInfo == ai))
                     {
-                        // Vérifier si cet objet n'a pas déjà un avoid
-                        if (!Avoids.Any(a => a is AvoidObject ao && ao.Info == avoidInfo))
-                        {
-                            Avoids.Add(new AvoidObject(avoidInfo, obj));
-                        }
+                        changed = true;
+                        Avoids.Add(new AvoidObject(ai, obj));
                     }
                 }
             }
 
-            // Ajouter les avoids de position
-            foreach (var avoidInfo in AvoidInfos.Where(ai => ai.LocationSelector != null))
+            foreach (var ai in AvoidInfos.Where(ai => ai.LocationSelector != null))
             {
-                if (avoidInfo.CanRun(null))
+                if (ai.CanRun(null) && !Avoids.Any(a => a is AvoidLocation al && al.AvoidInfo == ai))
                 {
-                    if (!Avoids.Any(a => a is AvoidLocation al && al.Info == avoidInfo))
-                    {
-                        Avoids.Add(new AvoidLocation(avoidInfo));
-                    }
+                    changed = true;
+                    Avoids.Add(new AvoidLocation(ai));
                 }
             }
 
-            // Mettre à jour tous les avoids
             foreach (var avoid in Avoids)
             {
-                avoid.Update();
+                var oldLoc = avoid.Location;
+                avoid.vmethod_0();
+                if (oldLoc != avoid.Location && !changed)
+                    changed = true;
             }
+
+            if (changed)
+                Helpers.BuildClusters(Avoids, AvoidClusters);
         }
 
-        /// <summary>
-        /// Vérifie si une position est dans une zone d'évitement
-        /// </summary>
+        // Compatibility wrappers used by current DungeonBuddy/ScriptHelpers call sites.
         public static bool IsInAvoidance(WoWPoint location)
         {
-            return Avoids.Any(a => a.Location.DistanceSqr(location) < a.RadiusSqr);
+            return Avoids.Any(a => a.IsPointInAvoid(location));
         }
 
-        /// <summary>
-        /// Trouve un point sûr pour fuir
-        /// </summary>
         public static WoWPoint GetSafePoint(WoWPoint from, float minDistance = 10f)
         {
-            // Trouver la direction opposée à la menace la plus proche
             var nearestAvoid = Avoids
-                .Where(a => a.Location.DistanceSqr(from) < (a.Radius + 20) * (a.Radius + 20))
+                .Where(a => a.Location.DistanceSqr(from) < (a.Radius + 20f) * (a.Radius + 20f))
                 .OrderBy(a => a.Location.DistanceSqr(from))
                 .FirstOrDefault();
 
             if (nearestAvoid == null)
                 return from;
 
-            // Direction opposée
-            var directionAway = (from - nearestAvoid.Location);
+            var directionAway = from - nearestAvoid.Location;
             directionAway.Normalize();
+            var safePoint = from + directionAway * (nearestAvoid.Radius + minDistance);
 
-            // Point de fuite
-            var safePoint = from + (directionAway * (nearestAvoid.Radius + minDistance));
-
-            // Vérifier que le point est navigable
-            if (Navigator.CanNavigateFully(from, safePoint))
+            if (Navigator.CanNavigateFully(from, safePoint) && !IsInAvoidance(safePoint))
                 return safePoint;
 
-            // Essayer d'autres directions
-            for (float angle = 45f; angle <= 315f; angle += 45f)
-            {
-                var rotated = RotatePoint(directionAway, angle);
-                var testPoint = from + (rotated * (nearestAvoid.Radius + minDistance));
-                
-                if (Navigator.CanNavigateFully(from, testPoint) && !IsInAvoidance(testPoint))
-                    return testPoint;
-            }
-
             return from;
-        }
-
-        private static WoWPoint RotatePoint(WoWPoint direction, float angleDegrees)
-        {
-            float angleRadians = angleDegrees * (float)Math.PI / 180f;
-            float cos = (float)Math.Cos(angleRadians);
-            float sin = (float)Math.Sin(angleRadians);
-            
-            return new WoWPoint(
-                direction.X * cos - direction.Y * sin,
-                direction.X * sin + direction.Y * cos,
-                direction.Z
-            );
         }
     }
 }

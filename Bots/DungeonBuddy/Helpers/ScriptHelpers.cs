@@ -415,6 +415,72 @@ namespace Bots.DungeonBuddy.Helpers
             }
         }
 
+        // HB 4.3.4 ScriptHelpers.cs:1273 — GetReturnVal<T>
+        public static T GetReturnVal<T>(string lua, int retVal)
+        {
+            var returnValues = Lua.GetReturnValues(lua);
+            if (returnValues == null || retVal >= returnValues.Count)
+                return default!;
+            string text = returnValues[retVal];
+            if (typeof(T) == typeof(bool))
+                return (T)(object)(!string.IsNullOrEmpty(text) && text != "0" && text != "false");
+            if (string.IsNullOrEmpty(text))
+                return default!;
+            try
+            {
+                return (T)Convert.ChangeType(text, typeof(T));
+            }
+            catch
+            {
+                return default!;
+            }
+        }
+
+        // HB 4.3.4 ScriptHelpers geometry extensions
+        public static float Dot(this WoWPoint point1, WoWPoint point2)
+        {
+            return point1.X * point2.X + point1.Y * point2.Y + point1.Z * point2.Z;
+        }
+
+        public static WoWPoint Cross(this WoWPoint point1, WoWPoint point2)
+        {
+            return new WoWPoint(
+                point1.Y * point2.Z - point1.Z * point2.Y,
+                point1.Z * point2.X - point1.X * point2.Z,
+                point1.X * point2.Y - point1.Y * point2.X);
+        }
+
+        public static WoWPoint GetNearestPointOnLine(this WoWPoint point, WoWPoint lineStart, WoWPoint lineEnd)
+        {
+            WoWPoint line = lineEnd - lineStart;
+            WoWPoint fromStart = point - lineStart;
+            float lineLenSqr = line.X * line.X + line.Y * line.Y + line.Z * line.Z;
+            float projection = line.Dot(fromStart) / lineLenSqr;
+            return new WoWPoint(
+                lineStart.X + line.X * projection,
+                lineStart.Y + line.Y * projection,
+                lineStart.Z + line.Z * projection);
+        }
+
+        public static WoWPoint GetNearestPointOnSegment(this WoWPoint point, WoWPoint segmentStart, WoWPoint segmentEnd)
+        {
+            WoWPoint segment = segmentEnd - segmentStart;
+            WoWPoint fromStart = point - segmentStart;
+
+            if ((point - segmentEnd).Dot(segment) > 0f)
+                return segmentEnd;
+
+            if (fromStart.Dot(segmentStart - segmentEnd) < 0f)
+                return segmentStart;
+
+            float segmentLenSqr = segment.X * segment.X + segment.Y * segment.Y;
+            float projection = segment.Dot(fromStart) / segmentLenSqr;
+            return new WoWPoint(
+                segmentStart.X + segment.X * projection,
+                segmentStart.Y + segment.Y * projection,
+                segmentStart.Z + segment.Z * projection);
+        }
+
         public static IEnumerable<WoWPlayer> GetPartyMembersByRole(PartyRole role)
         {
             foreach (var member in StyxWoW.Me.GroupInfo.RaidMembers)

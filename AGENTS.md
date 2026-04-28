@@ -12,6 +12,7 @@ Single project, no solution file. Output: `bin/Debug/net10.0-windows7.0/`
 
 ```
 CopilotBuddy.csproj          # net10.0-windows7.0, x86, WPF+WinForms, WinExe
+                              # Requires administrator privileges (memory access to WoW process)
 GreenMagic/                  # EndScene hook, memory read/write, ASM injection
 Styx/                        # Core engine
   ├── WoWInternals/          # ObjectManager, WoWObjects, Lua, LuaEvents

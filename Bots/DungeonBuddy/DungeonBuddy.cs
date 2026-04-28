@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using Bots.DungeonBuddy.Avoidance;
 using Bots.DungeonBuddy.Enums;
+using Bots.DungeonBuddy.Helpers;
 using Bots.Grind;
 using CommonBehaviors.Actions;
 using CommonBehaviors.Decorators;
@@ -51,7 +52,7 @@ namespace Bots.DungeonBuddy
 
         private PrioritySelector? _root;
         private static CombatRoutine Routine => RoutineManager.Current;
-        
+
         // Timers
         private readonly Stopwatch _proposalDelay = new();
         private readonly Stopwatch _requeueDelay = new();
@@ -60,14 +61,24 @@ namespace Bots.DungeonBuddy
 
         // State tracking
         private uint _lastMapId;
+        private uint _lastObservedLfgMapId;
+        private uint _lastObservedLfgDungeonId;
         private bool _hasSetRole;
 
         // Active dungeon behavior — updated when dungeon changes (fixes stale reference at tree-build time)
         private Composite? _activeDungeonBehavior;
         private readonly WaitTimer _soloFarmExitTimer = new WaitTimer(TimeSpan.FromSeconds(30.0));
+
+        // Death behavior fields (HB stopwatch_0, woWPoint_1, waitTimer_6, woWUnit_0 parity)
+        private readonly Stopwatch _deathTimer = new Stopwatch();
+        private WoWPoint _corpseRunBreadcrumb = WoWPoint.Zero;
+        private readonly WaitTimer _corpseRunWaitTimer = new WaitTimer(TimeSpan.FromMinutes(2.0));
+        private WoWUnit? _corpseSpiritHealer;
         private readonly Stopwatch _debugMoveLogThrottle = new();
         private readonly Stopwatch _debugDungeonLogThrottle = new();
         private readonly Stopwatch _soloFarmStatusLogThrottle = new();
+        private readonly WaitTimer _pathValidationRefreshTimer = new WaitTimer(TimeSpan.FromSeconds(2.0));
+        private dynamic? _cachedBossPath;
         private bool _soloFarmResetInstancesPending;
         private WoWPoint _outsideFlyPoint = WoWPoint.Zero;
         private readonly List<uint> _healthstoneEntries = new List<uint> { 51999U, 52000U, 52001U, 52002U, 52003U, 52004U, 52005U, 67248U, 67250U };
@@ -82,22 +93,24 @@ namespace Bots.DungeonBuddy
         public override void Start()
         {
             Logging.Write("[DungeonBuddy] Starting...");
-            
+
             var settings = DungeonBuddySettings.Instance;
             Logging.Write($"[DungeonBuddy] Config: QueueType={settings.QueueType}, SelectedDungeons=[{string.Join(",", settings.SelectedDungeonIds)}]");
-            
+
             // Charger les scripts de donjon (réflection sur l'assembly)
             DungeonManager.LoadDungeonScripts();
             Targeting.Instance = new DungeonTargeting();
 
             Logging.Write("[DungeonBuddy] Script folder: {0}", System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Dungeon Scripts"));
             Logging.Write("[DungeonBuddy] Profile folder: {0}", System.IO.Path.Combine(Logging.ApplicationPath, "Default Profiles\\DungeonBuddy\\"));
-            
+
             // Attacher les événements LFG
             LfgManager.AttachLfgEvents();
-            
+
             _hasSetRole = false;
             _lastMapId = StyxWoW.Me.MapId;
+            _lastObservedLfgMapId = _lastMapId;
+            _lastObservedLfgDungeonId = LfgManager.CurrentLfgDungeonId;
             _activeDungeonBehavior = null;
 
             // SoloFarm HB parity: précharger le donjon sélectionné même hors instance
@@ -107,14 +120,14 @@ namespace Bots.DungeonBuddy
             {
                 DungeonManager.SetDungeonById(settings.SelectedDungeonIds[0]);
             }
-            
+
             Logging.Write("[DungeonBuddy] Started successfully!");
         }
 
         public override void Stop()
         {
             Logging.Write("[DungeonBuddy] Stopping...");
-            
+
             LfgManager.DetachLfgEvents();
             Targeting.Instance = new Targeting();
             DungeonManager.Clear();
@@ -129,7 +142,7 @@ namespace Bots.DungeonBuddy
             // Si on observe des incohérences d'état (objets désync), envisager:
             //   using (StyxWoW.Memory.AcquireFrame()) { Root.Tick(...); }
             // À valider en jeu — pour l'instant on pulse sans FrameLock comme LevelBot.
-            
+
             // Détecter changement de map (entrée/sortie donjon)
             var currentMap = (uint)StyxWoW.Me.MapId;
             if (currentMap != _lastMapId)
@@ -137,7 +150,7 @@ namespace Bots.DungeonBuddy
                 _lastMapId = currentMap;
                 OnMapChanged(currentMap);
             }
-            
+
             // Mettre à jour l'avoidance
             Bots.DungeonBuddy.Avoidance.AvoidanceManager.Update();
 
@@ -157,15 +170,6 @@ namespace Bots.DungeonBuddy
                     DungeonManager.SetDungeon(StyxWoW.Me.MapId);
             }
 
-            // Completion check stays in Pulse; dead-boss marking itself is now the dedicated
-            // HB parity tree branch: BossManager.CreateCheckForDeadBossBehavior().
-            if (StyxWoW.Me.IsInInstance && DungeonManager.CurrentDungeon != null &&
-                !LfgManager.DungeonCompleted && BossManager.AreAllRequiredBossesDead())
-            {
-                Logging.Write("[DungeonBuddy] All required bosses dead — dungeon complete!");
-                _soloFarmExitTimer.Reset();
-                LfgManager.DungeonCompleted = true;
-            }
         }
 
         private void OnMapChanged(uint newMapId)
@@ -187,7 +191,7 @@ namespace Bots.DungeonBuddy
                     DungeonManager.SetDungeon(newMapId);
 
                 _activeDungeonBehavior = null;
-                LfgManager.DungeonCompleted = false;
+                LfgManager.DungeonCompletedReason = CompleteReason.None;
                 _soloFarmResetInstancesPending = false;
                 _outsideFlyPoint = WoWPoint.Zero;
             }
@@ -201,7 +205,7 @@ namespace Bots.DungeonBuddy
                     BossManager.Reset();
                     _activeDungeonBehavior = null;
 
-                    if (LfgManager.DungeonCompleted)
+                    if (LfgManager.DungeonCompletedReason != CompleteReason.None)
                         _soloFarmResetInstancesPending = true;
 
                     // SoloFarm: re-sélectionner immédiatement le donjon cible hors instance
@@ -253,7 +257,7 @@ namespace Bots.DungeonBuddy
                         // 6) method_13 guarded by smethod_127
                         new Decorator(
                             ctx => DungeonBuddySettings.Instance.QueueType == QueueType.SoloFarm &&
-                                   LfgManager.DungeonCompleted &&
+                                   LfgManager.DungeonCompletedReason != CompleteReason.None &&
                                    _soloFarmExitTimer.IsFinished,
                             CreateSoloFarmExitBehavior()),
 
@@ -570,18 +574,224 @@ namespace Bots.DungeonBuddy
         private Composite CreateLfgBehavior()
         {
             return new PrioritySelector(
+                // --- RESURRECT REQUEST (HB method_97 branch) ---
+                new Decorator(
+                    ctx => LfgManager.ResurrectRequestPending,
+                    new PrioritySelector(
+                        new Decorator(
+                            ctx => ScriptHelpers.GetReturnVal<int>("return GetCorpseRecoveryDelay()", 0) != 0,
+                            new Action(ctx =>
+                            {
+                                Logging.Write("[DungeonBuddy] Waiting for corpse recovery delay to expire...");
+                                return RunStatus.Success;
+                            })
+                        ),
+                        new Sequence(
+                            new Action(ctx =>
+                            {
+                                Logging.Write("[DungeonBuddy] Accepting resurrect");
+                                Lua.DoString("AcceptResurrect()");
+                                return RunStatus.Success;
+                            }),
+                            new WaitContinue(
+                                TimeSpan.FromSeconds(5),
+                                ctx => StyxWoW.Me.IsAlive || ScriptHelpers.GetReturnVal<bool>("if ResurrectGetOfferer() == nil then return 1 end return nil", 0),
+                                new ActionAlwaysSucceed()),
+                            new Action(ctx =>
+                            {
+                                LfgManager.ResurrectRequestPending = false;
+                                return RunStatus.Success;
+                            })
+                        )
+                    )
+                ),
+
+                // --- PROPOSAL: random delayed accept (HB method_99 branch) ---
+                new Decorator(
+                    ctx => CanAcceptLfgProposal(),
+                    new Sequence(
+                        new Action(ctx =>
+                        {
+                            if (_proposalWaitMs == 0)
+                            {
+                                _proposalWaitMs = _rng.Next(1000, 3000);
+                                _proposalDelay.Restart();
+                                Logging.Write("[DungeonBuddy] Proposal received, accepting in {0}ms", _proposalWaitMs);
+                            }
+                            return RunStatus.Success;
+                        }),
+                        new WaitContinue(
+                            TimeSpan.FromSeconds(60),
+                            ctx => _proposalDelay.ElapsedMilliseconds >= _proposalWaitMs || LfgManager.ProposalFailed || LfgManager.ProposalSucceeded || StyxWoW.Me.Combat,
+                            new ActionAlwaysSucceed()),
+                        new PrioritySelector(
+                            new DecoratorContinue(
+                                ctx => LfgManager.ProposalSucceeded && DungeonManager.CurrentDungeon != null,
+                                new Sequence(
+                                    new Action(ctx =>
+                                    {
+                                        DungeonManager.Clear();
+                                        BossManager.Reset();
+                                        _activeDungeonBehavior = null;
+                                        return RunStatus.Success;
+                                    }),
+                                    new Action(ctx =>
+                                    {
+                                        _lastObservedLfgDungeonId = 0U;
+                                        return RunStatus.Success;
+                                    }),
+                                    new WaitContinue(
+                                        TimeSpan.FromSeconds(4),
+                                        ctx => !StyxWoW.IsInWorld,
+                                        new ActionAlwaysSucceed())
+                                )
+                            ),
+                            new Decorator(
+                                ctx => LfgManager.ProposalPending && !LfgManager.ProposalFailed && !LfgManager.ProposalSucceeded,
+                                new Sequence(
+                                    new Action(ctx =>
+                                    {
+                                        Logging.Write("[DungeonBuddy] Accepting dungeon invite");
+                                        LfgManager.AcceptProposal();
+                                        return RunStatus.Success;
+                                    }),
+                                    new Action(ctx =>
+                                    {
+                                        _proposalWaitMs = 0;
+                                        return RunStatus.Success;
+                                    })
+                                )
+                            ),
+                            new Action(ctx =>
+                            {
+                                _proposalWaitMs = 0;
+                                LfgManager.ResetProposalFlags();
+                                return RunStatus.Success;
+                            })
+                        )
+                    )
+                ),
+
+                // --- PARTY MODE OFF: leave party after completion (HB smethod_308-311) ---
+                new Decorator(
+                    ctx => ShouldLeavePartyAfterCompletion,
+                    new Sequence(
+                        new Action(ctx =>
+                        {
+                            Logging.Write("[DungeonBuddy] Dungeon completed. Leaving. [Reason: {0}]", LfgManager.DungeonCompletedReason);
+                            return RunStatus.Success;
+                        }),
+                        new Action(ctx =>
+                        {
+                            Lua.DoString(StyxWoW.Me.IsInParty ? "LeaveParty() LFGTeleport(true)" : "LFGTeleport(true)");
+                            return RunStatus.Success;
+                        }),
+                        new Action(ctx =>
+                        {
+                            DungeonManager.Clear();
+                            BossManager.Reset();
+                            _activeDungeonBehavior = null;
+                            _lastObservedLfgDungeonId = 0U;
+                            return RunStatus.Success;
+                        }),
+                        new WaitContinue(
+                            TimeSpan.FromSeconds(4),
+                            ctx => !StyxWoW.IsInWorld,
+                            new ActionAlwaysSucceed())
+                    )
+                ),
+
+                // --- BOOT PROPOSAL CONTINUE (HB bool_7) ---
+                new Decorator(
+                    ctx => LfgManager.BootProposalActive,
+                    new Action(ctx =>
+                    {
+                        Logging.Write("[DungeonBuddy] LFG continue offer received, consuming boot proposal flag.");
+                        LfgManager.BootProposalActive = false;
+                        return RunStatus.Success;
+                    })
+                ),
+
+                // --- ROLE CHECK (HB method_111 branch) ---
+                new Decorator(
+                    ctx => LfgManager.RoleCheckPending,
+                    new Sequence(
+                        new Action(ctx =>
+                        {
+                            Logging.Write("[DungeonBuddy] Role check in progress");
+                            Lua.DoString("LFDRoleCheckPopupAcceptButton:Click() StaticPopup1Button1:Click()");
+                            return RunStatus.Success;
+                        }),
+                        new Action(ctx =>
+                        {
+                            LfgManager.RoleCheckPending = false;
+                            return RunStatus.Success;
+                        })
+                    )
+                ),
+
+                // --- PARTY INVITE (HB method_113 branch) ---
+                new Decorator(
+                    ctx => LfgManager.PartyInvitePending,
+                    new Sequence(
+                        new DecoratorContinue(
+                            ctx => DungeonBuddySettings.Instance.PartyMode == PartyMode.Follower,
+                            new Action(ctx =>
+                            {
+                                Logging.Write("[DungeonBuddy] Accepting party invite");
+                                Lua.DoString("AcceptGroup()");
+                                return RunStatus.Success;
+                            })
+                        ),
+                        new Action(ctx =>
+                        {
+                            LfgManager.PartyInvitePending = false;
+                            return RunStatus.Success;
+                        })
+                    )
+                ),
+
+                // --- FOLLOWER: if we are leader, promote tank (HB smethod_321-322) ---
+                new Decorator(
+                    ctx => ShouldPromoteLeaderToTankInFollowerMode,
+                    new Sequence(
+                        new Action(ctx =>
+                        {
+                            Logging.Write("[DungeonBuddy] I am not supposed to be party leader. Fixing");
+                            return RunStatus.Success;
+                        }),
+                        new Action(ctx =>
+                        {
+                            Lua.DoString("for n=0,4 do if UnitGroupRolesAssigned('party'..n) == 'TANK' then PromoteToLeader('party'..n) end end");
+                            return RunStatus.Success;
+                        })
+                    )
+                ),
+
+                // --- Dungeon script completion -> set completion delay (HB smethod_323-324) ---
+                new Decorator(
+                    ctx => ShouldMarkDungeonCompletedFromCurrentDungeon,
+                    new Action(ctx =>
+                    {
+                        int delay = DungeonBuddySettings.Instance.PartyMode != PartyMode.Off ? 10 : 30;
+                        _soloFarmExitTimer.Reset();
+                        LfgManager.SetDungeonCompleted(CompleteReason.Completed, delay);
+                        return RunStatus.Success;
+                    })
+                ),
+
                 // --- IN DUNGEON (LFG): Dungeon completed → teleport out + requeue ---
                 // SoloFarm se gère séparément via CreateSoloFarmExitBehavior (walk to portal).
                 new Decorator(
                     ctx => LfgManager.CurrentState == LfgState.InDungeon &&
-                           LfgManager.DungeonCompleted &&
+                           LfgManager.DungeonCompletedReason != CompleteReason.None &&
+                           LfgManager.ExitDelayTimer.IsFinished &&
                            DungeonBuddySettings.Instance.QueueType != QueueType.SoloFarm,
                     new Sequence(
                         new Action(ctx =>
                         {
                             Logging.Write("[DungeonBuddy] Dungeon complete! Teleporting out...");
                             LfgManager.TeleportOut();
-                            LfgManager.DungeonCompleted = false;
                             _requeueDelay.Restart();
                             return RunStatus.Success;
                         }),
@@ -602,6 +812,20 @@ namespace Bots.DungeonBuddy
                         LfgManager.TeleportOut();
                         return RunStatus.Success;
                     })
+                ),
+
+                // --- REQUEUE (HB method_110 branch) ---
+                new Decorator(
+                    ctx => ShouldRequeue && DungeonBuddySettings.Instance.QueueType != QueueType.SoloFarm,
+                    new Sequence(
+                        new Action(ctx =>
+                        {
+                            Logging.Write("[DungeonBuddy] Dungeon run is over. Requeuing");
+                            QueueForSettings();
+                            LfgManager.DungeonCompletedReason = CompleteReason.None;
+                            return RunStatus.Success;
+                        })
+                    )
                 ),
 
                 // --- NOT IN LFG: Set role + Queue ---
@@ -652,41 +876,512 @@ namespace Bots.DungeonBuddy
                     new ActionAlwaysFail()
                 ),
 
+                // --- MAP/LFG DUNGEON CHANGE SYNC (HB method_115-118) ---
+                new Decorator(
+                    ctx => ShouldSyncCurrentDungeonFromLfgState(),
+                    new Sequence(
+                        new Action(ctx =>
+                        {
+                            RefreshCurrentDungeonFromLfgState();
+                            return RunStatus.Success;
+                        }),
+                        new Action(ctx =>
+                        {
+                            _lastObservedLfgMapId = StyxWoW.Me.MapId;
+                            _lastObservedLfgDungeonId = LfgManager.CurrentLfgDungeonId;
+                            return RunStatus.Success;
+                        })
+                    )
+                ),
+
                 new ActionAlwaysFail()
             );
         }
 
+        // HB ShouldRequeue parity (DungeonBot.ShouldRequeue)
+        private bool ShouldRequeue
+        {
+            get
+            {
+                if (LfgManager.DungeonCompletedReason == CompleteReason.None ||
+                    !LfgManager.ExitDelayTimer.IsFinished ||
+                    !LfgManager.PostProposalTimer.IsFinished)
+                {
+                    return false;
+                }
+
+                if (DungeonBuddySettings.Instance.PartyMode != PartyMode.Off || StyxWoW.Me.IsInParty)
+                {
+                    if (DungeonBuddySettings.Instance.PartyMode == PartyMode.Leader && StyxWoW.Me.IsInParty)
+                    {
+                        if (!StyxWoW.Me.PartyMembers.All(p => p.IsAlive) || ISeeAGhost)
+                            return false;
+                    }
+                }
+
+                bool needsMaintenance = Vendors.NeedClassTraining ||
+                                        ShouldRepairInSoloFarm(this) ||
+                                        ShouldBuyDrinksInSoloFarm(this) ||
+                                        ShouldSellItemsInSoloFarm(this);
+
+                if (!StyxWoW.Me.IsAlive)
+                    return false;
+
+                if (needsMaintenance &&
+                    !(StyxWoW.Me.CurrentMap.IsInstance && LfgManager.CurrentLfgDungeonId == 0U))
+                {
+                    return false;
+                }
+
+                return LfgManager.CurrentState != LfgState.InQueue;
+            }
+        }
+
+        // HB method_99 parity
+        private bool CanAcceptLfgProposal()
+        {
+            if (!LfgManager.ProposalPending || !StyxWoW.Me.IsAlive)
+                return false;
+
+            bool needsMaintenance = Vendors.NeedClassTraining ||
+                                    ShouldRepairInSoloFarm(this) ||
+                                    ShouldBuyDrinksInSoloFarm(this) ||
+                                    ShouldSellItemsInSoloFarm(this);
+
+            if (!needsMaintenance)
+                return true;
+
+            return StyxWoW.Me.CurrentMap.IsInstance && LfgManager.CurrentLfgDungeonId == 0U;
+        }
+
+        // HB smethod_308 parity
+        private bool ShouldLeavePartyAfterCompletion =>
+            LfgManager.DungeonCompletedReason != CompleteReason.None &&
+            LfgManager.ExitDelayTimer.IsFinished &&
+            DungeonBuddySettings.Instance.QueueType != QueueType.SoloFarm &&
+            DungeonBuddySettings.Instance.PartyMode == PartyMode.Off &&
+            StyxWoW.Me.IsInParty;
+
+        // HB smethod_321 parity
+        private static bool ShouldPromoteLeaderToTankInFollowerMode =>
+            DungeonBuddySettings.Instance.PartyMode == PartyMode.Follower &&
+            ScriptHelpers.GetReturnVal<bool>("return IsPartyLeader()", 0);
+
+        // HB smethod_323 parity
+        private static bool ShouldMarkDungeonCompletedFromCurrentDungeon =>
+            DungeonManager.CurrentDungeon != null &&
+            LfgManager.DungeonCompletedReason != CompleteReason.Completed &&
+            DungeonManager.CurrentDungeon.IsComplete;
+
+        // HB ISeeAGhost parity
+        private bool ISeeAGhost
+        {
+            get
+            {
+                return StyxWoW.Me.GroupInfo.RaidMembers.Any(member =>
+                {
+                    var player = member.ToPlayer();
+                    if (player != null)
+                        return player.IsGhost;
+
+                    return member.Ghost && member.Health <= member.HealthMax * 0.01;
+                });
+            }
+        }
+
+        private void QueueForSettings()
+        {
+            var settings = DungeonBuddySettings.Instance;
+            switch (settings.QueueType)
+            {
+                case QueueType.RandomDungeon:
+                    LfgManager.QueueForRandomDungeon();
+                    break;
+                case QueueType.RandomHeroic:
+                    LfgManager.QueueForRandomHeroic();
+                    break;
+                case QueueType.Specific:
+                    if (settings.SelectedDungeonIds.Length > 0)
+                        LfgManager.QueueForSpecificDungeon(settings.SelectedDungeonIds[0]);
+                    break;
+            }
+
+            _requeueDelay.Restart();
+        }
+
+        // HB method_115 parity
+        private bool ShouldSyncCurrentDungeonFromLfgState()
+        {
+            if ((_lastObservedLfgMapId == StyxWoW.Me.MapId && _lastObservedLfgDungeonId == LfgManager.CurrentLfgDungeonId) || StyxWoW.Me.IsGhost)
+                return false;
+
+            if (!StyxWoW.Me.CurrentMap.IsDungeon && !StyxWoW.Me.CurrentMap.IsRaid)
+                return LfgManager.CurrentLfgDungeonId > 0U;
+
+            return true;
+        }
+
+        // HB method_116 parity (calls method_42)
+        private void RefreshCurrentDungeonFromLfgState()
+        {
+            uint dungeonId = LfgManager.CurrentLfgDungeonId;
+            if (dungeonId == 0U)
+                dungeonId = Bots.DungeonBuddy.Profiles.ProfileManager.GetLfgDungeonIdFromMapId(StyxWoW.Me.MapId);
+
+            if (dungeonId > 0U)
+                DungeonManager.SetDungeonById(dungeonId);
+            else if (StyxWoW.Me.CurrentMap.IsDungeon || StyxWoW.Me.CurrentMap.IsRaid)
+                DungeonManager.SetDungeon(StyxWoW.Me.MapId);
+        }
+
         // ═══════════════════════════════════════════════════════════
-        // DEATH BEHAVIOR
+        // DEATH BEHAVIOR (HB method_27 parity)
         // ═══════════════════════════════════════════════════════════
 
         private Composite CreateDeathBehavior()
         {
             return new PrioritySelector(
+                // Branch 0: Priest SoR (smethod_263/264/265)
                 new Decorator(
-                    ctx => StyxWoW.Me.IsDead,
+                    ctx => IsPriestWithSpiritOfRedemptionAuraNoAlliesNearby(),
                     new Sequence(
-                        new Action(ctx =>
-                        {
-                            Logging.Write("[DungeonBuddy] Died! Releasing...");
-                            Lua.DoString("RepopMe()");
-                        }),
-                        new WaitContinue(5, ctx => StyxWoW.Me.IsGhost, new ActionAlwaysSucceed())
+                        new Action(ctx => { Logging.Write("Nobody around to heal so canceling Spirit of Redemption"); return RunStatus.Success; }),
+                        new Action(ctx => { StyxWoW.Me.GetAuraById(27827).TryCancel(); return RunStatus.Success; })
                     )
                 ),
+
+                // Branch 1: Main death sequence (smethod_266-277)
                 new Decorator(
-                    ctx => StyxWoW.Me.IsGhost && StyxWoW.Me.IsInInstance,
+                    ctx => StyxWoW.Me.IsDead && StyxWoW.Me.Level > 0,
                     new Sequence(
+                        // smethod_267: Failure + reset
                         new Action(ctx =>
                         {
-                            var entrance = DungeonManager.CurrentDungeon?.Entrance ?? WoWPoint.Zero;
+                            BossManager.BossTimer.Reset();
+                            Navigator.NavigationProvider.StuckHandler.Reset();
+                            Avoidance.AvoidanceManager.ClearAvoidPath();
+                            return RunStatus.Failure;
+                        }),
+
+                        // smethod_268: !stopwatch_0.IsRunning (predicate)
+                        new Decorator(
+                            ctx => !_deathTimer.IsRunning,
+                            new Action(ctx => { _deathTimer.Start(); return RunStatus.Success; })
+                        ),
+
+                        // smethod_270/271/272: Soulstone/Ankh
+                        new Decorator(
+                            ctx => HasSoulstoneOrAnkh(),
+                            new Sequence(
+                                new Action(ctx => { Logging.Write("Ankh or soulstone is available"); return RunStatus.Success; }),
+                                new Action(ctx => { Lua.DoString("UseSoulstone()"); return RunStatus.Success; })
+                            )
+                        ),
+
+                        // smethod_273: ShouldReleaseToCorpseRun (smethod_22 full logic)
+                        new Decorator(
+                            ctx => ShouldReleaseToCorpseRun(),
+                            new Sequence(
+                                // smethod_274: Log
+                                new Action(ctx => { Logging.Write("Releasing corpse"); return RunStatus.Success; }),
+                                // smethod_275: RepopMe
+                                new Action(ctx => { Lua.DoString("RepopMe()"); return RunStatus.Success; }),
+                                // method_87: waitTimer_6.Reset()
+                                new Action(ctx => { _corpseRunWaitTimer.Reset(); return RunStatus.Success; }),
+                                // smethod_276: stopwatch_0.Reset()
+                                new Action(ctx => { _deathTimer.Reset(); return RunStatus.Success; }),
+
+                                // smethod_277: CorpseRunBreadCrumb.Count > 0
+                                new Decorator(
+                                    ctx => DungeonManager.CurrentDungeon != null &&
+                                           DungeonManager.CurrentDungeon.CorpseRunBreadCrumb != null &&
+                                           DungeonManager.CurrentDungeon.CorpseRunBreadCrumb.Count > 0,
+                                    new Sequence(
+                                        new Action(ctx =>
+                                        {
+                                            var crumbs = DungeonManager.CurrentDungeon.CorpseRunBreadCrumb;
+                                            crumbs.CycleTo(crumbs.First);
+                                            _corpseRunBreadcrumb = crumbs.Dequeue();
+                                            return RunStatus.Success;
+                                        }),
+                                        // WaitContinue(10, smethod_278 = Me.IsGhost && !IsDungeon)
+                                        new WaitContinue(TimeSpan.FromSeconds(10),
+                                            ctx => StyxWoW.Me.IsGhost && !StyxWoW.Me.CurrentMap.IsDungeon,
+                                            new ActionAlwaysSucceed()),
+                                        // method_88/89/90/91/92: flying breadcrumb movement
+                                        new Action(ctx =>
+                                        {
+                                            // smethod_89: woWPoint_1 == Zero
+                                            if (_corpseRunBreadcrumb == WoWPoint.Zero)
+                                            {
+                                                // smethod_90: woWPoint_1 = Dequeue
+                                                var crumbs = DungeonManager.CurrentDungeon.CorpseRunBreadCrumb;
+                                                if (crumbs != null && crumbs.Count > 0)
+                                                    _corpseRunBreadcrumb = crumbs.Dequeue();
+                                            }
+                                            // smethod_91/92
+                                            else if (StyxWoW.Me.Location.Distance2DSqr(_corpseRunBreadcrumb) < 225f)
+                                            {
+                                                var crumbs = DungeonManager.CurrentDungeon.CorpseRunBreadCrumb;
+                                                if (crumbs != null && crumbs.Count > 0 && crumbs.Peek() != crumbs.First)
+                                                    _corpseRunBreadcrumb = crumbs.Dequeue();
+                                            }
+                                            if (_corpseRunBreadcrumb != WoWPoint.Zero)
+                                                Flightor.MoveTo(_corpseRunBreadcrumb);
+                                            return RunStatus.Running;
+                                        })
+                                    )
+                                ),
+
+                                // smethod_278: Me.IsGhost && !IsDungeon -> wait + entrance
+                                new Decorator(
+                                    ctx => StyxWoW.Me.IsGhost && !StyxWoW.Me.CurrentMap.IsDungeon,
+                                    new Sequence(
+                                        new Action(ctx =>
+                                        {
+                                            // method_94: Flightor.MoveTo(entrance)
+                                            var entrance = GetDungeonEntrance();
+                                            if (entrance != WoWPoint.Zero)
+                                                Flightor.MoveTo(entrance);
+                                            return RunStatus.Running;
+                                        })
+                                    )
+                                ),
+
+                                // Non-flying fallback
+                                new Action(ctx =>
+                                {
+                                    // method_95: Navigator.MoveTo(entrance)
+                                    var entrance = GetDungeonEntrance();
+                                    if (entrance != WoWPoint.Zero)
+                                        Navigator.MoveTo(entrance);
+                                    return RunStatus.Running;
+                                })
+                            )
+                        ),
+
+                        // smethod_279: not should release -> Running (wait)
+                        new Action(ctx => RunStatus.Running)
+                    )
+                ),
+
+                // Branch 2: Ghost handling (smethod_279-282)
+                new Decorator(
+                    ctx => StyxWoW.Me.IsGhost && DungeonManager.CurrentDungeon != null,
+                    new PrioritySelector(
+                        // smethod_281: ZoneId == 3521 -> spirit healer behavior
+                        new Decorator(
+                            ctx => StyxWoW.Me.ZoneId == 3521U,
+                            CreateCorpseRecoveryBehavior()
+                        ),
+
+                        // smethod_282: IsFlyingCorpseRun
+                        new Decorator(
+                            ctx => DungeonManager.CurrentDungeon.IsFlyingCorpseRun,
+                            new PrioritySelector(
+                                new Decorator(
+                                    ctx => _corpseRunBreadcrumb == WoWPoint.Zero,
+                                    new Action(ctx =>
+                                    {
+                                        var crumbs = DungeonManager.CurrentDungeon.CorpseRunBreadCrumb;
+                                        if (crumbs != null && crumbs.Count > 0)
+                                        {
+                                            crumbs.CycleTo(crumbs.First);
+                                            _corpseRunBreadcrumb = crumbs.Dequeue();
+                                        }
+                                        return RunStatus.Success;
+                                    })
+                                ),
+                                new Decorator(
+                                    ctx => _corpseRunBreadcrumb != WoWPoint.Zero &&
+                                           StyxWoW.Me.Location.Distance2DSqr(_corpseRunBreadcrumb) < 225f,
+                                    new Action(ctx =>
+                                    {
+                                        var crumbs = DungeonManager.CurrentDungeon.CorpseRunBreadCrumb;
+                                        if (crumbs != null && crumbs.Count > 0 && crumbs.Peek() != crumbs.First)
+                                            _corpseRunBreadcrumb = crumbs.Dequeue();
+                                        return RunStatus.Success;
+                                    })
+                                ),
+                                new Action(ctx =>
+                                {
+                                    if (_corpseRunBreadcrumb != WoWPoint.Zero)
+                                        Flightor.MoveTo(_corpseRunBreadcrumb);
+                                    return RunStatus.Running;
+                                })
+                            )
+                        ),
+
+                        // method_94/95: Navigator to entrance
+                        new Action(ctx =>
+                        {
+                            var entrance = GetDungeonEntrance();
                             if (entrance != WoWPoint.Zero)
                                 Navigator.MoveTo(entrance);
                             return RunStatus.Running;
-                        })
+                        }),
+
+                        // LevelBot.CreateDeathBehavior() fallback (HB array22[1])
+                        LevelBot.CreateDeathBehavior()
                     )
                 )
             );
+        }
+
+        // smethod_263: Priest Spirit of Redemption
+        private bool IsPriestWithSpiritOfRedemptionAuraNoAlliesNearby()
+        {
+            if (StyxWoW.Me.Class != WoWClass.Priest || !StyxWoW.Me.HasAura(27827))
+                return false;
+            return !StyxWoW.Me.PartyMembers.Any(p => p.IsAlive && p.Location.DistanceSqr(StyxWoW.Me.Location) <= 1600);
+        }
+
+        // smethod_270: HasSoulstone
+        private bool HasSoulstoneOrAnkh()
+        {
+            return ScriptHelpers.GetReturnVal<string>("return HasSoulstone()", 0) != null;
+        }
+
+        // smethod_21: CanRezClass (Priest, Paladin, Shaman, Druid = true)
+        private static bool CanRezClass(WoWPlayer player)
+        {
+            if (player == null) return false;
+            switch (player.Class)
+            {
+                case WoWClass.Priest:
+                case WoWClass.Paladin:
+                case WoWClass.Shaman:
+                case WoWClass.Druid:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        // smethod_22 (full): ShouldReleaseToCorpseRun — HB DungeonBot.smethod_22 lines 3154-3230
+        private bool ShouldReleaseToCorpseRun()
+        {
+            using (StyxWoW.Memory.AcquireFrame())
+            {
+                // smethod_288→Select: Boss → Class272(Boss, WoWUnit)
+                // smethod_289→Where: Class272 → bool (party.Any(IsAlive) && unit != null && unit.Combat)
+                // smethod_290→Select: Class272 → Boss
+                // .Any() → if true, return false (don't release)
+                bool bossInCombatWithAlivePartyMember = BossManager.BossEncounters
+                    .Select(b => new { boss = b, unit = b.ToWoWUnit() })
+                    .Where(x => x.unit != null && x.unit.Combat && StyxWoW.Me.PartyMembers.Any(p => p.ToPlayer()?.IsAlive == true))
+                    .Select(x => x.boss)
+                    .Any();
+                if (bossInCombatWithAlivePartyMember)
+                    return false;
+
+                // 5min timeout
+                if (_deathTimer.Elapsed >= TimeSpan.FromMinutes(5.0))
+                    return true;
+
+                // Class142.bool_0 = PartyMode && TankAlive && HealerAlive
+                bool tankAliveAndInDungeon = StyxWoW.Me.GroupInfo.RaidMembers.Any(m => m.HasRole(WoWPartyMember.GroupRole.Tank) && (m.ToPlayer()?.IsAlive == true) && m.AreaTableId == (int)StyxWoW.Me.CurrentMap.AreaTableId);
+                bool healerAliveAndInDungeon = StyxWoW.Me.GroupInfo.RaidMembers.Any(m => m.HasRole(WoWPartyMember.GroupRole.Healer) && (m.ToPlayer()?.IsAlive == true) && m.AreaTableId == (int)StyxWoW.Me.CurrentMap.AreaTableId);
+                bool partyModeAndTankHealerAlive = DungeonBuddySettings.Instance.PartyMode != PartyMode.Off && tankAliveAndInDungeon && healerAliveAndInDungeon;
+
+                // smethod_291→Select: WoWPartyMember → Class257(member, player)
+                // smethod_292→Select: Class257 → Class273(loc = player?.Location ?? member.Location3D)
+                // smethod_293→Select: Class273 → Class274(isOnline = player != null || member.IsOnline)
+                // smethod_294→Select: Class274 → Class275(isAlive = player ? player.IsAlive && not SoR : member.!Ghost && !Dead || health > 0)
+                // smethod_295→Select: Class275 → Class276(mapId = member.CurrentMap.MapId)
+                // smethod_296→Select: Class276 → Class277(inDungeon = mapId == null || mapId == Me.MapId)
+                // smethod_297→Select: Class277 → Class278(canRez = CanRezClass(player) || member.Role.IsHealer)
+                // Where(@class.method_0): isOnline && isAlive && inDungeon && canRez && CanNavigateFully && distance checks
+                // smethod_298→Select: Class278 → WoWPartyMember
+                // .Any() → if false (no eligible members), return true (release)
+                var chain = StyxWoW.Me.GroupInfo.RaidMembers
+                    .Select(m => new { member = m, player = m.ToPlayer() })
+                    .Select(x => new
+                    {
+                        x.member,
+                        x.player,
+                        loc = x.player?.Location ?? x.member.Location3D,
+                        isOnline = x.player != null || x.member.IsOnline,
+                        isAlive = x.player != null
+                            ? x.player.IsAlive
+                            : (!x.member.Ghost && !x.member.Dead || x.member.Health > x.member.HealthMax * 0.01),
+                        mapId = (uint?)null,
+                        inDungeon = true,
+                        canRez = (x.player != null && CanRezClass(x.player)) || x.member.HasRole(WoWPartyMember.GroupRole.Healer)
+                    })
+                    .Where(x => x.isOnline && x.isAlive && x.inDungeon && x.canRez);
+
+                bool anyEligibleMember = chain
+                    .Where(x => Navigator.CanNavigateFully(StyxWoW.Me.Location, x.loc))
+                    .Any(x =>
+                    {
+                        float distSq = x.loc.DistanceSqr(StyxWoW.Me.Location);
+                        if (distSq < 3600f)
+                            return true;
+                        if (partyModeAndTankHealerAlive && distSq < 40000f)
+                            return true;
+                        return false;
+                    });
+
+                if (anyEligibleMember)
+                    return false;
+
+                return true;
+            }
+        }
+
+        // method_28: Corpse recovery behavior (HB Class141 — PrioritySelector with ContextChangeHandler + 3 decorators)
+        private Composite CreateCorpseRecoveryBehavior()
+        {
+            return new PrioritySelector(
+                // ContextChangeHandler (HB Class141.method_0): finds spirit healer, stores in field, returns it
+                new ContextChangeHandler(SpiritHealerContextChangeHandler),
+
+                // Guard: Me.IsGhost && spirit healer (HB Class141.method_1)
+                new Decorator(
+                    ctx => StyxWoW.Me.IsGhost && _corpseSpiritHealer != null,
+                    new PrioritySelector(
+                        // Decorator 1: method_2 (WithinInteractRange) -> Sequence(Interact, WaitContinue(2,false), AcceptXPLoss)
+                        new Decorator(
+                            ctx => _corpseSpiritHealer.WithinInteractRange,
+                            new Sequence(
+                                new Action(ctx => { _corpseSpiritHealer.Interact(); return RunStatus.Success; }),
+                                new WaitContinue(TimeSpan.FromSeconds(2), ctx => false, new ActionAlwaysSucceed()),
+                                new Action(ctx => { Lua.DoString("AcceptXPLoss()"); return RunStatus.Success; })
+                            )
+                        ),
+                        // Decorator 2: method_4 (WithinInteractRange) -> Action(Interact)
+                        new Decorator(
+                            ctx => _corpseSpiritHealer.WithinInteractRange,
+                            new Action(ctx => { _corpseSpiritHealer.Interact(); return RunStatus.Success; })
+                        ),
+                        // Decorator 3: method_6 (!WithinInteractRange) -> Action(MoveTo)
+                        new Decorator(
+                            ctx => !_corpseSpiritHealer.WithinInteractRange,
+                            new Action(ctx => { Navigator.MoveTo(_corpseSpiritHealer.Location); return RunStatus.Running; })
+                        )
+                    )
+                )
+            );
+        }
+
+        private object SpiritHealerContextChangeHandler(object context)
+        {
+            _corpseSpiritHealer = ObjectManager.GetObjectsOfType<WoWUnit>().FirstOrDefault(u => u.IsSpiritHealer);
+            return _corpseSpiritHealer;
+        }
+
+        // DungeonEntrance (HB method_96 / smethod_287)
+        private WoWPoint GetDungeonEntrance()
+        {
+            if (DungeonManager.CurrentDungeon == null)
+                return WoWPoint.Zero;
+            var portalEntries = new[] { 192507U, 207896U };
+            var portal = ObjectManager.GetObjectsOfType<WoWGameObject>()
+                .FirstOrDefault(o => portalEntries.Contains(o.Entry));
+            if (portal != null)
+                return portal.Location;
+            return DungeonManager.CurrentDungeon.Entrance;
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -765,7 +1460,7 @@ namespace Bots.DungeonBuddy
         {
             return new Decorator(
                 ctx => DungeonBuddySettings.Instance.QueueType == QueueType.SoloFarm &&
-                       LfgManager.DungeonCompleted &&
+                       LfgManager.DungeonCompletedReason != CompleteReason.None &&
                        _soloFarmExitTimer.IsFinished &&
                        StyxWoW.Me.IsInInstance,
                 new Action(ctx =>
@@ -808,7 +1503,7 @@ namespace Bots.DungeonBuddy
             return new Decorator(
                 ctx => StyxWoW.Me.IsInInstance &&
                        !StyxWoW.Me.Combat &&
-                       !LfgManager.DungeonCompleted &&
+                       LfgManager.DungeonCompletedReason == CompleteReason.None &&
                        Targeting.Instance.TargetList.Count == 0,
                 new Action(ctx =>
                 {
@@ -1144,7 +1839,7 @@ namespace Bots.DungeonBuddy
 
                             // Encounter handler (CopilotBuddy — boss encounter scripts via réflexion)
                             new Decorator(
-                                // Utilise la liste enregistrée au lieu du flag IsBoss (cassé pour les boss de bas niveau)
+                        // Utilise la liste enregistrée au lieu du flag IsBoss (cassé pour les boss de bas niveau)
                         ctx => StyxWoW.Me.CurrentTarget != null &&
                                BossManager.Bosses.Any(b => b.EntryId == StyxWoW.Me.CurrentTarget.Entry),
                                 new Action(ctx =>
@@ -1415,7 +2110,7 @@ namespace Bots.DungeonBuddy
         // HB smethod_94
         private static bool ShouldTrainInSoloFarm(object context)
         {
-            return Vendors.NeedClassTraining && LfgManager.DungeonCompleted;
+            return Vendors.NeedClassTraining && LfgManager.DungeonCompletedReason != CompleteReason.None;
         }
 
         // HB smethod_95
@@ -1471,17 +2166,48 @@ namespace Bots.DungeonBuddy
                     var tank = Helpers.ScriptHelpers.Tank;
                     if (tank == null || !tank.IsAlive)
                         return RunStatus.Failure;
-                    
+
                     float followDist = DungeonBuddySettings.Instance.FollowingDistance;
-                    if (StyxWoW.Me.Location.DistanceSqr(tank.Location) > followDist * followDist)
+                    bool tankTooFar = StyxWoW.Me.Location.DistanceSqr(tank.Location) > followDist * followDist;
+                    bool tankOffBossPath = !IsUnitOnPathToCurrentBoss(tank);
+                    if (tankTooFar || tankOffBossPath)
                     {
                         Navigator.MoveTo(tank.Location);
                         return RunStatus.Running;
                     }
-                    
+
                     return RunStatus.Failure;
                 })
             );
+        }
+
+        // HB 4.3.4 DungeonBot.method_9 parity: validate whether a party member is near
+        // the cached path from me to current boss, refreshed every 2 seconds.
+        private bool IsUnitOnPathToCurrentBoss(WoWPlayer player)
+        {
+            if (player == null || BossManager.CurrentBoss == null)
+                return false;
+
+            if (_cachedBossPath == null || _pathValidationRefreshTimer.IsFinished)
+            {
+                dynamic navProvider = Navigator.NavigationProvider;
+                _cachedBossPath = navProvider.Nav.FindPath(StyxWoW.Me.Location, BossManager.CurrentBoss.Location);
+                _pathValidationRefreshTimer.Reset();
+            }
+
+            if (_cachedBossPath == null || !_cachedBossPath.Succeeded)
+                return false;
+
+            WoWPoint memberLocation = player.Location;
+            for (int i = 1; i < _cachedBossPath.Points.Length; i++)
+            {
+                WoWPoint segmentStart = _cachedBossPath.Points[i - 1];
+                WoWPoint segmentEnd = _cachedBossPath.Points[i];
+                if (memberLocation.GetNearestPointOnSegment(segmentStart, segmentEnd).DistanceSqr(memberLocation) <= 900f)
+                    return true;
+            }
+
+            return false;
         }
     }
 }
