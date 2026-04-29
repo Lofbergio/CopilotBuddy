@@ -97,6 +97,12 @@ namespace Bots.DungeonBuddy
         [Description("The minimum BOE item quality to mail")]
         public WoWItemQuality MailItemQuality { get; set; }
 
+        [Setting, DefaultValue(LootRollType.Greed)]
+        [Category("Loot")]
+        [DisplayName("Loot Roll Type")]
+        [Description("How to roll on group loot: Need (1), Greed (2, default), or Pass (3)")]
+        public LootRollType LootRollType { get; set; }
+
         // ═══════════════════════════════════════════════════════════
         // MISC
         // ═══════════════════════════════════════════════════════════
