@@ -43,6 +43,9 @@ namespace TreeSharp
 
         protected override IEnumerable<RunStatus> Execute(object context)
         {
+            if (ContextChanger != null)
+                context = ContextChanger(context);
+
             // lock (Locker)
             {
                 // Keep in mind; we ARE an enumerator here. So we do execute each child in tandem.
