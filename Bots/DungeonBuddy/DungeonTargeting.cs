@@ -52,11 +52,12 @@ namespace Bots.DungeonBuddy
                 }
                 else if (!StyxWoW.Me.Combat)
                 {
-                    // NOTE: CanNavigateFully deliberately excluded here — inside a dungeon it calls
-                    // FindPath per-unit per-pulse and can throw (unloaded tiles on first entry),
-                    // which Targeting.Pulse() catches silently, leaving ObjectList empty.
-                    // Distance + hostility check is sufficient in a dungeon context.
-                    if ((woWUnit.DistanceSqr > 1600.0 && !woWUnit.IsTargetingMyPartyMember) || !woWUnit.IsHostile || ProfileManager.IsNpcInPullBlackspot(woWUnit))
+                    // HB 4.3.4 Class72: exclude if distance > 40yd (unless targeting party),
+                    // not hostile, blacklisted, or nav path exceeds 40 yards (through walls).
+                    if ((woWUnit.DistanceSqr > 1600.0 && !woWUnit.IsTargetingMyPartyMember)
+                        || !woWUnit.IsHostile
+                        || ProfileManager.IsNpcInPullBlackspot(woWUnit)
+                        || (!woWUnit.IsFlying && !Navigator.CanNavigateWithinDistance(StyxWoW.Me.Location, woWUnit.Location, 40f)))
                     {
                         continue;
                     }
