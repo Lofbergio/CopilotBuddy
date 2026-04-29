@@ -10,7 +10,8 @@ namespace Styx.WoWInternals
         #region Fields
 
         private static readonly Dictionary<ClientDb, DbTable> _tables = new Dictionary<ClientDb, DbTable>();
-        private bool _initialized = false;
+        // Static flag: true once init succeeded. False allows retry if WoW wasn't attached on first call.
+        private static bool _initialized = false;
 
         #endregion
 
@@ -24,10 +25,11 @@ namespace Styx.WoWInternals
         private void Initialize()
         {
             if (_initialized) return;
-            _initialized = true;
 
             var wow = ObjectManager.Wow;
             if (wow == null) return;
+
+            _initialized = true;
 
             try
             {
