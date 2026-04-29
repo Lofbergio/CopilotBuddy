@@ -350,8 +350,10 @@ namespace Bots.DungeonBuddy.Helpers
             return new Decorator(canRun, new ActionAlwaysSucceed());
         }
         
-        public static Composite CreateMountBehavior() => new ActionAlwaysSucceed();
-        public static Composite CreateMountBehavior(Func<WoWPoint> destinationSelector) => new ActionAlwaysSucceed();
+        // Mounting inside a dungeon instance is never possible in WotLK 3.3.5a.
+        // Return ActionAlwaysFail so callers' PrioritySelector falls through to Navigator.MoveTo.
+        public static Composite CreateMountBehavior() => new ActionAlwaysFail();
+        public static Composite CreateMountBehavior(Func<WoWPoint> destinationSelector) => new ActionAlwaysFail();
 
         public static Composite CreateMountBehavior(CanRunDecoratorDelegate canRun)
         {
