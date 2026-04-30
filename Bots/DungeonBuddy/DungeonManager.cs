@@ -322,7 +322,18 @@ if (Activator.CreateInstance(type) is not Dungeon instance)
             }
             else
             {
-                dungeonId = ProfileManager.GetLfgDungeonIdFromMapId(mapId);
+                try
+                {
+                    dungeonId = ProfileManager.GetLfgDungeonIdFromMapId(mapId);
+                }
+                catch (InstanceNotFoundException ex)
+                {
+                    // Race condition: OnMapChanged fires before LfgManager.CurrentLfgDungeonId
+                    // is updated (e.g. SM mapId 189 shared across all 4 wings, or solo entry).
+                    // Log a warning and bail — the next pulse will retry with the correct dungeonId.
+                    Logging.Write("[DungeonBuddy] Warning: {0}", ex.Message);
+                    return;
+                }
             }
 
             SetDungeonById(dungeonId);
