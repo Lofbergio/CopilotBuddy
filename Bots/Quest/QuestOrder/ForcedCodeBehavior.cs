@@ -28,6 +28,7 @@ public class ForcedCodeBehavior : ForcedBehavior
         if (this.customBehavior == null)
             throw new Exception("Unable to create instance of UserDefinedObjective");
         this.customBehavior.Element = codeNode.Element;
+        ProfileBatchManager.Register(this.customBehavior);
     }
 
     private static CustomForcedBehavior CreateCustomBehaviorInstance(
@@ -60,6 +61,7 @@ public class ForcedCodeBehavior : ForcedBehavior
 
     public override void OnStart()
     {
+        ProfileBatchManager.EnsureCompiled();
         Logging.Write("[Code] Executing custom behavior: {0}", (object)this.customBehavior.GetType().Name);
         this.customBehavior.OnStart();
     }

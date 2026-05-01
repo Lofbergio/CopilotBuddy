@@ -93,6 +93,7 @@ public class QuestBot : BotBase
         QuestState.Instance.Order.OnNoMoreNodes += new EventHandler<EventArgs>(OnNoMoreNodes);
         if (StyxSettings.Instance.ProfileDebuggingMode && !CheckQuestBehaviors(ProfileManager.CurrentOuterProfile))
             throw new HonorbuddyUnableToStartException("Could not construct all quest behaviors.");
+        ProfileBatchManager.Reset();
     }
 
     private static bool CheckQuestBehaviors(Profile profile)
