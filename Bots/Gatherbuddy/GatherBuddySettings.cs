@@ -198,29 +198,6 @@ namespace Bots.Gatherbuddy
         public bool MailPurple { get; set; }
 
         // ═══════════════════════════════════════════════════════════
-        // FLYING
-        // ═══════════════════════════════════════════════════════════
-
-        /// <summary>
-        /// Use flying mount + Flightor for navigation when possible.
-        /// Requires Cold Weather Flying in Northrend zones.
-        /// </summary>
-        [Setting, DefaultValue(false)]
-        public bool UseFlying { get; set; }
-
-        /// <summary>
-        /// Flying altitude above ground (yards). Used as HeightModifier for Flightor.
-        /// </summary>
-        [Setting, DefaultValue(20f)]
-        public float FlyingAltitude { get; set; }
-
-        /// <summary>
-        /// Minimum distance to node before descending to gather (yards).
-        /// </summary>
-        [Setting, DefaultValue(15f)]
-        public float FlyingDescentRange { get; set; }
-
-        // ═══════════════════════════════════════════════════════════
         // DEATH / SAFETY
         // ═══════════════════════════════════════════════════════════
 

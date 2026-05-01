@@ -200,25 +200,6 @@ namespace Bots.Gatherbuddy
             set { _s.RandomizeHotspots = value; OnPropertyChanged(nameof(RandomizeHotspots)); }
         }
 
-        // ═══ FLYING ═══
-        public bool UseFlying
-        {
-            get => _s.UseFlying;
-            set { _s.UseFlying = value; OnPropertyChanged(nameof(UseFlying)); }
-        }
-
-        public double FlyingAltitude
-        {
-            get => _s.FlyingAltitude;
-            set { _s.FlyingAltitude = (float)value; OnPropertyChanged(nameof(FlyingAltitude)); }
-        }
-
-        public double FlyingDescentRange
-        {
-            get => _s.FlyingDescentRange;
-            set { _s.FlyingDescentRange = (float)value; OnPropertyChanged(nameof(FlyingDescentRange)); }
-        }
-
         // ═══ COMBAT / LOOT ═══
         public bool LootMobs
         {

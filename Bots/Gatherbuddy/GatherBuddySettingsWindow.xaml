@@ -205,42 +205,14 @@
                                     <Label Content="Height Modifier:" Width="120"/>
                                     <Label Content="{Binding ElementName=sldHeightModifier, Path=Value}"
                                            ContentStringFormat="{}{0:F0} yds" Width="55" HorizontalContentAlignment="Right"/>
-                                    <Slider x:Name="sldHeightModifier" Minimum="-10" Maximum="20"
-                                            TickPlacement="BottomRight" TickFrequency="5"
-                                            AutoToolTipPlacement="TopLeft" SmallChange="1"
+                                    <Slider x:Name="sldHeightModifier" Minimum="-300" Maximum="300"
+                                            TickPlacement="BottomRight" TickFrequency="25"
+                                            AutoToolTipPlacement="TopLeft" SmallChange="5"
                                             Value="{Binding HeightModifier, Mode=TwoWay}"/>
                                 </DockPanel>
 
                                 <CheckBox x:Name="chkRandomizeHotspots" Content="Randomize Hotspot Order"
                                           Margin="0,4" IsChecked="{Binding RandomizeHotspots, Mode=TwoWay}"/>
-                            </StackPanel>
-                        </GroupBox>
-
-                        <!-- ═══ FLYING ═══ -->
-                        <GroupBox Header="Flying (Northrend — Cold Weather Flying)">
-                            <StackPanel Margin="4">
-                                <CheckBox x:Name="chkUseFlying" Content="Use Flying Mount (Flightor)"
-                                          Margin="0,4" IsChecked="{Binding UseFlying, Mode=TwoWay}"/>
-
-                                <DockPanel Margin="0,4" IsEnabled="{Binding IsChecked, ElementName=chkUseFlying}">
-                                    <Label Content="Fly Altitude:" Width="120"/>
-                                    <Label Content="{Binding ElementName=sldFlyAltitude, Path=Value}"
-                                           ContentStringFormat="{}{0:F0} yds" Width="55" HorizontalContentAlignment="Right"/>
-                                    <Slider x:Name="sldFlyAltitude" Minimum="5" Maximum="80"
-                                            TickPlacement="BottomRight" TickFrequency="5"
-                                            AutoToolTipPlacement="TopLeft" SmallChange="1"
-                                            Value="{Binding FlyingAltitude, Mode=TwoWay}"/>
-                                </DockPanel>
-
-                                <DockPanel Margin="0,4" IsEnabled="{Binding IsChecked, ElementName=chkUseFlying}">
-                                    <Label Content="Descent Range:" Width="120"/>
-                                    <Label Content="{Binding ElementName=sldDescentRange, Path=Value}"
-                                           ContentStringFormat="{}{0:F0} yds" Width="55" HorizontalContentAlignment="Right"/>
-                                    <Slider x:Name="sldDescentRange" Minimum="5" Maximum="40"
-                                            TickPlacement="BottomRight" TickFrequency="5"
-                                            AutoToolTipPlacement="TopLeft" SmallChange="1"
-                                            Value="{Binding FlyingDescentRange, Mode=TwoWay}"/>
-                                </DockPanel>
                             </StackPanel>
                         </GroupBox>
 
