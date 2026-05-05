@@ -15,7 +15,7 @@ namespace Styx.Logic.Pathing
     /// <summary>
     /// Manages blackspots - areas to avoid during navigation.
     /// Blackspots can be added from profiles or dynamically at runtime.
-    /// Like HB 4.3.4, this marks navmesh polygons with AreaType.Misc7 (26) 
+    /// Like HB WoD, this marks navmesh polygons with AreaType.Blackspot (17)
     /// and sets a high path cost (60f) to make the pathfinder avoid them.
     /// </summary>
     public static class BlackspotManager
@@ -23,12 +23,42 @@ namespace Styx.Logic.Pathing
         private static readonly List<Blackspot> _blackspots = new List<Blackspot>();
         private static readonly List<GlobalBlackspot> _globalBlackspots = new List<GlobalBlackspot>();
         private static readonly HashSet<Blackspot> _markedBlackspots = new HashSet<Blackspot>();
+        private static readonly HashSet<Blackspot> _failedBlackspotMarks = new HashSet<Blackspot>();
+        private static readonly Dictionary<Blackspot, List<PolyKey>> _blackspotPolygons = new Dictionary<Blackspot, List<PolyKey>>();
+        private static readonly Dictionary<PolyKey, byte> _originalPolyAreas = new Dictionary<PolyKey, byte>();
         private static readonly object _lock = new object();
+
+        private readonly struct PolyKey : IEquatable<PolyKey>
+        {
+            public PolyKey(uint mapId, ulong polyRef)
+            {
+                MapId = mapId;
+                PolyRef = polyRef;
+            }
+
+            public uint MapId { get; }
+            public ulong PolyRef { get; }
+
+            public bool Equals(PolyKey other)
+            {
+                return MapId == other.MapId && PolyRef == other.PolyRef;
+            }
+
+            public override bool Equals(object? obj)
+            {
+                return obj is PolyKey other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                return HashCode.Combine(MapId, PolyRef);
+            }
+        }
         
         /// <summary>
-        /// Area type used for blackspots (Misc7 = 26, same as HB).
+        /// Area type used for blackspots (Blackspot = 17, HB WoD).
         /// </summary>
-        private const byte BlackspotAreaType = (byte)AreaType.Misc7;
+        private const byte BlackspotAreaType = (byte)AreaType.Blackspot;
         
         /// <summary>
         /// High cost assigned to blackspot polygons (same as HB).
@@ -52,7 +82,7 @@ namespace Styx.Logic.Pathing
         private static uint _lastMarkedMapId = 0;
         
         /// <summary>
-        /// Static constructor - subscribes to profile events like HB 4.3.4.
+        /// Static constructor - subscribes to profile and tile events.
         /// </summary>
         static BlackspotManager()
         {
@@ -86,12 +116,6 @@ namespace Styx.Logic.Pathing
                 if (profile?.Blackspots != null && profile.Blackspots.Count > 0)
                 {
                     AddBlackspots(profile.Blackspots);
-                    // Force re-marking in case tiles were already loaded
-                    lock (_lock)
-                    {
-                        _markedBlackspots.Clear();
-                        _lastMarkedMapId = 0;
-                    }
                     EnsureBlackspotsMarked();
                 }
             }
@@ -125,12 +149,6 @@ namespace Styx.Logic.Pathing
                 {
                     AddBlackspots(args.NewProfile.Blackspots);
                     Logging.Write($"[Blackspot] Loaded {args.NewProfile.Blackspots.Count} blackspots from profile");
-                    // Force re-marking in case tiles are already loaded for the new profile
-                    lock (_lock)
-                    {
-                        _markedBlackspots.Clear();
-                        _lastMarkedMapId = 0;
-                    }
                     EnsureBlackspotsMarked();
                 }
             }
@@ -167,20 +185,29 @@ namespace Styx.Logic.Pathing
         {
             try
             {
-                var profile = ProfileManager.CurrentProfile;
-                if (profile?.Blackspots != null && profile.Blackspots.Count > 0)
-                {
-                    AddBlackspots(profile.Blackspots);
-                }
+                uint currentMap = StyxWoW.Me?.MapId ?? e.MapId;
+                if (currentMap != 0 && currentMap != e.MapId)
+                    return;
 
-                uint currentMap = StyxWoW.Me?.MapId ?? 0;
                 lock (_lock)
                 {
+                    foreach (var spot in _blackspots)
+                    {
+                        if (ShouldMarkOnTileLoaded(spot, e.TileX, e.TileY))
+                        {
+                            _markedBlackspots.Remove(spot);
+                            _failedBlackspotMarks.Remove(spot);
+                            MarkBlackspotPolygons(spot, e.MapId, false);
+                        }
+                    }
+
                     foreach (var globalSpot in _globalBlackspots)
                     {
-                        if (globalSpot.MapId == currentMap && !_markedBlackspots.Contains(globalSpot.Blackspot))
+                        if (globalSpot.MapId == e.MapId && ShouldMarkOnTileLoaded(globalSpot.Blackspot, e.TileX, e.TileY))
                         {
-                            MarkBlackspotPolygons(globalSpot.Blackspot, currentMap);
+                            _markedBlackspots.Remove(globalSpot.Blackspot);
+                            _failedBlackspotMarks.Remove(globalSpot.Blackspot);
+                            MarkBlackspotPolygons(globalSpot.Blackspot, e.MapId, false);
                         }
                     }
                 }
@@ -271,9 +298,14 @@ namespace Styx.Logic.Pathing
             AddBlackspots(new[] { new Blackspot(location, radius, height) });
         }
 
+        public static void AddBlackspot(WoWPoint location, float radius, float height, string name)
+        {
+            AddBlackspot(location, radius, height);
+        }
+
         /// <summary>
         /// Adds multiple blackspots and marks the corresponding navmesh polygons.
-        /// Like HB 4.3.4: QueryPolygons + SetPolyArea(26) + SetAreaCost(60f)
+        /// Like HB WoD: QueryPolygons + SetPolyArea(Blackspot) + SetAreaCost(60f)
         /// </summary>
         public static void AddBlackspots(IEnumerable<Blackspot> blackspots)
         {
@@ -299,7 +331,7 @@ namespace Styx.Logic.Pathing
         }
         
         /// <summary>
-        /// Ensures the blackspot area cost is set (60f for area 26).
+        /// Ensures the blackspot area cost is set (60f for AreaType.Blackspot).
         /// </summary>
         private static void EnsureAreaCostInitialized()
         {
@@ -335,6 +367,7 @@ namespace Styx.Logic.Pathing
                 lock (_lock)
                 {
                     _markedBlackspots.Clear();
+                    _failedBlackspotMarks.Clear();
                     _lastMarkedMapId = currentMapId;
                 }
             }
@@ -346,7 +379,7 @@ namespace Styx.Logic.Pathing
                 // Re-mark profile blackspots that haven't been successfully marked
                 foreach (var spot in _blackspots)
                 {
-                    if (!_markedBlackspots.Contains(spot))
+                    if (!_markedBlackspots.Contains(spot) && !_failedBlackspotMarks.Contains(spot))
                     {
                         MarkBlackspotPolygons(spot, currentMapId);
                     }
@@ -355,7 +388,7 @@ namespace Styx.Logic.Pathing
                 // Re-mark global blackspots for current map
                 foreach (var globalSpot in _globalBlackspots)
                 {
-                    if (globalSpot.MapId == currentMapId && !_markedBlackspots.Contains(globalSpot.Blackspot))
+                    if (globalSpot.MapId == currentMapId && !_markedBlackspots.Contains(globalSpot.Blackspot) && !_failedBlackspotMarks.Contains(globalSpot.Blackspot))
                     {
                         MarkBlackspotPolygons(globalSpot.Blackspot, currentMapId);
                     }
@@ -365,7 +398,7 @@ namespace Styx.Logic.Pathing
         
         /// <summary>
         /// Marks navmesh polygons within a blackspot zone with high-cost area type.
-        /// This is the core of HB's blackspot system: SetPolyArea(polyRef, 26).
+        /// This is the core of HB's blackspot system: SetPolyArea(polyRef, AreaType.Blackspot).
         /// </summary>
         private static void MarkBlackspotPolygons(Blackspot spot)
         {
@@ -383,12 +416,39 @@ namespace Styx.Logic.Pathing
         /// </summary>
         private static void MarkBlackspotPolygons(Blackspot spot, uint mapId)
         {
+            MarkBlackspotPolygons(spot, mapId, true);
+        }
+
+        /// <summary>
+        /// Checks whether a blackspot can affect a loaded 1:1 raw navigation tile.
+        /// </summary>
+        private static bool ShouldMarkOnTileLoaded(Blackspot spot, int tileX, int tileY)
+        {
+            TileIdentifier min = TileIdentifier.GetByPosition(spot.Location.X - spot.Radius, spot.Location.Y - spot.Radius);
+            TileIdentifier max = TileIdentifier.GetByPosition(spot.Location.X + spot.Radius, spot.Location.Y + spot.Radius);
+
+            int minX = Math.Min(min.X, max.X);
+            int maxX = Math.Max(min.X, max.X);
+            int minY = Math.Min(min.Y, max.Y);
+            int maxY = Math.Max(min.Y, max.Y);
+
+            return tileX >= minX && tileX <= maxX && tileY >= minY && tileY <= maxY;
+        }
+
+        /// <summary>
+        /// Marks navmesh polygons within a blackspot zone with high-cost area type.
+        /// </summary>
+        private static void MarkBlackspotPolygons(Blackspot spot, uint mapId, bool ensureTiles)
+        {
             IntPtr polyRefsPtr = IntPtr.Zero;
             try
             {
-                // Ensure tiles are loaded at blackspot location
-                var centerXyz = new NativeMethods.XYZ(spot.Location.X, spot.Location.Y, spot.Location.Z);
-                NativeMethods.EnsureTiles(mapId, centerXyz, 1); // Load 3x3 tiles around blackspot
+                if (ensureTiles)
+                {
+                    // Ensure tiles are loaded at blackspot location
+                    var centerXyz = new NativeMethods.XYZ(spot.Location.X, spot.Location.Y, spot.Location.Z);
+                    NativeMethods.EnsureTiles(mapId, centerXyz, 1); // Load 3x3 tiles around blackspot
+                }
 
                 // Convert WoWPoint to navmesh coordinates
                 var center = new NativeMethods.XYZ
@@ -398,12 +458,13 @@ namespace Styx.Logic.Pathing
                     Z = spot.Location.Z
                 };
                 
-                // Extents for QueryPolygons (radius, height, radius)
+                // Native QueryPolygons converts WoW extents to Detour extents as (Y, Z, X).
+                // Pass WoW-space half extents: horizontal radius on X/Y, vertical height on Z.
                 var extents = new NativeMethods.XYZ
                 {
                     X = spot.Radius,
-                    Y = spot.Height,
-                    Z = spot.Radius
+                    Y = spot.Radius,
+                    Z = spot.Height
                 };
                 
                 // Allocate unmanaged memory for polygon refs (ulong = 8 bytes)
@@ -415,7 +476,8 @@ namespace Styx.Logic.Pathing
                 
                 if (polyCount <= 0)
                 {
-                    // Tiles might not be loaded yet - don't mark as successful
+                    // Tiles might not be loaded yet; retry on tile-loaded/map-change, not every pathfind.
+                    _failedBlackspotMarks.Add(spot);
                     Logging.WriteDebug($"[Blackspot] No polygons found at {spot.Location} (radius {spot.Radius}) - tile not loaded?");
                     return;
                 }
@@ -428,12 +490,33 @@ namespace Styx.Logic.Pathing
                 
                 // Mark each polygon with the blackspot area type
                 int markedCount = 0;
+                if (!_blackspotPolygons.TryGetValue(spot, out List<PolyKey>? affectedPolys))
+                {
+                    affectedPolys = new List<PolyKey>(polyCount);
+                    _blackspotPolygons[spot] = affectedPolys;
+                }
+
                 for (int i = 0; i < polyCount; i++)
                 {
                     ulong polyRef = (ulong)Marshal.ReadInt64(polyRefsPtr, i * sizeof(ulong));
+                    PolyKey key = new PolyKey(mapId, polyRef);
+
+                    if (!_originalPolyAreas.ContainsKey(key))
+                    {
+                        uint areaStatus = NativeMethods.GetPolyArea(mapId, polyRef, out byte originalArea);
+                        if ((areaStatus & 0x40000000) != 0) // DT_SUCCESS
+                        {
+                            _originalPolyAreas[key] = originalArea;
+                        }
+                    }
+
                     uint status = NativeMethods.SetPolyArea(mapId, polyRef, BlackspotAreaType);
                     if ((status & 0x40000000) != 0) // DT_SUCCESS
                     {
+                        if (!affectedPolys.Contains(key))
+                        {
+                            affectedPolys.Add(key);
+                        }
                         markedCount++;
                     }
                 }
@@ -442,10 +525,12 @@ namespace Styx.Logic.Pathing
                 if (markedCount > 0)
                 {
                     _markedBlackspots.Add(spot);
+                    _failedBlackspotMarks.Remove(spot);
                     Logging.WriteDebug($"[Blackspot] Marked {markedCount}/{polyCount} polygons at {spot.Location} (radius {spot.Radius})");
                 }
                 else
                 {
+                    _failedBlackspotMarks.Add(spot);
                     Logging.WriteDebug($"[Blackspot] Failed to mark any polygons at {spot.Location} (found {polyCount} polys)");
                 }
             }
@@ -463,6 +548,58 @@ namespace Styx.Logic.Pathing
         }
 
         /// <summary>
+        /// Restores polygons affected by a blackspot to their original area type.
+        /// HB's dynamic blackspot manager keeps the original area byte and writes it back on reset/remove.
+        /// </summary>
+        private static void RestoreBlackspotPolygons(Blackspot spot)
+        {
+            if (!_blackspotPolygons.TryGetValue(spot, out List<PolyKey>? affectedPolys))
+            {
+                _markedBlackspots.Remove(spot);
+                _failedBlackspotMarks.Remove(spot);
+                return;
+            }
+
+            _blackspotPolygons.Remove(spot);
+            _markedBlackspots.Remove(spot);
+            _failedBlackspotMarks.Remove(spot);
+
+            int restoredCount = 0;
+            foreach (var key in affectedPolys.Distinct())
+            {
+                if (IsPolyStillBlackspotted(key))
+                    continue;
+
+                if (_originalPolyAreas.TryGetValue(key, out byte originalArea))
+                {
+                    uint status = NativeMethods.SetPolyArea(key.MapId, key.PolyRef, originalArea);
+                    if ((status & 0x40000000) != 0) // DT_SUCCESS
+                    {
+                        restoredCount++;
+                    }
+
+                    _originalPolyAreas.Remove(key);
+                }
+            }
+
+            if (restoredCount > 0)
+            {
+                Logging.WriteDebug($"[Blackspot] Restored {restoredCount} polygons at {spot.Location} (radius {spot.Radius})");
+            }
+        }
+
+        private static bool IsPolyStillBlackspotted(PolyKey key)
+        {
+            foreach (var affectedPolys in _blackspotPolygons.Values)
+            {
+                if (affectedPolys.Contains(key))
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Removes a blackspot.
         /// </summary>
         public static void RemoveBlackspot(Blackspot spot)
@@ -470,6 +607,7 @@ namespace Styx.Logic.Pathing
             lock (_lock)
             {
                 _blackspots.Remove(spot);
+                RestoreBlackspotPolygons(spot);
             }
         }
 
@@ -484,6 +622,11 @@ namespace Styx.Logic.Pathing
             lock (_lock)
             {
                 var spotList = spots.ToList();
+                foreach (var spot in spotList)
+                {
+                    RestoreBlackspotPolygons(spot);
+                }
+
                 _blackspots.RemoveAll(s => spotList.Contains(s));
             }
         }
@@ -495,6 +638,11 @@ namespace Styx.Logic.Pathing
         {
             lock (_lock)
             {
+                foreach (var spot in _blackspots.ToList())
+                {
+                    RestoreBlackspotPolygons(spot);
+                }
+
                 _blackspots.Clear();
             }
         }
@@ -528,9 +676,6 @@ namespace Styx.Logic.Pathing
                     return;
 
                 _globalBlackspots.Add(blackspot);
-                
-                // replicate HB: also add to active list so property and checks see it
-                AddBlackspots(new[] { blackspot.Blackspot });
 
                 // Mark polygon if on current map
                 uint currentMap = StyxWoW.Me?.MapId ?? 0;
@@ -552,8 +697,7 @@ namespace Styx.Logic.Pathing
             lock (_lock)
             {
                 _globalBlackspots.Remove(blackspot);
-                // also remove from active list per HB logic
-                RemoveBlackspot(blackspot.Blackspot);
+                RestoreBlackspotPolygons(blackspot.Blackspot);
                 SaveGlobalBlackspots();
             }
         }
@@ -577,6 +721,11 @@ namespace Styx.Logic.Pathing
                 var loaded = GlobalBlackspot.GetBlackspotsFromXml(root);
                 lock (_lock)
                 {
+                    foreach (var spot in _globalBlackspots)
+                    {
+                        RestoreBlackspotPolygons(spot.Blackspot);
+                    }
+
                     _globalBlackspots.Clear();
                     _globalBlackspots.AddRange(loaded);
                 }
