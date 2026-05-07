@@ -372,20 +372,26 @@ namespace Styx.WoWInternals.WoWObjects
         #region Role
 
         /// <summary>
-        /// Gets the assigned role in LFG.
+        /// Gets the assigned role in LFG (WotLK 3.3.5a: UnitGroupRolesAssigned available since patch 3.3.0).
+        /// Falls back to manual MT/MA assignment.
         /// </summary>
         public GroupRole Role
         {
             get
             {
-                // WotLK role assignment - check if tank/healer based on LFG or manual assignment
-                var result = Lua.GetReturnVal<string>($"return GetPartyAssignment('MAINTANK', '{_unitId}') and 'TANK' or GetPartyAssignment('MAINASSIST', '{_unitId}') and 'ASSIST' or ''", 0);
-                
-                if (result == "TANK" || IsMainTank)
+                // UnitGroupRolesAssigned returns "TANK", "HEALER", "DAMAGER", or "NONE"
+                var lfgRole = Lua.GetReturnVal<string>($"return UnitGroupRolesAssigned('{_unitId}')", 0);
+                switch (lfgRole)
+                {
+                    case "TANK":    return GroupRole.Tank;
+                    case "HEALER":  return GroupRole.Healer;
+                    case "DAMAGER": return GroupRole.Damage;
+                }
+
+                // Fall back to manual raid assignment (MAINTANK via right-click menu)
+                if (IsMainTank)
                     return GroupRole.Tank;
-                
-                // Healer detection based on class/spec would be better but complex
-                // For now, rely on manual assignment
+
                 return GroupRole.None;
             }
         }
