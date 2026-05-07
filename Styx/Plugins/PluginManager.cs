@@ -120,6 +120,24 @@ namespace Styx.Plugins
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
 
+                // Scan the main assembly for built-in HBPlugin subclasses (e.g. LeaderPlugin)
+                try
+                {
+                    foreach (Type type in Assembly.GetExecutingAssembly().GetTypes())
+                    {
+                        if (!type.IsAbstract && typeof(HBPlugin).IsAssignableFrom(type))
+                        {
+                            HBPlugin plugin = (HBPlugin)Activator.CreateInstance(type);
+                            bool enableByDefault = defaultEnabled != null && defaultEnabled.Contains(plugin.Name);
+                            Plugins.Add(new PluginContainer(plugin, enableByDefault));
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logging.WriteException(ex);
+                }
+
                 string pluginsPath = Path.Combine(
                     Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
                     "Plugins");

@@ -547,11 +547,13 @@ namespace Styx.Logic.BehaviorTree
 				{
 					Logging.Write(Colors.Red, "Unable to start: {0}", ex.Message);
 					State = TreeRootState.Stopped;
+					throw; // HB 4.3.4 pattern: propagate to caller (MainWindow) so UI can recover
 				}
 				catch (Exception ex)
 				{
 					Logging.WriteException(ex);
 					State = TreeRootState.Stopped;
+					throw; // propagate so UI can recover
 				}
 			}
 		}

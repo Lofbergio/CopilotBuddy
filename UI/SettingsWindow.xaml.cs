@@ -110,6 +110,8 @@ namespace CopilotBuddy.UI
             if (folderDialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
             {
                 StyxSettings.Instance.MeshesFolderPath = folderDialog.SelectedPath;
+                txtMeshPath.Text = folderDialog.SelectedPath;
+                StyxSettings.Instance.Save();
             }
         }
     }

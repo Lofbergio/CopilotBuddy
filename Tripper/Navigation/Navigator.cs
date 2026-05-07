@@ -1201,7 +1201,7 @@ namespace Tripper.Navigation
         /// </summary>
         /// <param name="maxPathSize">Maximum path size.</param>
         /// <returns>Array of path points, or empty if failed.</returns>
-        public Vector3[] FinalizeSlicedFindPath(int maxPathSize = 256)
+        public Vector3[] FinalizeSlicedFindPath(int maxPathSize = 8192)
         {
             if (!IsLoaded)
                 return Array.Empty<Vector3>();

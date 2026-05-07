@@ -77,7 +77,7 @@
                    HorizontalAlignment="Left" Margin="8,8,0,0" VerticalAlignment="Top"/>
             <TextBox x:Name="txtMeshPath" HorizontalAlignment="Left" Margin="8,27.96,0,0" TextWrapping="NoWrap"
                      VerticalAlignment="Top" Width="196" IsReadOnly="True"
-                     Text="{Binding Path=StyxSettings.MeshesFolderPath, Mode=TwoWay}"/>
+                     Text="{Binding Path=StyxSettings.MeshesFolderPath, Mode=OneWay}"/>
             <Button Click="btnChangeMeshPath_Click" x:Name="btnChangeMeshPath"
                     Content="Change" Margin="8,56,0,0" Height="21"
                     VerticalAlignment="Top" HorizontalAlignment="Left" Width="75"/>

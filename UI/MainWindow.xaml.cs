@@ -670,6 +670,13 @@ namespace CopilotBuddy.UI
             _isRunning = false;
             btnStart.Visibility = Visibility.Visible;
             btnStop.Visibility = Visibility.Hidden;
+            // Re-enable all controls that StartBot() disabled. Mirrors BotEvents_OnBotStopped
+            // so the UI unlocks even when the worker thread never started (e.g. no profile loaded).
+            btnLoadProfile.IsEnabled = true;
+            cmbBotSelector.IsEnabled = true;
+            btnSettings.IsEnabled = true;
+            btnBotConfig.IsEnabled = true;
+            btnClassConfig.IsEnabled = true;
             SetStatus("Stopping...");
 
             Logging.Write("Stopping the bot!");
