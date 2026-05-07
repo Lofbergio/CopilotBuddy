@@ -61,6 +61,77 @@ namespace Styx.Logic.Pathing
 			4820, // Halls of Reflection
 		};
 
+		// HB 6.2.3 AvoidanceNavigationProvider pattern: geometric obstacle avoidance.
+		// WorldObstacleManager.Initialize() sets these two delegates on bot start so that
+		// ALL bots (Quest, Grind, Dungeon) benefit from avoidance without circular coupling.
+		private static WoWPoint[]? _currentAvoidPath;
+		private static int _currentAvoidPathIndex;
+
+		/// <summary>
+		/// Called every WoWPulsator tick to scan ObjectManager and refresh avoidance zones.
+		/// Set by Bots.DungeonBuddy.Avoidance.WorldObstacleManager.Initialize().
+		/// </summary>
+		public static Action? NavAvoidanceUpdater { get; set; }
+
+		/// <summary>
+		/// Returns the geometric detour path (WoWPoint[]) the bot should follow to route
+		/// around registered obstacles for the given destination. Null = no avoidance needed.
+		/// Set by Bots.DungeonBuddy.Avoidance.WorldObstacleManager.Initialize().
+		/// HB 6.2.3 equivalent: AvoidanceNavigationProvider.MovePath() → Helpers.GetAvoidPath().
+		/// </summary>
+		public static Func<WoWPoint, WoWPoint[]?>? NavAvoidWaypointProvider { get; set; }
+
+		/// <summary>
+		/// Returns the remaining unvisited navmesh waypoints from the current path index.
+		/// Used internally by Bots.DungeonBuddy.Avoidance.Helpers.GetAvoidPath().
+		/// </summary>
+		public static WoWPoint[] GetRemainingNavPath()
+		{
+			if (_currentPath.Count == 0 || _currentPathIndex >= _currentPath.Count)
+				return Array.Empty<WoWPoint>();
+			return _currentPath.Skip(_currentPathIndex).ToArray();
+		}
+
+		/// <summary>
+		/// Pathfinds from → to via TripperNavigator and returns the waypoints as WoWPoint[].
+		/// Lightweight wrapper: no tile pre-load, no blackspot sync. For avoidance use only.
+		/// </summary>
+		public static WoWPoint[] ComputeRawPath(WoWPoint from, WoWPoint to)
+		{
+			if (!IsNavigatorLoaded) return Array.Empty<WoWPoint>();
+			try
+			{
+				uint mapId = GetCurrentMapId();
+				var result = TripperNavigator.FindPath(mapId,
+					new Vector3(from.X, from.Y, from.Z),
+					new Vector3(to.X, to.Y, to.Z), true);
+				if (result == null || !result.Status.Succeeded || result.Points == null || result.Points.Length == 0)
+					return Array.Empty<WoWPoint>();
+				return result.Points.Select(p => new WoWPoint(p.X, p.Y, p.Z)).ToArray();
+			}
+			catch { return Array.Empty<WoWPoint>(); }
+		}
+
+		/// <summary>
+		/// Replaces the active navmesh path. Called by Helpers.GetAvoidPath() when the
+		/// obstacle set changes and a fresh path from current position is needed.
+		/// Equivalent to HB 6.2.3: CurrentMovePath.Path = FindPath(from, to); Index = 0.
+		/// </summary>
+		public static void OverrideCurrentPath(WoWPoint[] points)
+		{
+			_currentPath.Clear();
+			if (points != null)
+				foreach (var p in points)
+					_currentPath.Add(p);
+			_currentPathIndex = 0;
+			_currentFlags = null;
+			_currentPolyTypes = null;
+			_currentAbilityFlags = null;
+		}
+
+		/// <summary>true when there are unvisited waypoints in the current navmesh path.</summary>
+		public static bool HasActivePath => _currentPath.Count > 0 && _currentPathIndex < _currentPath.Count;
+
 		public static float PathPrecision { get; set; } = 2f; // HB 6.2.3 MeshNavigator constructor value
 		public static int LoadTilesAroundRadius { get; set; } = 2;
 		public static float FlyingMountHeight { get; set; } = 25f;
@@ -405,6 +476,8 @@ namespace Styx.Logic.Pathing
 			_ridingElevator = false;
 			_unstickAttempts = 0;
 			_doorCenterTarget = WoWPoint.Zero;
+			_currentAvoidPath = null;
+			_currentAvoidPathIndex = 0;
 			_pathRegenThrottle = new WaitTimer(TimeSpan.FromMilliseconds(500)); // Reset so next path gen is immediate
 			// HB 4.3.4 MeshNavigator.Clear(): sets CurrentMovePath=null + StuckHandler.Reset().
 			// Does NOT call MoveStop(). Callers that need to stop (like explicit user stop)
@@ -471,6 +544,17 @@ namespace Styx.Logic.Pathing
 			catch (System.Exception ex)
 			{
 				_ = ex;
+			}
+
+			// HB 4.3.4 MeshNavigator pattern: when flying is available, delegate to Flightor.
+			// Without this, Navigator.MoveTo() ALWAYS runs ground navmesh — no flying in QuestBot.
+			// Flightor.MoveTo() internally falls back to Navigator.MoveTo() for short distances
+			// and non-flyable zones, so there's no infinite recursion risk.
+			// Guard: skip if already in combat (Flightor rejects non-mounted combat movement).
+			if (Flightor.CanFly && !me.Combat && distance >= 15f)
+			{
+				Flightor.MoveTo(destination);
+				return MoveResult.Moved;
 			}
 
 			// Auto-dismount near destination (HB pattern):
@@ -835,6 +919,48 @@ namespace Styx.Logic.Pathing
 						_suppressDriftCheckIndex = 0;
 						_pathRegenThrottle = new WaitTimer(TimeSpan.FromMilliseconds(500)); // immediate regen
 						return MoveResult.UnstuckAttempt;
+					}
+				}
+
+				// HB 6.2.3 AvoidanceNavigationProvider.MovePath() pattern:
+				// On every navigation tick, ask the registered avoidance provider if the path
+				// needs rerouting around a registered obstacle (forge, mailbox, etc.).
+				// When active, drives the character along the detour path instead of the normal path.
+				if (NavAvoidWaypointProvider != null)
+				{
+					var avoidPoints = NavAvoidWaypointProvider(_destination);
+					if (avoidPoints != null && avoidPoints.Length > 0)
+					{
+						// Adopt new avoid path if the endpoint changed
+						if (_currentAvoidPath == null ||
+							_currentAvoidPath.Length != avoidPoints.Length ||
+							_currentAvoidPath[_currentAvoidPath.Length - 1] != avoidPoints[avoidPoints.Length - 1])
+						{
+							_currentAvoidPath = avoidPoints;
+							_currentAvoidPathIndex = 0;
+						}
+
+						// Advance past already-reached avoidance waypoints
+						while (_currentAvoidPathIndex < _currentAvoidPath.Length &&
+							   me.Location.Distance2DSqr(_currentAvoidPath[_currentAvoidPathIndex]) <= PathPrecision * PathPrecision)
+						{
+							_currentAvoidPathIndex++;
+						}
+
+						if (_currentAvoidPathIndex < _currentAvoidPath.Length)
+						{
+							// Drive towards the current avoidance waypoint
+							var avoidWp = _currentAvoidPath[_currentAvoidPathIndex];
+							PlayerMover.MoveTowards(new Tripper.XNAMath.Vector3(avoidWp.X, avoidWp.Y, avoidWp.Z));
+							return MoveResult.Moved;
+						}
+
+						// Avoidance detour complete — fall through to normal path following
+						_currentAvoidPath = null;
+					}
+					else
+					{
+						_currentAvoidPath = null; // No obstacle in the way
 					}
 				}
 
@@ -1335,6 +1461,33 @@ namespace Styx.Logic.Pathing
 			}
 
 			return false;
+		}
+
+		/// <summary>
+		/// HB 6.2.3 MeshNavigator.DistToWall — finds the nearest navmesh wall/boundary distance.
+		/// Used by GetBestLocationOutsideCluster to reject candidates that are too close to walls
+		/// (distance &lt; 1 yard). A candidate right next to a wall means the character would
+		/// immediately re-enter the avoid zone the next time it bumps into geometry.
+		/// Thin wrapper over TripperNavigator.FindDistanceToWall → Navigation.dll FindDistanceToWall.
+		/// </summary>
+		/// <param name="position">Point to measure from.</param>
+		/// <param name="maxRadius">Maximum search radius (use 5f to match HB 6.2.3 Helpers.smethod_4).</param>
+		/// <returns>Distance to the nearest wall, or 0f if the navigator is not loaded.</returns>
+		public static float FindDistanceToWall(WoWPoint position, float maxRadius = 5f)
+		{
+			if (!IsNavigatorLoaded)
+				return 0f;
+
+			uint mapId = GetCurrentMapId();
+			var posVec = new Vector3(position.X, position.Y, position.Z);
+			try
+			{
+				return TripperNavigator.FindDistanceToWall(mapId, posVec, maxRadius, out _);
+			}
+			catch
+			{
+				return 0f;
+			}
 		}
 
 		/// <summary>
