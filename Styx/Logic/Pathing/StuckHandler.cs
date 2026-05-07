@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
@@ -109,6 +110,10 @@ namespace Styx.Logic.Pathing
                         StyxWoW.WoWClient.Latency,
                         currentLocation);
                     LogNearestGameObject();
+                    // If a game object is physically blocking us (<2.5 yards), immediately blackspot it.
+                    // AddBlackspot at the OBJECT location (not player location) so the next path
+                    // regeneration routes around the specific obstacle, not just the stuck spot.
+                    CheckAndBlackspotNearbyObject();
                     _lastCheckLocation = currentLocation;
                     return true;
                 }
@@ -274,6 +279,46 @@ namespace Styx.Logic.Pathing
                 nearestGameObject.Entry,
                 nearestGameObject.SubType,
                 nearestGameObject.Name);
+        }
+
+        // Types that have NO physical collision in WoW and must never be blackspotted.
+        // Campfires (entry 2061) are WoWGameObjectType.Trap — purely decorative, zero collision.
+        // Blackspotting them starves the navmesh until no path can be found at all.
+        private static readonly HashSet<WoWGameObjectType> _nonCollidingTypes = new HashSet<WoWGameObjectType>
+        {
+            WoWGameObjectType.Trap,        // campfires, spell traps — no geometry
+            WoWGameObjectType.AreaDamage,  // AoE ground effects
+            WoWGameObjectType.DuelFlag,
+            WoWGameObjectType.Ritual,
+            WoWGameObjectType.SpellCaster,
+            WoWGameObjectType.MeetingStone,
+            WoWGameObjectType.FlagStand,
+            WoWGameObjectType.FishingHole,
+            WoWGameObjectType.FishingBobber,
+            WoWGameObjectType.Text,
+            WoWGameObjectType.SpellFocus,
+            WoWGameObjectType.QuestGiver,
+        };
+
+        /// <summary>
+        /// If a solid game object (Door) is within 2.5 yards when stuck, blackspot it.
+        /// Non-colliding types (Trap/campfire, AreaDamage, etc.) are explicitly excluded —
+        /// blackspotting them destroys the navmesh without fixing anything.
+        /// </summary>
+        private void CheckAndBlackspotNearbyObject()
+        {
+            const float blockingSearchSqr = 6.25f; // 2.5 yards squared
+            var blocker = ObjectManager.GetObjectsOfType<WoWGameObject>()
+                .Where(go => go.DistanceSqr < blockingSearchSqr && !_nonCollidingTypes.Contains(go.SubType))
+                .OrderBy(go => go.DistanceSqr)
+                .FirstOrDefault();
+
+            if (blocker == null)
+                return;
+
+            Logging.WriteDebug("[STUCK] Object '{0}' (entry {1}, type {2}) at {3:F2} yards is blocking path — blackspotting at {4}.",
+                blocker.Name, blocker.Entry, blocker.SubType, blocker.Distance, blocker.Location);
+            BlackspotManager.AddBlackspot(blocker.Location, 2f, 3f);
         }
 
         private float GetExpectedTravelDistance(WoWUnit mover, TimeSpan timeSpan)
