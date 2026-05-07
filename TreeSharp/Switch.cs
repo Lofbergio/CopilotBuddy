@@ -33,9 +33,10 @@ namespace TreeSharp
     /// <typeparam name = "T"></typeparam>
     public class Switch<T> : GroupComposite
     {
+        // Context-less variant: wraps as ctx => statement()
         public Switch(Func<T> statement, params SwitchArgument<T>[] args) : base(args.Select(a => a.Branch).ToArray())
         {
-            Statement = statement;
+            Statement = _ => statement();
             Arguments = args;
         }
 
@@ -45,20 +46,25 @@ namespace TreeSharp
         }
 
         // HB 4.3.4+ compatibility: Quest Behaviors use RetrieveSwitchParameterDelegate<T>(object context)
+        // The context from the parent composite is passed through — do NOT hardcode null.
         public Switch(RetrieveSwitchParameterDelegate<T> statement, params SwitchArgument<T>[] args)
-            : this(() => statement(null), args)
+            : base(args.Select(a => a.Branch).ToArray())
         {
+            Statement = ctx => statement(ctx);
+            Arguments = args;
         }
 
         public Switch(RetrieveSwitchParameterDelegate<T> statement, Composite defaultArgument, params SwitchArgument<T>[] args)
-            : this(() => statement(null), defaultArgument, args)
+            : this(statement, args)
         {
+            Default = defaultArgument;
         }
 
         /// <summary>
         ///   The statement assigned to this Switch that will determine which logical branch to take.
+        ///   Takes the tree context as its argument (matches HB 4.3.4 RetrieveSwitchParameterDelegate behaviour).
         /// </summary>
-        protected Func<T> Statement { get; set; }
+        protected Func<object, T> Statement { get; set; }
 
         /// <summary>
         ///   The switch arguments.
@@ -70,7 +76,7 @@ namespace TreeSharp
         /// </summary>
         protected Composite Default { get; set; }
 
-        protected void RunSwitch()
+        protected void RunSwitch(object context)
         {
             if (Arguments == null && Default == null)
             {
@@ -82,22 +88,15 @@ namespace TreeSharp
                 throw new NullReferenceException("Switch statement is null.");
             }
 
-            // Run the statement, and get the value for our switch.
-            T value = Statement();
+            // Run the statement with the current tree context (matches HB 4.3.4 behaviour).
+            T value = Statement(context);
 
-            // Since we can't do an *actual* switch statement,
-            // this is the best we can do. It works in the same way,
-            // except that it's slower, and may cause severe performance
-            // hits if there are a large number of switch cases.
             if (Arguments != null)
             {
-                // Make sure we don't do this query twice.
-                SwitchArgument<T> arg = Arguments.First(a => a.RequiredValue.Equals(value));
+                SwitchArgument<T>? arg = Arguments.FirstOrDefault(a => a.RequiredValue.Equals(value));
                 if (arg != null)
                 {
                     Selection = arg.Branch;
-
-                    // BUGFIX (http://code.google.com/p/treesharp/issues/detail?id=3)
                     return;
                 }
             }
@@ -110,7 +109,7 @@ namespace TreeSharp
 
         protected override IEnumerable<RunStatus> Execute(object context)
         {
-            RunSwitch();
+            RunSwitch(context);
 
             if (Selection == null)
             {
