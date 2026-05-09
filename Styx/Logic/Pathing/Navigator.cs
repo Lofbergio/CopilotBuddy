@@ -2,12 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
-using System.Threading.Tasks;
 using Styx.Helpers;
 using Styx.Logic.BehaviorTree;
 using Styx.Logic.Pathing.Interop;
 using Styx.WoWInternals;
 using Styx.WoWInternals.WoWObjects;
+using Styx.WoWInternals.World;
 using TripperNav = Tripper.Navigation;
 
 namespace Styx.Logic.Pathing
@@ -551,7 +551,8 @@ namespace Styx.Logic.Pathing
 			// Flightor.MoveTo() internally falls back to Navigator.MoveTo() for short distances
 			// and non-flyable zones, so there's no infinite recursion risk.
 			// Guard: skip if already in combat (Flightor rejects non-mounted combat movement).
-			if (Flightor.CanFly && !me.Combat && distance >= 15f)
+			// Guard: skip in no-fly zones — Flightor.MoveTo would call Navigator.MoveTo back → recursion.
+			if (Flightor.CanFly && !me.Combat && distance >= 15f && !IsInNoFlyZone)
 			{
 				Flightor.MoveTo(destination);
 				return MoveResult.Moved;
@@ -656,62 +657,49 @@ namespace Styx.Logic.Pathing
 					var start = new Vector3(me.Location.X, me.Location.Y, me.Location.Z);
 					var end = new Vector3(destination.X, destination.Y, destination.Z);
 
-					// HB-style tile streaming: ensure navmesh tiles are loaded at BOTH
-					// start AND destination before pathfinding. Without this, the A*
-					// search can't discover offmesh connections (elevators, portals) that
-					// sit in tiles far from the player, causing the pathfinder to generate
-					// a long detour path or return a partial path.
-					// NOTE: HB's WowNavigator loads tiles on-demand during A* via MeshProvider.
-					// We can't do that, so we pre-load tiles explicitly instead.
-					try
-					{
-						TripperNavigator.EnsureTilesAroundPosition(mapId, start, LoadTilesAroundRadius);
-						TripperNavigator.EnsureTilesAroundPosition(mapId, end, LoadTilesAroundRadius);
-
-						// COPILOTBUDDY ENHANCEMENT (not in HB): also load tiles at the midpoint
-						// to bridge large gaps. HB doesn't need this because it loads tiles
-						// on-demand during A*; we pre-load so need to cover the corridor.
-						float distSqr = Vector3.DistanceSquared(start, end);
-						if (distSqr > 40000f) // > 200 yards
-						{
-							var mid = (start + end) * 0.5f;
-							TripperNavigator.EnsureTilesAroundPosition(mapId, mid, LoadTilesAroundRadius);
-						}
-					}
-					catch
-					{
-						// Non-fatal: pathfinding still works with whatever tiles are loaded
-					}
-
-					// Ensure blackspots are marked on navmesh before pathfinding
-					// This is HB 4.3.4's OnTileLoaded workaround
+					// HB 6.2.3 MeshNavigator.FindPath pattern:
+					// EnsureTiles + FindPath run on a background Task so disk IO never
+					// blocks the main thread (freeze / game lag) when loading a new area.
+					// EnsureBlackspotsMarked stays on main thread: it reads StyxWoW.Me (game memory).
 					BlackspotManager.EnsureBlackspotsMarked();
 
-					// HB 6.2.3 pattern: run pathfinding on a background thread so we
-					// can release the FrameLock and let WoW render while we wait.
-					var capturedMapId = mapId;
+					float distSqr = Vector3.DistanceSquared(start, end);
+					bool hasMiddle = distSqr > 40000f;
 					var capturedStart = start;
 					var capturedEnd = end;
-					var pathTask = Task<TripperNav.PathFindResult>.Factory.StartNew(
-						() => TripperNavigator.FindPath(capturedMapId, capturedStart, capturedEnd, true));
+					uint capturedMapId = mapId;
+					int capturedRadius = LoadTilesAroundRadius;
+					var capturedMid = hasMiddle ? (start + end) * 0.5f : Vector3.Zero;
+
+					var navTask = System.Threading.Tasks.Task.Run(() =>
+					{
+						try
+						{
+							TripperNavigator.EnsureTilesAroundPosition(capturedMapId, capturedStart, capturedRadius);
+							TripperNavigator.EnsureTilesAroundPosition(capturedMapId, capturedEnd, capturedRadius);
+							if (hasMiddle)
+								TripperNavigator.EnsureTilesAroundPosition(capturedMapId, capturedMid, capturedRadius);
+						}
+						catch { }
+						return TripperNavigator.FindPath(capturedMapId, capturedStart, capturedEnd, true);
+					});
 
 					TripperNav.PathFindResult result;
 					try
 					{
-						if (pathTask.Wait(10))
+						// HB 6.2.3: if done in ≤10ms tiles were already loaded → use result directly.
+						if (navTask.Wait(10))
 						{
-							// Fast path — pathfinding completed within 10ms, no need to release frame
-							result = pathTask.Result;
+							result = navTask.Result;
 						}
 						else
 						{
-							// Slow path — release FrameLock so WoW can render while we wait
+							// HB 6.2.3: release FrameLock so EndScene/game continues.
+							// Pulse movement every tick-interval so the character keeps moving.
 							using (StyxWoW.Memory.ReleaseFrame(true))
 							{
-								int tickInterval = TreeRoot.TicksPerSecond > 0
-									? 1000 / TreeRoot.TicksPerSecond
-									: 50;
-								while (!pathTask.Wait(tickInterval))
+								int waitSlice = Math.Max(10, 1000 / Math.Max(1, (int)TreeRoot.TicksPerSecond));
+								while (!navTask.Wait(waitSlice))
 								{
 									try
 									{
@@ -721,27 +709,20 @@ namespace Styx.Logic.Pathing
 											ObjectManager.Update();
 											WoWMovement.Pulse();
 										}
-										StyxWoW.ResetAfk();
 									}
-									catch (Exception ex)
-									{
-										Logging.WriteDebug("Exception during pathfind wait: {0}", ex.Message);
-									}
+									catch { }
 								}
-								result = pathTask.Result;
 							}
-							// Re-update ObjectManager after re-acquiring frame
-							ObjectManager.Update();
+							result = navTask.Result;
 						}
 					}
-					catch (AggregateException ex)
+					catch
 					{
-						Logging.WriteDebug("Pathfinding failed with exception: {0}", ex.InnerException?.Message ?? ex.Message);
-						return MoveResult.PathGenerationFailed;
+						result = null!;
 					}
 					finally
 					{
-						pathTask.Dispose();
+						navTask.Dispose();
 					}
 
 					LogPathResult(result, me.Location, destination, mapId);
@@ -997,11 +978,14 @@ namespace Styx.Logic.Pathing
 
 					if (!raycastClear)
 					{
-						// HB 6.2.3 method_15: use 2D distance (Z ignored) and tighter threshold.
-						// HB uses PathPrecision (2yd), not 5× that. 10yd was too loose —
-						// the bot could be on the wrong side of a wall and still follow stale waypoints.
-						float distToSegment = DistanceToLineSegment2D(me.Location, prevPoint, nextPoint);
-						if (distToSegment > PathPrecision) // HB 6.2.3 method_15: smethod_1(prev,next,player) < Single_0 (PathPrecision²) → on path
+						// HB 6.2.3 method_15 / smethod_1: distance from player to the INFINITE LINE
+						// through prevPoint→nextPoint (NOT clamped to the segment endpoints).
+						// Finite-segment distance was a bug: when push-ahead carries the player
+						// 2-3yd past a waypoint (before the advance loop fires), the finite
+						// distance returns 2-3yd → false drift → path regen → oscillation loop.
+						// Infinite-line distance = 0 when player is on the path axis, matching HB.
+						float distToSegment = DistanceToInfiniteLine2D(me.Location, prevPoint, nextPoint);
+						if (distToSegment > PathPrecision) // HB 6.2.3 smethod_1(prev,next,player) < Single_0 (PathPrecision²) → on path
 						{
 							// BUG FIX: Don't set _destination = WoWPoint.Zero here.
 							// That caused destinationChanged=true on next MoveTo(), resetting
@@ -1559,6 +1543,30 @@ namespace Styx.Logic.Pathing
 		}
 
 		/// <summary>
+		/// HB 6.2.3 smethod_1: perpendicular distance from <paramref name="point"/> to the
+		/// INFINITE LINE through <paramref name="lineA"/>→<paramref name="lineB"/> (2D, Z ignored).
+		/// Unlike DistanceToLineSegment2D this does NOT clamp to the segment endpoints,
+		/// so it returns 0 when the player is on the path axis but past a waypoint.
+		/// Used by the drift check so that push-ahead overshoot does not trigger false regens.
+		/// </summary>
+		private static float DistanceToInfiniteLine2D(WoWPoint point, WoWPoint lineA, WoWPoint lineB)
+		{
+			float dx = lineB.X - lineA.X;
+			float dy = lineB.Y - lineA.Y;
+			float lineLen = (float)Math.Sqrt(dx * dx + dy * dy);
+			if (lineLen < 0.01f)
+			{
+				// Degenerate segment — fall back to point distance
+				float px = point.X - lineA.X;
+				float py = point.Y - lineA.Y;
+				return (float)Math.Sqrt(px * px + py * py);
+			}
+			// |cross2D(lineDir, pointRelA)| / lineLen
+			float cross = dx * (point.Y - lineA.Y) - dy * (point.X - lineA.X);
+			return Math.Abs(cross) / lineLen;
+		}
+
+		/// <summary>
 		/// HB 6.2.3 method_27: checks if player has reached a waypoint.
 		/// Uses 2D distance² ≤ PathPrecision² AND |ΔZ| < 4.5f.
 		/// </summary>
@@ -1847,8 +1855,8 @@ namespace Styx.Logic.Pathing
 			{
 				// Read native navstats (if available) to expose timing / polys visited
 				var stats = TripperNavigator.GetNavStats();
-				Logging.WriteDebug("[NAV] Pathfind: time={0}ms polysVisited={1} pathLength={2:F1} shortcuts={3} stuckRecoveries={4}",
-					stats.PathfindTimeMs, stats.PolysVisited, stats.PathLength, stats.ShortcutsApplied, stats.StuckRecoveries);
+				Logging.WriteDebug("[NAV] Pathfind: time={0}ms polysVisited={1} corridorLen={2} pathLength={3:F1} shortcuts={4} stuckRecoveries={5}",
+					stats.PathfindTimeMs, stats.PolysVisited, stats.CorridorLength, stats.PathLength, stats.ShortcutsApplied, stats.StuckRecoveries);
 			}
 			catch (Exception ex)
 			{

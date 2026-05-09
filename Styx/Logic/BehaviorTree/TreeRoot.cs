@@ -335,14 +335,14 @@ namespace Styx.Logic.BehaviorTree
 			// which caused 15 FPS.  The behavior tree runs without FrameLock so
 			// WoW can render between the few Execute() calls it makes.
 			//
-			// UseFrameLock ON:  cache enabled, pulse under brief FrameLock
-			// UseFrameLock OFF: cache disabled, no FrameLock (matches HB 4.3.4)
+			// HB 4.3.4/6.2.3: read cache is ALWAYS enabled within the tick body.
+			// UseFrameLock controls only the Execute()/EndScene FrameLock scope (see RunTickBody).
+			// Cache disabled = hundreds of ReadProcessMemory per tick in dense zones (Dalaran = 200+ objects) = lag.
 			var sw = Stopwatch.StartNew();
 
-			using (StyxWoW.Memory.TemporaryCacheState(StyxSettings.Instance.UseFrameLock))
+			using (StyxWoW.Memory.TemporaryCacheState(true))
 			{
-				if (StyxSettings.Instance.UseFrameLock)
-					StyxWoW.Memory.ClearCache();
+				StyxWoW.Memory.ClearCache();
 				RunTickBody();
 			}
 

@@ -60,7 +60,9 @@ namespace Styx.Logic.Pathing
             {
                 WoWUnit activeMover = WoWMovement.ActiveMover;
                 if (activeMover == null) return false;
-                if (activeMover.MovementInfo.CanFly) return true;
+                // NOTE: do NOT add MovementInfo.CanFly fast-path here.
+                // That bypasses IsFlyableArea() and causes Navigator→Flightor→Navigator recursion
+                // when the player is already airborne in a no-fly zone (Dalaran etc.).
                 if (!activeMover.IsMe || StyxWoW.Me.InVehicle) return false;
                 bool hasFlyingRiding = SpellManager.HasSpell("Expert Riding") ||
                                        SpellManager.HasSpell("Artisan Riding") ||
@@ -71,7 +73,7 @@ namespace Styx.Logic.Pathing
 
                 return (hasFlyingRiding || hasDruidFlightForm)
                     && Lua.GetReturnVal<bool>("return IsFlyableArea()", 0U)
-                    && (Styx.Logic.MountHelper.FlyingMounts.Count != 0 || StyxWoW.Me.Class == WoWClass.Druid)
+                    && MountHelper.FlyingMount != null
                     && (StyxWoW.Me.Level >= 60 || StyxWoW.Me.Class == WoWClass.Druid)
                     && (StyxWoW.Me.Level >= 58 || StyxWoW.Me.Class != WoWClass.Druid)
                     && (StyxWoW.Me.MapId != 571U || SpellManager.HasSpell("Cold Weather Flying"));

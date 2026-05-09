@@ -218,7 +218,7 @@ namespace Styx.Logic
                     if (CreatureSpell != null)
                     {
                         // Try Cata+ MiscValueB classification first (Mount.dbc, values 225-248).
-                        int miscValueB = CreatureSpell.SpellEffect1.MiscValueB;
+                        int miscValueB = CreatureSpell.SpellEffect1?.MiscValueB ?? 0;
                         if (Enum.IsDefined(typeof(MountType), miscValueB))
                         {
                             Type = (MountType)miscValueB;
@@ -227,16 +227,19 @@ namespace Styx.Logic
                         {
                             // WotLK 3.3.5a has no Mount.dbc — MiscValueB is always 0.
                             // Classify by inspecting spell effects for flight-speed auras.
-                            // Flying mounts have ModIncreaseFlightSpeed / ModSpeedFlight on at least one effect.
-                            // Ground mounts only have SPELL_AURA_MOUNTED + ground speed.
+                            // Raw WotLK DBC values (verified against TrinityCore spell 32290 etc.):
+                            //   152 = SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED
+                            //   153 = SPELL_AURA_MOD_INCREASE_FLIGHT_SPEED
+                            //   154 = SPELL_AURA_MOUNTED_FLIGHT_SPEED_ALWAYS
+                            //   156 = SPELL_AURA_MOD_MOUNTED_FLIGHT_SPEED_NOT_STACK
+                            // Our WoWApplyAuraType enum is sequential (not matching WotLK values),
+                            // so compare the raw int cast.
                             Type = MountType.Ground; // default to ground
                             foreach (var effect in CreatureSpell.SpellEffects)
                             {
                                 if (effect == null) continue;
-                                if (effect.AuraType == WoWApplyAuraType.ModIncreaseFlightSpeed ||
-                                    effect.AuraType == WoWApplyAuraType.ModSpeedFlight ||
-                                    effect.AuraType == WoWApplyAuraType.ModFlightSpeedAlways ||
-                                    effect.AuraType == WoWApplyAuraType.ModFlightSpeedNotStack)
+                                int auraId = (int)effect.AuraType;
+                                if (auraId == 152 || auraId == 153 || auraId == 154 || auraId == 156)
                                 {
                                     Type = MountType.Flying;
                                     break;

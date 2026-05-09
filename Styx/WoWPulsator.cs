@@ -46,6 +46,11 @@ namespace Styx
 				// BUG-07 fix: Pulse movement to flush timed movement entries
 				WoWMovement.Pulse();
 
+				// Required for StuckHandler.OnMountUp cancellation to work.
+				// Without this, the OnMountUp event never fires and the 10-second
+				// mount-block after a stuck dismount has no effect.
+				Mount.Pulse();
+
 				// BUG-07 fix: Pulse avoidance zones (was missing per audit)
 				Styx.Logic.Pathing.AvoidanceManager.Pulse();
 

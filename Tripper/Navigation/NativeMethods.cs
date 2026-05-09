@@ -53,6 +53,7 @@ namespace Tripper.Navigation
             public int LastShortcutIndex;
             public float LastShortcutDistance;
             public float LastRaycastHitFraction;
+            public int CorridorLength;  // true Detour A* poly corridor (m_polyLength)
         }
 
         /// <summary>

@@ -525,6 +525,17 @@ namespace Styx.Logic
                 }
                 WoWUnit unit = (WoWUnit)obj;
 
+                // PERF: early distance pre-filter — eliminates 95% of units in dense zones (Dalaran,
+                // cities) with a single DistanceSqr read before touching any other property.
+                // In Dalaran 200+ units are present; without this, DefaultRemoveTargetsFilter reads
+                // 10+ properties per unit → 2000+ ReadProcessMemory per tick → 26 000/s → overload.
+                // Keep units that are in combat (could be attacking party) even if far.
+                if (unit.DistanceSqr > collectionRangeSq && !unit.Combat)
+                {
+                    units.RemoveAt(i);
+                    continue;
+                }
+
                 // Remove stale/impossibly-distant objects before any combat
                 // protection can keep them alive (fixes 4347-yard phantom targets).
                 if (unit.DistanceSqr > hardDistCapSq)

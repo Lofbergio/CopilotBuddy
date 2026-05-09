@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Threading;
 using GreenMagic;
+using Styx;
 using Styx.Helpers;
 using Styx.Logic.Pathing;
 using Styx.WoWInternals.WoWObjects;
@@ -375,7 +376,7 @@ namespace Styx.WoWInternals
 				allocatedMemory.Write<WoWPoint>("ClickPos", clickPos);
 				allocatedMemory.Write<ulong>("GUID", guid);
 
-				lock (executor.AssemblyLock)
+				using (new FrameLock())
 				{
 					executor.Clear();
 					executor.AddLine("push {0}", (uint)BitConverter.SingleToInt32Bits(facing));
@@ -408,7 +409,7 @@ namespace Styx.WoWInternals
 			LocalPlayer? me = ObjectManager.Me;
 			if (me == null) return;
 
-			lock (executor.AssemblyLock)
+			using (new FrameLock())
 			{
 				executor.Clear();
 				executor.AddLine("mov ecx, {0}", me.BaseAddress);

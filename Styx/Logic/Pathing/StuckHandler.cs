@@ -282,11 +282,10 @@ namespace Styx.Logic.Pathing
         }
 
         // Types that have NO physical collision in WoW and must never be blackspotted.
-        // Campfires (entry 2061) are WoWGameObjectType.Trap — purely decorative, zero collision.
-        // Blackspotting them starves the navmesh until no path can be found at all.
+        // NOTE: WoWGameObjectType.Trap is NOT in this list — campfires (entry 2061) are Trap
+        // subtype and DO block physical movement. They must be blackspotted when blocking.
         private static readonly HashSet<WoWGameObjectType> _nonCollidingTypes = new HashSet<WoWGameObjectType>
         {
-            WoWGameObjectType.Trap,        // campfires, spell traps — no geometry
             WoWGameObjectType.AreaDamage,  // AoE ground effects
             WoWGameObjectType.DuelFlag,
             WoWGameObjectType.Ritual,
@@ -301,9 +300,9 @@ namespace Styx.Logic.Pathing
         };
 
         /// <summary>
-        /// If a solid game object (Door) is within 2.5 yards when stuck, blackspot it.
-        /// Non-colliding types (Trap/campfire, AreaDamage, etc.) are explicitly excluded —
-        /// blackspotting them destroys the navmesh without fixing anything.
+        /// If a solid game object is within 2.5 yards when stuck, blackspot it.
+        /// Non-colliding types (AreaDamage, DuelFlag, etc.) are excluded.
+        /// Trap types (campfires, entry 2061) are NOT excluded — they DO block movement.
         /// </summary>
         private void CheckAndBlackspotNearbyObject()
         {
