@@ -11,6 +11,9 @@
         },
         {
             "path": "../Navigation C++"
+        },
+        {
+            "path": "../hb decompile/.hb 3.3.5a"
         }
     ]
 }
