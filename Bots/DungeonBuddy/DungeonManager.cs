@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using Bots.DungeonBuddy.Attributes;
+using Bots.DungeonBuddy.Enums;
 using Bots.DungeonBuddy.Profiles;
 using Styx;
 using Styx.Helpers;
@@ -419,6 +420,8 @@ if (Activator.CreateInstance(type) is not Dungeon instance)
         public static void Clear()
         {
             _currentDungeon?.Detach();
+            _currentDungeon?.Dispose();
+            LfgManager.DungeonCompletedReason = CompleteReason.None;
             _currentDungeon = null;
             _currentDungeonBehavior = null;
             ProfileManager.UnloadProfile();
