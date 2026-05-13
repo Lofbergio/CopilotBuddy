@@ -42,12 +42,25 @@ namespace Styx.Logic
 			_combatTimer.Reset();
 		}
 
-		public static void Dismount() => Dismount(string.Empty);
+	/// <summary>
+	/// True when both the post-combat and post-mount cooldown timers are ready.
+	/// Used by Flightor.MountHelper.CanMount so it respects the same cooldowns as
+	/// Mount.CanMount() without routing through the LevelBot mount path.
+	/// </summary>
+	internal static bool AreMountTimersReady => _combatTimer.IsFinished && _mountTimer.IsFinished;
 
-		public static void ClearShapeshift()
-		{
-			LocalPlayer? me = Me;
-			if (me == null)
+	/// <summary>
+	/// Resets the mount timer after a Flightor-initiated mount attempt, preventing
+	/// immediate retry spam when the mount is cancelled (e.g. by water or GCD).
+	/// </summary>
+	internal static void ResetMountTimer() => _mountTimer.Reset();
+
+	public static void Dismount() => Dismount(string.Empty);
+
+	public static void ClearShapeshift()
+	{
+		LocalPlayer? me = Me;
+		if (me == null)
 				return;
 
 			if (me.Shapeshift != ShapeshiftForm.Normal)
@@ -68,21 +81,9 @@ namespace Styx.Logic
 				if (string.IsNullOrEmpty(reason))
 					Logging.WriteDebug("Stop and dismount.");
 
-				// BUG-04 fix: Descend safely before dismounting if flying
-				if (me.IsFlying)
-				{
-					Logging.WriteDebug("Descending before dismount (flying safety).");
-					WoWMovement.MoveStop();
-					WoWMovement.Descend();
-					int maxTicks = 300; // ~30 seconds max descent
-					while (me.IsFlying && maxTicks-- > 0)
-					{
-						StyxWoW.Sleep(100);
-					}
-					WoWMovement.DescendStop();
-					StyxWoW.Sleep(500); // Allow landing to settle
-				}
-				
+				// HB 4.3.4: no descent loop — just stop and dismount.
+				// Descent before dismount is the caller's responsibility
+				// (gather [4] already handles it with WoWMovement.Move(Descend) + WaitContinue(!IsFlying)).
 				WoWMovement.MoveStop();
 
 				if (shapeshift == ShapeshiftForm.FlightForm || shapeshift == ShapeshiftForm.EpicFlightForm)
@@ -375,6 +376,15 @@ namespace Styx.Logic
 				_cantMountSpots.Add(location);
 				Logging.WriteDebug("Added can't mount spot at: {0}", location);
 			}
+		}
+
+		/// <summary>
+		/// Returns true if <paramref name="location"/> is within 10y of a known can't-mount spot.
+		/// Ported from HB 6.2.3 Mount.smethod_6.
+		/// </summary>
+		internal static bool IsInCantMountSpot(WoWPoint location)
+		{
+			return _cantMountSpots.Any(spot => spot.Distance(location) < 10f);
 		}
 
 		public static void ClearCantMountSpots()
