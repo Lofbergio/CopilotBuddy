@@ -47,7 +47,7 @@ namespace Bots.Gatherbuddy
             new(176584U, "Dreamfoil",          270U),
             new(176588U, "Icecap",             270U),
             new(176586U, "Mountain Silversage", 280U),
-            new(176587U, "Plaguebloom",        285U),
+            new(176587U, "Sorrowmoss",         285U),
             new(176589U, "Black Lotus",        300U),
 
             // ── Burning Crusade (300–375) ──

@@ -6,6 +6,7 @@ using GreenMagic;
 using Styx;
 using Styx.Helpers;
 using Styx.Logic.Pathing;
+using Styx.Offsets;
 using Styx.WoWInternals.WoWObjects;
 
 namespace Styx.WoWInternals
@@ -31,6 +32,12 @@ namespace Styx.WoWInternals
 		// GetActivePlayerObject - FROM 335offsetsall.txt
 		private const uint GetActivePlayerObject_Function = 0x004038F0;  // 4208880 decimal
 
+		// CGInputControl__ToggleControlBit — 3.3.5a 12340
+		// __thiscall(this, flag, start, timestamp, 0)
+		// a3 non-zero → SetControlBit (start); a3=0 → UnsetControlBit (stop).
+		// Calls CGInputControl__UpdatePlayer internally when bit state changes.
+		// HB 4.3.4 smethod_3 calls this for ALL directions except JumpAscend.
+		private const uint CGInputControl_ToggleControlBit = 0x5FBE10;
 
 		#endregion
 
@@ -256,32 +263,17 @@ namespace Styx.WoWInternals
 		public static void StopMovement(MovementDirection direction)
 		{
 			StyxWoW.ResetAfk();
-			
-			// HB 3.3.5a pattern: batch all direction stops into a single Lua.DoString
-			// call so only ONE Execute() is needed instead of up to 8.
-			var sb = new System.Text.StringBuilder(160);
-			if ((direction & MovementDirection.Forward) != 0)
-				sb.Append("MoveForwardStop();");
-			if ((direction & MovementDirection.Backwards) != 0)
-				sb.Append("MoveBackwardStop();");
-			if ((direction & MovementDirection.StrafeLeft) != 0)
-				sb.Append("StrafeLeftStop();");
-			if ((direction & MovementDirection.StrafeRight) != 0)
-				sb.Append("StrafeRightStop();");
-			if ((direction & MovementDirection.TurnLeft) != 0)
-				sb.Append("TurnLeftStop();");
-			if ((direction & MovementDirection.TurnRight) != 0)
-				sb.Append("TurnRightStop();");
+
+			// Native for all directions except JumpAscend (matches HB 4.3.4/6.2.3 smethod_1).
+			var nativeDirs = direction & ~MovementDirection.JumpAscend;
+			if (nativeDirs != MovementDirection.None)
+				NativeMove(nativeDirs, false);
+
+			// JumpAscend uses Lua only.
 			if ((direction & MovementDirection.JumpAscend) != 0)
-				sb.Append("AscendStop();");
-			if ((direction & MovementDirection.Descend) != 0)
-				sb.Append("DescendStop();");
-			
-			if (sb.Length > 0)
-			{
-				Lua.DoString(sb.ToString());
-				RaiseMovementFlagsChanged(direction, true);
-			}
+				Lua.DoString("AscendStop()");
+
+			RaiseMovementFlagsChanged(direction, true);
 		}
 
 		public static void StopFace()
@@ -472,6 +464,39 @@ namespace Styx.WoWInternals
 			FaceOrStopInternal(guid, false);
 		}
 
+		/// <summary>
+		/// Calls CGInputControl__ToggleControlBit via native ASM injection.
+		/// Matches HB 4.3.4 smethod_3 exactly — one function for both start and stop,
+		/// writing directly to CGInputControl.m_flags in the WoW process. No Lua round-trip.
+		/// JumpAscend is intentionally excluded — caller handles it with Lua separately.
+		/// </summary>
+		private static void NativeMove(MovementDirection direction, bool start)
+		{
+			var executor = ObjectManager.Executor;
+			if (executor == null) return;
+
+			lock (executor.AssemblyLock)
+			{
+				executor.Clear();
+				// CGInputControl__ToggleControlBit(this, a2=flags, a3=start, a4=timestamp, a5=0)
+				// __thiscall: ecx=this, remaining args pushed right-to-left.
+				// a3 non-zero → SetControlBit; a3=0 → UnsetControlBit. Calls UpdatePlayer internally.
+				// Addresses confirmed in IDA against 3.3.5a 12340.
+				executor.AddRandomLine("push 0");                                                       // a5 = 0
+				executor.AddRandomLine("mov eax, dword [{0}]", (uint)GlobalOffsets.LastHardwareAction); // read timestamp
+				executor.AddRandomLine("push eax");                                                     // a4 = timestamp
+				executor.AddRandomLine("push {0}", start ? 1U : 0U);                                   // a3 = start(1)/stop(0)
+				executor.AddRandomLine("push {0}", (uint)direction);                                    // a2 = direction flags
+				executor.AddRandomLine("mov ecx, dword [{0}]", ActiveInputControl_Ptr);                 // ecx = CGInputControl*
+				executor.AddRandomLine("test ecx, ecx");
+				executor.AddRandomLine("jz @OUT");
+				executor.AddRandomLine("call {0}", CGInputControl_ToggleControlBit);                    // 0x5FBE10
+				executor.AddRandomLine("@OUT:");
+				executor.AddLine("retn");
+				executor.Execute();
+			}
+		}
+
 		public static void Move(MovementDirection direction)
 		{
 			if (ActiveInputControl.Flags.HasFlag(direction))
@@ -500,41 +525,17 @@ namespace Styx.WoWInternals
 
 			StyxWoW.ResetAfk();
 
-			// Batch all direction commands into a single Lua.DoString to avoid
-			// up to 8 separate Execute() calls (~16ms each = 128ms freeze).
-			var sb = new System.Text.StringBuilder(128);
+			// Native for all directions except JumpAscend (matches HB 4.3.4/6.2.3 smethod_1).
+			// Writes directly to CGInputControl.m_flags — no Lua round-trip, no "key stuck" glitch.
+			var nativeDirs = direction & ~MovementDirection.JumpAscend;
+			if (nativeDirs != MovementDirection.None)
+				NativeMove(nativeDirs, true);
 
-			if ((direction & MovementDirection.Forward) != 0)
-				sb.Append(start ? "MoveForwardStart();" : "MoveForwardStop();");
-			if ((direction & MovementDirection.Backwards) != 0)
-				sb.Append(start ? "MoveBackwardStart();" : "MoveBackwardStop();");
-			if ((direction & MovementDirection.StrafeLeft) != 0)
-				sb.Append(start ? "StrafeLeftStart();" : "StrafeLeftStop();");
-			if ((direction & MovementDirection.StrafeRight) != 0)
-				sb.Append(start ? "StrafeRightStart();" : "StrafeRightStop();");
-			if ((direction & MovementDirection.TurnLeft) != 0)
-				sb.Append(start ? "TurnLeftStart();" : "TurnLeftStop();");
-			if ((direction & MovementDirection.TurnRight) != 0)
-				sb.Append(start ? "TurnRightStart();" : "TurnRightStop();");
+			// JumpAscend uses Lua only — HB 4.3.4 smethod_1 pattern.
 			if ((direction & MovementDirection.JumpAscend) != 0)
-				sb.Append(start ? "JumpOrAscendStart();" : "AscendStop();");
-			if ((direction & MovementDirection.Descend) != 0)
-			{
-				if (start)
-				{
-					// Only descend if actually flying/swimming - on ground SitStandOrDescendStart() toggles sit!
-					if (StyxWoW.Me != null && (StyxWoW.Me.IsFlying || StyxWoW.Me.IsSwimming))
-						sb.Append("SitStandOrDescendStart();");
-				}
-				else
-					sb.Append("DescendStop();");
-			}
+				Lua.DoString("JumpOrAscendStart()");
 
-			if (sb.Length > 0)
-			{
-				Lua.DoString(sb.ToString());
-				RaiseMovementFlagsChanged(direction, !start);
-			}
+			RaiseMovementFlagsChanged(direction, false);
 		}
 
 		public static void Jump()
