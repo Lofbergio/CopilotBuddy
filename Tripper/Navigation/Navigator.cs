@@ -27,6 +27,8 @@ namespace Tripper.Navigation
 
         // HB 6.2.3 pattern: prevent GC of native callback delegate
         private NativeMethods.TileLoadedCallbackDelegate? _nativeTileLoadedCallback;
+        // Prevent GC — same pattern as _nativeTileLoadedCallback
+        private NativeMethods.NavLogCallbackDelegate? _nativeLogCallback;
 
         #endregion
 
@@ -418,6 +420,18 @@ namespace Tripper.Navigation
                     catch (EntryPointNotFoundException)
                     {
                         Log("SetTileLoadedCallback_C not exported by Navigation.dll — tile events disabled");
+                    }
+
+                    // Register log callback — fires DLL internal events into OnNavigatorLogMessage.
+                    // Same pattern as SetTileLoadedCallback_C.
+                    try
+                    {
+                        _nativeLogCallback = (msg) => OnNavigatorLogMessage?.Invoke(msg);
+                        NativeMethods.SetNavLogCallback(_nativeLogCallback);
+                    }
+                    catch (EntryPointNotFoundException)
+                    {
+                        Log("SetNavLogCallback_C not exported by Navigation.dll — DLL log bridge disabled");
                     }
 
                     IsLoaded = true;

@@ -110,6 +110,7 @@ namespace Styx.Logic.Pathing
 				throw new InvalidOperationException("This MeshNavigator instance is already in use");
 			base.OnSetAsCurrent(); // StuckHandler.OnSetAsCurrent()
 			BotEvents.OnPulse += OnPulse;
+			Navigator.TripperNavigator.OnNavigatorLogMessage += OnNavigatorLog;
 			_isCurrent = true;
 		}
 
@@ -123,6 +124,7 @@ namespace Styx.Logic.Pathing
 			if (!_isCurrent)
 				throw new InvalidOperationException("This MeshNavigator instance is not in use");
 			BotEvents.OnPulse -= OnPulse;
+			Navigator.TripperNavigator.OnNavigatorLogMessage -= OnNavigatorLog;
 			base.OnRemoveAsCurrent(); // StuckHandler.OnRemoveAsCurrent()
 			_isCurrent = false;
 		}
@@ -371,14 +373,18 @@ namespace Styx.Logic.Pathing
 				}
 
 				// Drift detection (HB 6.2.3 method_15)
-				if (!_suppressDriftCheck && _currentPathIndex > 0 && _currentPathIndex < _currentPath.Count)
+				// Guard: if the player is falling (dismount/drop) the check would always fire
+				// and regenerate the path mid-air. HB method_15 returns true (= still on path)
+				// whenever IsFalling. Port: (.hb 6.2.3/Styx/Pathing/MeshNavigator.cs method_15 line 1)
+				if (!_suppressDriftCheck && _currentPathIndex > 0 && _currentPathIndex < _currentPath.Count
+				    && !(WoWMovement.ActiveMover ?? StyxWoW.Me).IsFalling)
 				{
 					WoWPoint segA = _currentPath[_currentPathIndex - 1];
 					WoWPoint segB = _currentPath[_currentPathIndex];
 					float driftDist = DistanceToLineSegment2D(me.Location, segA, segB);
 					if (driftDist * driftDist > PathPrecision * PathPrecision)
 					{
-						Logging.WriteDebug("[NAV] Player drifted {0:F1}yd from path segment — regenerating", driftDist);
+						Logging.WriteDiagnostic("Generating new path because we are not on the old path anymore!");
 						_currentPath.Clear();
 						_currentPathIndex = 0;
 						_cachedPushAheadIndex = -1;
@@ -612,6 +618,10 @@ namespace Styx.Logic.Pathing
 
 		private TripperNav.Navigator TripperNavigator => Navigator.TripperNavigator;
 
+		// HB 6.2.3 MeshNavigator.smethod_0: route navigator internal messages to the log.
+		// Source: .hb 6.2.3 MeshNavigator.cs line 38
+		private static void OnNavigatorLog(string msg) => Logging.WriteDiagnostic(System.Windows.Media.Colors.LightBlue, msg);
+
 		private TripperNav.PathFindResult? FindPathResult(WoWPoint from, WoWPoint to)
 		{
 			if (!Navigator.IsNavigatorLoaded)
@@ -711,11 +721,21 @@ namespace Styx.Logic.Pathing
 				navTask.Dispose();
 			}
 
-			if (result == null || !result.Status.Succeeded || result.Points == null || result.Points.Length == 0)
+			if (result == null || result.Points == null || result.Points.Length == 0)
+			{
+				Logging.WriteDiagnostic(System.Windows.Media.Colors.Red,
+					"Could not generate path from {0} to {1} on map {2} (status: {3})",
+					me.Location, destination, me.MapId, result?.Status);
 				return false;
+			}
 
 			if (result.IsPartialPath)
-				Logging.WriteDebug("Could not generate full path from {0} to {1}", me.Location, destination);
+				Logging.WriteDiagnostic(System.Windows.Media.Colors.Orange,
+					"Could not generate full path from {0} to {1} (time used: {2})",
+					me.Location, destination, result.Elapsed);
+			else if (result.Elapsed.TotalMilliseconds > 50.0)
+				Logging.WriteDiagnostic("Successfully generated path from {0} to {1} in {2}",
+					me.Location, destination, result.Elapsed);
 
 			foreach (var point in result.Points)
 				_currentPath.Add(new WoWPoint(point.X, point.Y, point.Z));

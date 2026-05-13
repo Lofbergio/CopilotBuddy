@@ -484,12 +484,10 @@ namespace Styx.Logic.Pathing
 			}
 			catch { }
 
-			// HB 4.3.4: when flying is available, delegate to Flightor
-			if (Flightor.CanFly && !me.Combat && distance >= 15f && !IsInNoFlyZone)
-			{
-				Flightor.MoveTo(destination);
-				return MoveResult.Moved;
-			}
+			// NOTE: Navigator.MoveTo is PURE GROUND NAV — no Flightor routing here.
+			// In HB, Flightor is called by the bot base directly. If Navigator.MoveTo
+			// delegated to Flightor, and Flightor checks CanNavigateFully/GetPathDistance
+			// which call Navigator.MoveTo → infinite recursion → StackOverflow.
 
 			// Auto-dismount near destination
 			try

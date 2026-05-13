@@ -526,6 +526,20 @@ namespace Tripper.Navigation
         [DllImport(DllName, EntryPoint = "SetTileLoadedCallback_C", CallingConvention = CallingConvention.Cdecl)]
         internal static extern void SetTileLoadedCallback(TileLoadedCallbackDelegate callback);
 
+        /// <summary>
+        /// Log callback delegate — invoked by Navigation.dll for internal events (pathfind results, tile loads).
+        /// Mirrors pattern of TileLoadedCallbackDelegate. Fires into C# OnNavigatorLogMessage.
+        /// </summary>
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        internal delegate void NavLogCallbackDelegate([MarshalAs(UnmanagedType.LPStr)] string msg);
+
+        /// <summary>
+        /// Registers the log callback. Must be called once after the DLL is loaded.
+        /// Same lifecycle as SetTileLoadedCallback.
+        /// </summary>
+        [DllImport(DllName, EntryPoint = "SetNavLogCallback_C", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern void SetNavLogCallback(NavLogCallbackDelegate callback);
+
         #endregion
 
         #region Path Following
