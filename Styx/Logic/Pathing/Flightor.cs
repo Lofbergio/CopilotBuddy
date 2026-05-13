@@ -45,6 +45,13 @@ namespace Styx.Logic.Pathing
         private static PolyNav _polyNav;
         private static uint? _polyNavMapId;
 
+        // HB 6.2.3 woWPoint_4/5: cached outdoor takeoff spot and its associated destination.
+        // When the bot can't fly from its current location, it navigates to _takeoffSpot first.
+        // Cache is invalidated when destination moves >30y (DistanceSqr > 900f).
+        // Ported from Flightor.smethod_10 / smethod_4 / smethod_5.
+        private static WoWPoint _takeoffSpot        = WoWPoint.Empty;
+        private static WoWPoint _takeoffDestination = WoWPoint.Empty;
+
         static Flightor()
         {
             BotEvents.OnBotStop += args => Clear();
@@ -72,6 +79,7 @@ namespace Styx.Logic.Pathing
                                            SpellManager.HasSpell("Flight Form"));
 
                 return (hasFlyingRiding || hasDruidFlightForm)
+                    && !StyxWoW.Me.IsSwimming                             // WotLK: flight form cancelled immediately in water
                     && Lua.GetReturnVal<bool>("return IsFlyableArea()", 0U)
                     && MountHelper.FlyingMount != null
                     && (StyxWoW.Me.Level >= 60 || StyxWoW.Me.Class == WoWClass.Druid)
@@ -103,6 +111,9 @@ namespace Styx.Logic.Pathing
         {
             if (StyxWoW.Me.HasAura("Sea Legs")) return false;
             if (MountHelper.Mounted)             return false;
+            // WotLK: when swimming, ground nav fails underwater — let code fall through to
+            // the liquid-ascent handlers instead of spamming Navigator.MoveTo.
+            if (StyxWoW.Me.IsSwimming)           return false;
             if (!CanFly)                         return true;
 
             double dist = destination.Distance(StyxWoW.Me.Location);
@@ -152,24 +163,15 @@ namespace Styx.Logic.Pathing
                 return;
             }
 
-            // Don't fly if in combat and not already mounted
-            if (me.Combat && !MountHelper.Mounted && !me.HasAura("Sea Legs"))
-                return;
+            // HB 6.2.3 smethod_10: NO combat early-return here.
+            // When in combat and not mounted, CanMount returns false (checks !me.Combat),
+            // which falls through to Navigator.MoveTo() — the bot walks on foot to the
+            // destination instead of freezing. This matches HB behavior exactly.
 
             WoWPoint myLocation = me.Location;
             bool hasSeaLegs = me.HasAura("Sea Legs");
 
-            if (!MountHelper.Mounted &&
-                !hasSeaLegs &&
-                destination.Distance(myLocation) < 60f &&
-                Navigator.CanNavigateFully(myLocation, destination) &&
-                GetPathDistance(destination) < 60f)
-            {
-                Navigator.MoveTo(destination);
-                return;
-            }
-
-            // Ground nav is faster than mounting and flying: prefer walking (WoD smethod_9 port)
+            // Ground nav is faster than mounting and flying: prefer walking (HB smethod_9)
             if (ShouldWalk(destination))
             {
                 Navigator.MoveTo(destination);
@@ -181,25 +183,57 @@ namespace Styx.Logic.Pathing
             // Not mounted - need to mount up
             if (!MountHelper.Mounted)
             {
-                // Check if indoors or blocked above
-                if (!me.IsOutdoors ||
-                    (!me.HasAura("Sea Legs") &&
-                     !GameWorld.IsInLineOfSight(traceLinePos, myLocation.Add(0.0f, 0.0f, 30f))))
-                {
-                    // Find outdoor location
-                    WoWObject outdoorObject = ObjectManager.GetObjectsOfType<WoWObject>(true, false)
-                        .Where(o => o is WoWGameObject || o is WoWUnit)
-                        .OrderBy(o => o.DistanceSqr)
-                        .FirstOrDefault(o => o.IsOutdoors && o.InLineOfSight);
+                // HB 6.2.3 smethod_10: can we take off from the current position?
+                // Uses 10f LOS height (normal mode, not checkIndoors/Garrison). (F6)
+                bool canFlyFromHere = me.IsOutdoors
+                    && !Mount.IsInCantMountSpot(myLocation)
+                    && (hasSeaLegs || GameWorld.IsInLineOfSight(traceLinePos, myLocation.Add(0f, 0f, 10f)));
 
-                    if (outdoorObject != null)
+                // F3: Invalidate takeoff cache if destination moved >30y (HB woWPoint_5 guard).
+                if (_takeoffDestination != WoWPoint.Empty && _takeoffDestination.DistanceSqr(destination) > 900f)
+                {
+                    _takeoffSpot        = WoWPoint.Empty;
+                    _takeoffDestination = WoWPoint.Empty;
+                }
+
+                // F3: Clear takeoff cache when we're already in a good takeoff position.
+                if (canFlyFromHere)
+                {
+                    _takeoffSpot        = WoWPoint.Empty;
+                    _takeoffDestination = WoWPoint.Empty;
+                }
+
+                // F3/F4: Navigate to cached takeoff spot (with mount-up suppression).
+                if (_takeoffSpot != WoWPoint.Empty)
+                {
+                    if (_takeoffSpot.DistanceSqr(myLocation) < 16f)            // arrived (<4y)
                     {
-                        if (outdoorObject.DistanceSqr <= 4.0)
-                        {
-                            Blacklist.Add(outdoorObject, TimeSpan.FromSeconds(10.0));
-                            return;
-                        }
-                        Navigator.MoveTo(outdoorObject.Location);
+                        _takeoffSpot        = WoWPoint.Empty;
+                        _takeoffDestination = WoWPoint.Empty;
+                    }
+                    else if (Navigator.CanNavigateWithin(myLocation, _takeoffSpot, Navigator.PathPrecision))
+                    {
+                        NavigateToTakeoffSpot();                                // suppresses OnMountUp
+                        return;
+                    }
+                    else
+                    {
+                        _takeoffSpot        = WoWPoint.Empty;
+                        _takeoffDestination = WoWPoint.Empty;
+                    }
+                }
+
+                // F2/F3: If blocked from flying, find an outdoor spot and cache it (HB smethod_5).
+                // Guard: only search while stationary on the ground — mirrors HB's exact condition.
+                if (!me.IsMoving && !me.MovementInfo.IsFlying && !canFlyFromHere)
+                {
+                    WoWObject candidate = FindTakeoffCandidate(myLocation, 10f);
+                    if (candidate != null)
+                    {
+                        Logging.WriteDiagnostic("[Flightor] Can't take off here. Moving to: {0}", candidate.Location);
+                        _takeoffSpot        = candidate.Location;
+                        _takeoffDestination = destination;
+                        NavigateToTakeoffSpot();
                         return;
                     }
                 }
@@ -215,8 +249,13 @@ namespace Styx.Logic.Pathing
                         WoWPoint p = GetPointInDirection(myLocation, 10f, neededFacing, WoWMathHelper.DegreesToRadians(60f));
                         Navigator.PlayerMover.MoveTowards(p);
                     }
-                    // Druid flight form while swimming
-                    else if (!me.HasAura("Sea Legs") && me.IsSwimming &&
+                    // Druid flight form while swimming or standing on riverbed.
+                    // WotLK: IsSwimming=false when standing on a riverbed (feet below water
+                    // surface, head above) — TraceLine(eye→feet, HitTestLiquid) detects this.
+                    // HB 4.3.4 relied on IsSwimming=true in all liquid scenarios (Cata behaviour);
+                    // the TraceLine addition covers the WotLK-specific shallow-water case.
+                    else if (!me.HasAura("Sea Legs") &&
+                             (me.IsSwimming || GameWorld.TraceLine(traceLinePos, myLocation, GameWorld.CGWorldFrameHitFlags.HitTestLiquid)) &&
                              me.Class == WoWClass.Druid &&
                              (SpellManager.HasSpell("Flight Form") || SpellManager.HasSpell("Swift Flight Form")))
                     {
@@ -401,10 +440,16 @@ namespace Styx.Logic.Pathing
             WoWPoint traceLinePos = me.GetTraceLinePos();
             WoWPoint myLocation   = me.Location;
 
-            // Direct LOS to target — go straight
+            // Direct LOS to target — go straight.
+            // IMPORTANT: must use HitTestGroundAndStructures (0x100111), NOT IsInLineOfSight
+            // (which uses HitTestLOS = 0x100011, missing HitTestGround = 0x100).
+            // Without the ground flag, mountains are invisible to this check and the bot
+            // flies straight through solid terrain to reach nodes on the other side.
+            // HB 4.3.4 used HitTestLOS = 0x100121 which includes HitTestGround — same intent.
             if (destination.Z != 0.0 &&
                 traceLinePos.DistanceSqr(destination) < 40000.0 &&
-                GameWorld.IsInLineOfSight(traceLinePos, destination.Add(0.0f, 0.0f, 2f)))
+                !GameWorld.TraceLine(traceLinePos, destination.Add(0.0f, 0.0f, 2f),
+                    GameWorld.CGWorldFrameHitFlags.HitTestGroundAndStructures))
             {
                 return destination;
             }
@@ -529,6 +574,45 @@ namespace Styx.Logic.Pathing
         }
 
         /// <summary>
+        /// Find a nearby WoW object from which the bot can safely take off.
+        /// Ported from HB 6.2.3 Flightor.smethod_5.
+        /// </summary>
+        /// <param name="from">Current player location.</param>
+        /// <param name="losHeight">Check: IsInLineOfSight(object+2z, object+losHeight) — 10f normal, 200f checkIndoors.</param>
+        private static WoWObject FindTakeoffCandidate(WoWPoint from, float losHeight)
+        {
+            float minDistSq = Navigator.PathPrecision * Navigator.PathPrecision;
+            return ObjectManager.GetObjectsOfType<WoWObject>(true, false)
+                .Where(o => o is WoWGameObject || o is WoWUnit)
+                .OrderBy(o => o.DistanceSqr)
+                .FirstOrDefault(o =>
+                    o.DistanceSqr >= minDistSq
+                    && !Blacklist.Contains(o)
+                    && !Mount.IsInCantMountSpot(o.Location)
+                    && o.IsOutdoors
+                    && Navigator.CanNavigateWithin(from, o.Location, Navigator.PathPrecision)
+                    && GameWorld.IsInLineOfSight(o.Location.Add(0f, 0f, 2f), o.Location.Add(0f, 0f, losHeight)));
+        }
+
+        /// <summary>
+        /// Navigate to <see cref="_takeoffSpot"/> while suppressing any OnMountUp event.
+        /// Ported from HB 6.2.3 Flightor.smethod_4.
+        /// </summary>
+        private static void NavigateToTakeoffSpot()
+        {
+            void CancelMount(object sender, MountUpEventArgs e) => e.Cancel = true;
+            try
+            {
+                Mount.OnMountUp += CancelMount;
+                Navigator.MoveTo(_takeoffSpot);
+            }
+            finally
+            {
+                Mount.OnMountUp -= CancelMount;
+            }
+        }
+
+        /// <summary>
         /// Clear all cached path and anti-stuck state (WoD Flightor.Clear port).
         /// Called when the bot stops, or when blackspots/areas change.
         /// </summary>
@@ -542,6 +626,11 @@ namespace Styx.Logic.Pathing
             _polyNav      = null;
             _polyNavMapId = null;
             _lastDestination = _prevDestination = WoWPoint.Zero;
+            _takeoffSpot        = WoWPoint.Empty;
+            _takeoffDestination = WoWPoint.Empty;
+            // Release any held movement keys (e.g. Descend stuck active when bot stops
+            // mid-sequence in [4] before MoveStop() fires). Prevents the "key stuck" glitch.
+            WoWMovement.MoveStop();
         }
 
         /// <summary>
@@ -783,6 +872,20 @@ namespace Styx.Logic.Pathing
                     if (FlyingMount == null)
                         return false;
 
+                    // Respect post-combat and post-mount cooldowns from Mount.cs.
+                    // HB 6.2.3 Flightor delegates to Mount.CanMount() for these timers.
+                    // Exception: bypass timer when in liquid so the swimming-ascent handlers
+                    // fire every tick until the player clears the water.
+                    // WotLK: IsSwimming=false when standing on a riverbed (feet in water, head
+                    // above surface); TraceLine(eye→feet, HitTestLiquid) catches that case.
+                    // Without bypass, a failed mount attempt (WoW rejects flying mounts in liquid
+                    // even when IsSwimming=false) sets the 10 s timer → Navigator.MoveTo spam
+                    // every tick from an underwater position where nav has no mesh data.
+                    bool nearLiquid = me.IsSwimming ||
+                        GameWorld.TraceLine(me.GetTraceLinePos(), me.Location, GameWorld.CGWorldFrameHitFlags.HitTestLiquid);
+                    if (!Mount.AreMountTimersReady && !nearLiquid)
+                        return false;
+
                     // Check for overhead clearance
                     float boundingHeight = me.BoundingHeight;
                     WoWPoint from = me.Location + new WoWPoint(0.0f, 0.0f, boundingHeight);
@@ -795,7 +898,10 @@ namespace Styx.Logic.Pathing
             }
 
             /// <summary>
-            /// Check if currently on a flying mount
+            /// Check if currently on a flying mount.
+            /// WotLK-specific: checks druid shapeshift field first because CMovementData.CanFly
+            /// (0x800000) lags behind the shapeshift state by several ticks after form invocation.
+            /// Using CanFly alone causes an infinite mount-spam loop for druids.
             /// </summary>
             public static bool Mounted
             {
@@ -804,7 +910,7 @@ namespace Styx.Logic.Pathing
                     LocalPlayer me = StyxWoW.Me;
                     if (me == null) return false;
 
-                    // Sea Legs with aquatic form
+                    // Sea Legs: aquatic mounts, aquatic form, ghost — all count as "mounted".
                     if (me.HasAura("Sea Legs"))
                     {
                         if (me.HasAura("Aquatic Form") || me.IsGhost)
@@ -817,31 +923,25 @@ namespace Styx.Logic.Pathing
                         }
                     }
 
-                    // Druid flight form: check Shapeshift field (updates faster than CanFly movement flag)
+                    // Druid flight form: shapeshift field updates faster than CMovementData.CanFly.
+                    // Must check this before the CanFly flag to avoid mount-spam on every tick.
                     if (me.Class == WoWClass.Druid &&
                         (me.Shapeshift == ShapeshiftForm.EpicFlightForm ||
                          me.Shapeshift == ShapeshiftForm.FlightForm))
                         return true;
 
+                    // Primary check: CanFly movement flag (set via SMSG_MOVE_SET_CAN_FLY).
+                    // ActiveMover handles vehicle possession edge cases.
                     WoWUnit activeMover = WoWMovement.ActiveMover;
                     if ((activeMover != null && activeMover.MovementInfo.CanFly) || me.IsOnTransport)
                         return true;
 
+                    // Fallback for regular flying mounts: the aura is applied before CanFly is set.
                     WoWSpell flyingMount = FlyingMount;
                     return me.Mounted &&
                            flyingMount != null &&
-                           (me.Auras.Values.Any(a => a.SpellId == flyingMount.Id) ||
-                            IsCompanionMountActive(flyingMount.Id));
+                           me.Auras.Values.Any(a => a.SpellId == flyingMount.Id);
                 }
-            }
-
-            private static bool IsCompanionMountActive(int spellId)
-            {
-                return Lua.GetReturnVal<bool>(
-                    "for i=1,GetNumCompanions('MOUNT') do " +
-                    "local _,_,id,_,active=GetCompanionInfo('MOUNT', i); " +
-                    "if active and tonumber(id)==" + spellId + " then return true end " +
-                    "end return false", 0U);
             }
 
             /// <summary>
@@ -861,8 +961,17 @@ namespace Styx.Logic.Pathing
                 if (Navigator.IsRidingElevator)
                     return;
 
-                // Clear shapeshift if druid
-                Mount.ClearShapeshift();
+                WoWSpell flyingMount = FlyingMount;
+                if (flyingMount == null)
+                    return;
+
+                // Druid flight form transitions directly from any shapeshift form.
+                // Cancelling the current form first is unnecessary and risks a tick in
+                // caster form. HB 4.3.4: Druid path skips ClearShapeshift before flight form.
+                bool isDruidFlightForm = StyxWoW.Me.Class == WoWClass.Druid
+                    && (flyingMount.Name == "Swift Flight Form" || flyingMount.Name == "Flight Form");
+                if (!isDruidFlightForm)
+                    Mount.ClearShapeshift();
 
                 // Stop moving
                 if (StyxWoW.Me.IsMoving)
@@ -872,19 +981,17 @@ namespace Styx.Logic.Pathing
                         StyxWoW.SleepForLagDuration();
                 }
 
-                // Cast mount spell
-                WoWSpell flyingMount = FlyingMount;
-                if (flyingMount != null)
-                {
-                    Logging.Write("Mounting: {0}", flyingMount.Name);
-                    SpellManager.Cast(flyingMount);
+                Logging.Write("Mounting: {0}", flyingMount.Name);
+                SpellManager.Cast(flyingMount);
+                // Reset the mount timer so CanMount returns false for the next ~10s,
+                // preventing spam if the cast is cancelled (e.g. by water or GCD).
+                Mount.ResetMountTimer();
 
-                    if (!quick)
-                    {
-                        StyxWoW.SleepForLagDuration();
-                        StyxWoW.Sleep((int)flyingMount.CastTime);
-                        StyxWoW.SleepForLagDuration();
-                    }
+                if (!quick)
+                {
+                    StyxWoW.SleepForLagDuration();
+                    StyxWoW.Sleep((int)flyingMount.CastTime + 100);
+                    StyxWoW.SleepForLagDuration();
                 }
             }
 
