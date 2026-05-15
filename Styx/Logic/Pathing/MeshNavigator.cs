@@ -294,22 +294,22 @@ namespace Styx.Logic.Pathing
 					WoWPoint offMeshStartPt = _currentPath[_currentPathIndex - 1];
 					if (IsAtPoint(me.Location, offMeshEndPt) && offMeshAreaType != TripperNav.AreaType.Elevator)
 					{
-						_currentPathIndex++;
-						_ridingElevator = false;
-						if (_currentPathIndex >= _currentPath.Count)
-							return _isPartialPath ? MoveResult.Failed : MoveResult.ReachedDestination;
-						return MoveResult.Moved;
-					}
-
-					return DispatchOffMesh(me, offMeshEndPt, offMeshStartPt, offMeshAreaType);
+					_currentPathIndex++;
+					_ridingElevator = false;
+					if (_currentPathIndex >= _currentPath.Count)
+						return _isPartialPath ? MoveResult.Failed : MoveResult.ReachedDestination;
+					return MoveResult.Moved;
 				}
 
-				// Door handling (HB 6.2.3 method_7)
-				var doorResult = HandleDoors(me);
-				if (doorResult != null)
-					return doorResult.Value;
+				return DispatchOffMesh(me, offMeshEndPt, offMeshStartPt, offMeshAreaType);
+			}
 
-				// Stuck detection (HB 6.2.3 Class469)
+			// Door handling (HB 6.2.3 method_7)
+			var doorResult = HandleDoors(me);
+			if (doorResult != null)
+				return doorResult.Value;
+
+			// Stuck detection (HB 6.2.3 Class469)
 				bool isAtOffMesh = _currentFlags != null && _currentPathIndex > 0
 					&& (_currentPathIndex - 1) < _currentFlags.Length
 					&& (_currentFlags[_currentPathIndex - 1] & TripperNav.StraightPathFlags.OffMeshConnection) != 0;
@@ -912,7 +912,15 @@ namespace Styx.Logic.Pathing
 				}
 			}
 
-			WoWMovement.ClickToMove(targetPoint);
+			// WoW CTM (type Move) uses client-side pathfinding which stops at ledge edges —
+			// it cannot navigate to a point significantly below the current terrain.
+			// For fall-down connections: project Z to player's current Z so WoW walks
+			// forward over the edge and gravity handles the drop.
+			WoWPoint moveTarget = targetPoint;
+			if (me.Location.Z - targetPoint.Z > 2.0f)
+				moveTarget = new WoWPoint(targetPoint.X, targetPoint.Y, me.Location.Z);
+
+			WoWMovement.ClickToMove(moveTarget);
 			return MoveResult.Moved;
 		}
 
@@ -928,7 +936,8 @@ namespace Styx.Logic.Pathing
 
 			var transport = ObjectManager.GetObjectsOfType<WoWGameObject>(false, false)
 				.Where(go => go.SubType == WoWGameObjectType.Transport
-				              && go.Entry != 20657 && go.Entry != 20656)
+				              && go.Entry != 20657 && go.Entry != 20656
+				              && go.Entry != 20655 && go.Entry != 20654) // WotLK lowerLdoor/upperLdoor (equiv. WoD 205080)
 				.OrderBy(go => go.Location.Distance2DSqr(playerPos))
 				.FirstOrDefault();
 

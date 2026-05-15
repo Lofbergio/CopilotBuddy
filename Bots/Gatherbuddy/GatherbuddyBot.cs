@@ -169,9 +169,6 @@ namespace Bots.Gatherbuddy
 
             ReloadWaypoints();
 
-            if (ProfileManager.CurrentProfile.Blackspots?.Count > 0)
-                BlackspotManager.AddBlackspots(ProfileManager.CurrentProfile.Blackspots);
-
             // HB 6.2.3: invalidate cached PolyNav after loading blackspots so the flight engine
             // rebuilds its path around any new aerial obstacles from the profile.
             Flightor.Clear();
@@ -695,14 +692,15 @@ namespace Bots.Gatherbuddy
                     if (!MerchantFrame.Instance.IsVisible)
                         return RunStatus.Running;
 
-                    Vendors.ForceSell = true;
+                    // Sell items — LevelBot.cs smethod_134 pattern.
+                    Vendors.SellAllItems();
+                    StyxWoW.SleepForLagDuration();
                     if (GatherBuddySettings.Instance.RepairAtVendor)
                     {
                         Lua.DoString("RepairAllItems()");
                         StyxWoW.SleepForLagDuration();
                     }
                     MerchantFrame.Instance.Close();
-                    Vendors.ForceSell = false;
                     return RunStatus.Success;
                 })
             );
@@ -981,7 +979,7 @@ namespace Bots.Gatherbuddy
 
                 // [4] Still airborne after reaching approach point — descend and dismount.
                 //     Clear _approachPoint so CalculateApproachPoint recomputes after landing.
-                //     WoD: Decorator(method_44, Seq(45,46,WC(47),DC(48,49),50))
+                //     HB 4.3.4 smethod_54/55/63/64 pattern.
                 new Decorator(
                     ctx => StyxWoW.Me.MovementInfo.IsFlying,
                     new Sequence(
@@ -991,9 +989,17 @@ namespace Bots.Gatherbuddy
                             WoWMovement.Move(WoWMovement.MovementDirection.Descend);
                             return RunStatus.Success;
                         }),
+                        // HB 6.2.3 method_47: WaitContinue(1, !IsFlying).
+                        // 1s gives time to start descending. The outer Decorator re-evaluates
+                        // each tick if IsFlying=true → Dismount re-attempted until landed.
+                        // WaitContinue(5) was blocking the tree for the full duration → 5-6s delay.
                         new WaitContinue(1,
                             ctx => !StyxWoW.Me.MovementInfo.IsFlying,
                             new ActionAlwaysSucceed()),
+                        // HB 4.3.4 smethod_55: explicitly stop Descend key immediately on landing.
+                        // Without this, the key stays held through the dismount step, causing the
+                        // character to slide past the node before MoveStop() at the end fires.
+                        new Action(ctx => { WoWMovement.MoveStop(WoWMovement.MovementDirection.Descend); return RunStatus.Success; }),
                         // Dismount if still airborne or if we overshot and are out of range.
                         new DecoratorContinue(
                             ctx => StyxWoW.Me.MovementInfo.IsFlying ||
@@ -1071,23 +1077,22 @@ namespace Bots.Gatherbuddy
                             obj.Interact();
                         return RunStatus.Success;
                     }),
-                    // Wait up to 5 seconds for loot frame, combat, flight, or node disappears.
+                    // Wait up to 5 s for the loot frame — returns Failure on timeout (HB pattern).
+                    // smethod_77: LootFrame visible OR combat OR ctx null/changed → run loot action.
+                    // smethod_78: reset timer, blacklist 2 s (re-mine gap), LootAll, log.
+                    // WoD: new Wait(5, smethod_77, Action(smethod_78))
                     new Wait(5,
-                        ctx =>
+                        ctx => LootFrame.Instance.IsVisible
+                            || StyxWoW.Me.Combat
+                            || ctx == null
+                            || (ctx is WoWObject wCtx && wCtx != _currentNode),
+                        new Action(ctx =>
                         {
-                            if (StyxWoW.Me.Combat) return true;
-                            if (StyxWoW.Me.MovementInfo.IsFlying) return true;
-                            if (LootFrame.Instance.IsVisible && LootFrame.Instance.LootItems > 0) return true;
-                            if (ctx == null || (WoWObject)ctx != _currentNode) return true;
-                            return false;
-                        },
-                        new Sequence(
-                            // Loot all items from the frame. WoD: method_67
-                            new Action(ctx =>
+                            _gatherTimer.Reset();
+                            if (!StyxWoW.Me.Combat)
                             {
-                                if (StyxWoW.Me.Combat)
-                                    return RunStatus.Success;
-
+                                if (ctx is WoWObject ctxNode)
+                                    Blacklist.Add(ctxNode.Guid, TimeSpan.FromSeconds(2.0));
                                 WoWObject obj = ObjectManager.GetAnyObjectByGuid<WoWObject>(
                                     LootFrame.Instance.LootingObjectGuid);
                                 if (obj != null)
@@ -1100,20 +1105,13 @@ namespace Bots.Gatherbuddy
                                         NodeCollectionCount[name]++;
                                     }
                                     LootFrame.Instance.LootAll();
+                                    StyxWoW.SleepForLagDuration();
                                     _approachPoint = WoWPoint.Zero;
                                     Log("{0} {1}.", obj is WoWGameObject ? "Harvested" : "Looted", name);
                                 }
-                                return RunStatus.Success;
-                            }),
-                            // Abort wait early if combat fires, node is gone, or node becomes unusable.
-                            // WoD: method_68
-                            new WaitContinue(2,
-                                ctx => StyxWoW.Me.Combat ||
-                                       ctx == null ||
-                                       (ctx is WoWObject wo && !wo.IsValid) ||
-                                       (ctx is WoWGameObject wgo && !wgo.CanUse()),
-                                new ActionAlwaysSucceed())
-                        )
+                            }
+                            return RunStatus.Success;
+                        })
                     ),
                     // Node depleted after loot — advance the waypoint queue.
                     // WoD: Decorator(method_69, method_15)
@@ -1360,7 +1358,11 @@ namespace Bots.Gatherbuddy
                     }
 
                     // Unnavigable from current position (ground-only check).
-                    if (!canFly && !Navigator.CanNavigateWithin(myLoc, nodePos, 2.5f))
+                    // Skip when any mount is active: Flightor.MountHelper.Mounted only matches the
+                    // flying-mount aura, so a ground mount (MountName="61230" etc.) returns false
+                    // even though me.Mounted is true → CanNavigateWithin fires from ground Z → FAILED.
+                    // StyxWoW.Me.Mounted is the raw WoW flag and is true for any active mount.
+                    if (!canFly && !StyxWoW.Me.Mounted && !Flightor.MountHelper.Mounted && !Navigator.CanNavigateWithin(myLoc, nodePos, 2.5f))
                     {
                         BlacklistNodes[nodePos] = "Unnavigable node";
                         list.RemoveAt(i);

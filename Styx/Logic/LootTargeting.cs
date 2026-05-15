@@ -162,7 +162,15 @@ namespace Styx.Logic
 
         protected override List<WoWObject> GetInitialObjectList()
         {
-            return ObjectManager.ObjectList;
+            // LootTargeting only needs WoWUnit (mob loot/skin) and WoWGameObject (nodes/chests).
+            // Using typed caches (400ms TimeCachedValue) avoids rebuilding the full object list
+            // every tick and skips irrelevant types (WoWPlayer, WoWItem, WoWDynamicObject, etc.)
+            var units   = ObjectManager.CachedUnits;
+            var objects = ObjectManager.CachedObjects;
+            var result  = new List<WoWObject>(units.Count + objects.Count);
+            result.AddRange(units);
+            result.AddRange(objects);
+            return result;
         }
     }
 }

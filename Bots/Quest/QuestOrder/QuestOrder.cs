@@ -1,9 +1,10 @@
 // QuestOrder.cs - Quest order management system
-// Ported from HB 4.3.4
+// Ported from HB 4.3.4, NavType auto-detection from HB Legion
 
 using System;
 using System.Collections.Generic;
 using Styx;
+using Styx.Logic.Pathing;
 using Styx.Logic.Profiles.Quest;
 using Styx.WoWInternals;
 
@@ -14,13 +15,18 @@ namespace Bots.Quest.QuestOrder
     /// </summary>
     public class QuestOrder
     {
+        // Legion: QuestOrder.Instance singleton — set in ctor.
+        public static QuestOrder Instance { get; private set; }
+
         public QuestOrder()
         {
+            Instance = this;
             Nodes = new OrderNodeCollection();
         }
 
         public QuestOrder(OrderNodeCollection order)
         {
+            Instance = this;
             Nodes = order;
         }
 
@@ -51,6 +57,23 @@ namespace Bots.Quest.QuestOrder
         /// The currently executing forced behavior.
         /// </summary>
         public ForcedBehavior CurrentBehavior { get; set; }
+
+        /// <summary>
+        /// Effective NavType for the current movement node.
+        /// Priority: ForcedBehavior.NavType → Flightor.CanFly auto-detect.
+        /// Legion: QuestOrder.NavType property (same cascade logic).
+        /// </summary>
+        public NavType NavType
+        {
+            get
+            {
+                NavType? fromBehavior = CurrentBehavior?.NavType;
+                if (fromBehavior.HasValue)
+                    return fromBehavior.Value;
+                // Auto-detect: fly if the player has skill + mount + flyable area.
+                return Flightor.CanFly ? NavType.Fly : NavType.Run;
+            }
+        }
 
         /// <summary>
         /// The current node being processed.

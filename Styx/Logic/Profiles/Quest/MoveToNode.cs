@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Xml.Linq;
+using Styx;
 using Styx.Logic.Pathing;
 
 #nullable disable
@@ -8,13 +9,14 @@ namespace Styx.Logic.Profiles.Quest
 {
     public class MoveToNode : OrderNode
     {
-        public MoveToNode(WoWPoint location, string locationName, float precision, uint questId)
+        public MoveToNode(WoWPoint location, string locationName, float precision, uint questId, NavType? navType = null)
             : base(OrderNodeType.MoveTo)
         {
             this.Location = location;
             this.LocationName = locationName ?? $"<{location.X}, {location.Y}, {location.Z}>";
             this.Precision = precision;
             this.QuestId = questId;
+            this.NavType = navType;
         }
 
         public WoWPoint Location { get; private set; }
@@ -25,7 +27,12 @@ namespace Styx.Logic.Profiles.Quest
 
         public uint QuestId { get; private set; }
 
-        public override string ToString() => $"[MoveToNode Location: {this.Location}]";
+        // null = auto-detect at execution time (Flightor.CanFly ? Fly : Run).
+        // Legion: MoveToNode.NavType (nullable). HB 4.3.4 had no NavType — profiles
+        // used separate FlyTo QB behavior. We unify here.
+        public NavType? NavType { get; private set; }
+
+        public override string ToString() => $"[MoveToNode Location: {this.Location} NavType: {this.NavType?.ToString() ?? "Auto"}]";
 
         public static MoveToNode FromXml(XElement element)
         {
@@ -54,7 +61,18 @@ namespace Styx.Logic.Profiles.Quest
             if (questAttr != null && !uint.TryParse(questAttr.Value, out questId))
                 throw new ProfileAttributeExpectedException<int>(questAttr);
 
-            return new MoveToNode(location, locationName, precision, questId);
+            // Nav="Fly" or Nav="Run" — optional. Absent = auto-detect.
+            NavType? navType = null;
+            var navAttr = element.Attribute("Nav");
+            if (navAttr != null)
+            {
+                if (Enum.TryParse<NavType>(navAttr.Value, true, out NavType parsed))
+                    navType = parsed;
+                else
+                    throw new ProfileException($"Invalid Nav value '{navAttr.Value}' — expected Fly or Run.");
+            }
+
+            return new MoveToNode(location, locationName, precision, questId, navType);
         }
 
         private static WoWPoint ParseLocation(XElement element)

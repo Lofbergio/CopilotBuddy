@@ -20,18 +20,20 @@ namespace Bots.Quest.QuestOrder;
 public class ForcedMoveTo : ForcedBehavior
 {
     private bool hasReachedLocation;
+    private readonly NavType? _navType;
 
     public ForcedMoveTo(WoWPoint location, uint questId)
-        : this(location, (string)null, 1.5f, questId)
+        : this(location, null, 1.5f, questId, null)
     {
     }
 
-    public ForcedMoveTo(WoWPoint location, string locationName, float precision, uint questId)
+    public ForcedMoveTo(WoWPoint location, string locationName, float precision, uint questId, NavType? navType = null)
     {
         this.Location = location;
         this.LocationName = locationName ?? $"<{location.X.ToStringInvariant()}, {location.Y.ToStringInvariant()}, {location.Z.ToStringInvariant()}>";
         this.Precision = precision;
         this.QuestId = questId;
+        _navType = navType;
     }
 
     public WoWPoint Location { get; private set; }
@@ -42,17 +44,41 @@ public class ForcedMoveTo : ForcedBehavior
 
     public uint QuestId { get; private set; }
 
+    // Legion: ForcedBehavior.NavType override — null means auto-detect.
+    public override NavType? NavType => _navType;
+
     protected override Composite CreateBehavior()
     {
-        return (Composite)new Action((ActionSucceedDelegate)(context =>
+        return new Action((ActionSucceedDelegate)(context =>
         {
             if (ObjectManager.Me.Location.DistanceSqr(this.Location) <= this.Precision * this.Precision)
             {
-                this.hasReachedLocation = true;
+                hasReachedLocation = true;
+                return;
             }
-            if (Mount.ShouldMount(this.Location))
-                Mount.StateMount((LocationRetriever)(() => this.Location));
-            Navigator.MoveTo(this.Location);
+
+            // Resolve effective NavType: node override → QuestOrder auto-detect (Flightor.CanFly).
+            // QuestOrder.NavType is non-nullable and always returns a value — no further fallback needed.
+            // Legion: ForcedMoveTo.method_0 line 70 used QuestOrder.Instance.NavType directly.
+            NavType effective = QuestOrder.Instance?.NavType ?? (Flightor.CanFly ? Styx.NavType.Fly : Styx.NavType.Run);
+
+            if (effective == Styx.NavType.Fly)
+            {
+                if (this.Location.DistanceSqr(ObjectManager.Me.Location) < 100f)
+                {
+                    // Within 10y: land and finish on foot.
+                    Mount.Dismount("ForcedMoveTo: reached destination");
+                    hasReachedLocation = true;
+                    return;
+                }
+                Flightor.MoveTo(this.Location, 40f);
+            }
+            else
+            {
+                if (Mount.ShouldMount(this.Location))
+                    Mount.StateMount((LocationRetriever)(() => this.Location));
+                Navigator.MoveTo(this.Location);
+            }
         }));
     }
 

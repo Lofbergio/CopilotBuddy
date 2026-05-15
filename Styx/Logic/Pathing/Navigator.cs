@@ -474,9 +474,13 @@ namespace Styx.Logic.Pathing
 				return MoveResult.ReachedDestination;
 
 			// Auto-mount check (HB 6.2.3 MeshNavigator L231)
+			// Guard: skip ground-mount logic when in a flyable zone — Flightor owns mounting there.
+			// Without this guard, Navigator.MoveTo fires Mount.StateMount (LevelBot ground path)
+			// the moment Flightor.MountHelper._mountTimer expires, casting a ground mount instead
+			// of the flying mount and causing a 10-second CalculatePathEx FAILED spam loop.
 			try
 			{
-				if (Mount.ShouldMount(destination))
+				if (!Flightor.CanFly && Mount.ShouldMount(destination))
 				{
 					WoWPoint dest = destination;
 					Mount.StateMount(() => dest);

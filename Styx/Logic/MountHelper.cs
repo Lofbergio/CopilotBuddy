@@ -225,21 +225,31 @@ namespace Styx.Logic
                         }
                         else
                         {
-                            // WotLK 3.3.5a has no Mount.dbc — MiscValueB is always 0.
-                            // Classify by inspecting spell effects for flight-speed auras.
-                            // Raw WotLK DBC values (verified against TrinityCore spell 32290 etc.):
+                            // WotLK 3.3.5a: no Mount.dbc. Classify by inspecting all spell effects.
+                            // WotLK flying mount spells include one of these aura types:
                             //   152 = SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED
                             //   153 = SPELL_AURA_MOD_INCREASE_FLIGHT_SPEED
                             //   154 = SPELL_AURA_MOUNTED_FLIGHT_SPEED_ALWAYS
                             //   156 = SPELL_AURA_MOD_MOUNTED_FLIGHT_SPEED_NOT_STACK
-                            // Our WoWApplyAuraType enum is sequential (not matching WotLK values),
-                            // so compare the raw int cast.
-                            Type = MountType.Ground; // default to ground
+                            // WotLK ground mounts only have aura 32 (MOD_INCREASE_MOUNTED_SPEED)
+                            // with BasePoints ≤ 100 (60% or 100% speed).
+                            // Flying mounts add a *second* speed effect with BasePoints > 100
+                            // (150% for regular flying, 280%/310% for epic/master flying).
+                            Type = MountType.Ground; // safe default
                             foreach (var effect in CreatureSpell.SpellEffects)
                             {
                                 if (effect == null) continue;
                                 int auraId = (int)effect.AuraType;
+                                // Primary: known flight-speed aura IDs from WotLK DBC.
                                 if (auraId == 152 || auraId == 153 || auraId == 154 || auraId == 156)
+                                {
+                                    Type = MountType.Flying;
+                                    break;
+                                }
+                                // Secondary: speed-modifier aura with BasePoints > 100 → flying speed.
+                                // Ground mounts: 60% (BasePoints=59) or 100% (BasePoints=99).
+                                // Flying mounts have at least 150% extra (BasePoints >= 149).
+                                if ((auraId == 32 || auraId == 129 || auraId == 130) && effect.BasePoints >= 149)
                                 {
                                     Type = MountType.Flying;
                                     break;

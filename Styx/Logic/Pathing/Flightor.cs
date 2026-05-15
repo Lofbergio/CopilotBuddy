@@ -67,10 +67,16 @@ namespace Styx.Logic.Pathing
             {
                 WoWUnit activeMover = WoWMovement.ActiveMover;
                 if (activeMover == null) return false;
+                if (!activeMover.IsMe || StyxWoW.Me.InVehicle) return false;
+
+                // If the player is already airborne, CanFly is true by definition.
+                // This prevents RemoveLootFilter from calling CanNavigateWithin (→ CalculatePathEx)
+                // from mid-air when mount classification fails to populate FlyingMounts.
+                if (StyxWoW.Me.MovementInfo.IsFlying) return true;
+
                 // NOTE: do NOT add MovementInfo.CanFly fast-path here.
                 // That bypasses IsFlyableArea() and causes Navigator→Flightor→Navigator recursion
                 // when the player is already airborne in a no-fly zone (Dalaran etc.).
-                if (!activeMover.IsMe || StyxWoW.Me.InVehicle) return false;
                 bool hasFlyingRiding = SpellManager.HasSpell("Expert Riding") ||
                                        SpellManager.HasSpell("Artisan Riding") ||
                                        SpellManager.HasSpell("Master Riding");
@@ -79,7 +85,7 @@ namespace Styx.Logic.Pathing
                                            SpellManager.HasSpell("Flight Form"));
 
                 return (hasFlyingRiding || hasDruidFlightForm)
-                    && !StyxWoW.Me.IsSwimming                             // WotLK: flight form cancelled immediately in water
+                    && !StyxWoW.Me.IsSwimming
                     && Lua.GetReturnVal<bool>("return IsFlyableArea()", 0U)
                     && MountHelper.FlyingMount != null
                     && (StyxWoW.Me.Level >= 60 || StyxWoW.Me.Class == WoWClass.Druid)
@@ -111,8 +117,8 @@ namespace Styx.Logic.Pathing
         {
             if (StyxWoW.Me.HasAura("Sea Legs")) return false;
             if (MountHelper.Mounted)             return false;
-            // WotLK: when swimming, ground nav fails underwater — let code fall through to
-            // the liquid-ascent handlers instead of spamming Navigator.MoveTo.
+            // HB WoD: never walk if already airborne — CalculatePathEx from mid-air always fails.
+            if (StyxWoW.Me.MovementInfo.IsFlying) return false;
             if (StyxWoW.Me.IsSwimming)           return false;
             if (!CanFly)                         return true;
 
@@ -183,8 +189,10 @@ namespace Styx.Logic.Pathing
             // Not mounted - need to mount up
             if (!MountHelper.Mounted)
             {
-                // HB 6.2.3 smethod_10: can we take off from the current position?
-                // Uses 10f LOS height (normal mode, not checkIndoors/Garrison). (F6)
+                // HB 6.2.3 smethod_10 lines 581/604: can we take off from here?
+                // HB 6.2.3 reduced the LOS probe from 30f (4.3.4) → 10f for normal mode
+                // (flag2=false → not WoD Maelstrom map). 30f caused false negatives in canyons:
+                // wall blocked the 30f ray → canFlyFromHere=false → FindTakeoffCandidate spam.
                 bool canFlyFromHere = me.IsOutdoors
                     && !Mount.IsInCantMountSpot(myLocation)
                     && (hasSeaLegs || GameWorld.IsInLineOfSight(traceLinePos, myLocation.Add(0f, 0f, 10f)));
@@ -249,13 +257,9 @@ namespace Styx.Logic.Pathing
                         WoWPoint p = GetPointInDirection(myLocation, 10f, neededFacing, WoWMathHelper.DegreesToRadians(60f));
                         Navigator.PlayerMover.MoveTowards(p);
                     }
-                    // Druid flight form while swimming or standing on riverbed.
-                    // WotLK: IsSwimming=false when standing on a riverbed (feet below water
-                    // surface, head above) — TraceLine(eye→feet, HitTestLiquid) detects this.
-                    // HB 4.3.4 relied on IsSwimming=true in all liquid scenarios (Cata behaviour);
-                    // the TraceLine addition covers the WotLK-specific shallow-water case.
+                    // Druid flight form while swimming — HB 4.3.4 exact port.
                     else if (!me.HasAura("Sea Legs") &&
-                             (me.IsSwimming || GameWorld.TraceLine(traceLinePos, myLocation, GameWorld.CGWorldFrameHitFlags.HitTestLiquid)) &&
+                             me.IsSwimming &&
                              me.Class == WoWClass.Druid &&
                              (SpellManager.HasSpell("Flight Form") || SpellManager.HasSpell("Swift Flight Form")))
                     {
@@ -275,8 +279,15 @@ namespace Styx.Logic.Pathing
                 }
                 else
                 {
-                    // Can't mount, use ground navigation
-                    Navigator.MoveTo(destination);
+                    // CanMount=false. Two sub-cases:
+                    // 1) CanFly=true, not in combat: the post-mount/post-combat timer isn't
+                    //    ready yet (e.g. mount fired <10s ago for a quick gather). Calling
+                    //    Navigator.MoveTo with an aerial waypoint spams CalculatePathEx:FAILED.
+                    //    Just return — next tick retries CanMount until the timer expires.
+                    // 2) Ground-only map (!CanFly), or currently in combat: fall back to
+                    //    ground navigation as HB originally intended.
+                    if (!CanFly || me.Combat)
+                        Navigator.MoveTo(destination);
                 }
             }
             else
@@ -628,8 +639,10 @@ namespace Styx.Logic.Pathing
             _lastDestination = _prevDestination = WoWPoint.Zero;
             _takeoffSpot        = WoWPoint.Empty;
             _takeoffDestination = WoWPoint.Empty;
-            // Release any held movement keys (e.g. Descend stuck active when bot stops
-            // mid-sequence in [4] before MoveStop() fires). Prevents the "key stuck" glitch.
+            // Always release the Descend key explicitly via MoveStop(Descend) — bypasses the
+            // early-return guard in MoveStop() that can skip NativeMove when ActiveInputControl.Flags
+            // reads stale (race between our NativeMove write and the game's flag update).
+            WoWMovement.MoveStop(WoWMovement.MovementDirection.Descend);
             WoWMovement.MoveStop();
         }
 
@@ -800,8 +813,8 @@ namespace Styx.Logic.Pathing
                         // Try FlyingMounts list first (correctly classified)
                         var mount = Styx.Logic.MountHelper.FlyingMounts.FirstOrDefault(m =>
                             m.Name == mountName ||
-                            m.CreatureId.ToString() == mountName ||
-                            m.Name.ToLower().Contains(mountName.ToLower()));
+                            m.CreatureSpellId.ToString(System.Globalization.CultureInfo.InvariantCulture) == mountName ||
+                            m.Name.ToLowerInvariant().Contains(mountName.ToLowerInvariant()));
 
                         if (mount != null)
                             return mount.CreatureSpell;
@@ -810,8 +823,8 @@ namespace Styx.Logic.Pathing
                         // may still leave some mounts as MountType.Ground if the spell data differs.
                         mount = Styx.Logic.MountHelper.Mounts.FirstOrDefault(m =>
                             m.Name == mountName ||
-                            m.CreatureId.ToString() == mountName ||
-                            m.Name.ToLower().Contains(mountName.ToLower()));
+                            m.CreatureSpellId.ToString(System.Globalization.CultureInfo.InvariantCulture) == mountName ||
+                            m.Name.ToLowerInvariant().Contains(mountName.ToLowerInvariant()));
 
                         if (mount != null)
                             return mount.CreatureSpell;
@@ -873,14 +886,9 @@ namespace Styx.Logic.Pathing
                         return false;
 
                     // Respect post-combat and post-mount cooldowns from Mount.cs.
-                    // HB 6.2.3 Flightor delegates to Mount.CanMount() for these timers.
-                    // Exception: bypass timer when in liquid so the swimming-ascent handlers
-                    // fire every tick until the player clears the water.
-                    // WotLK: IsSwimming=false when standing on a riverbed (feet in water, head
-                    // above surface); TraceLine(eye→feet, HitTestLiquid) catches that case.
-                    // Without bypass, a failed mount attempt (WoW rejects flying mounts in liquid
-                    // even when IsSwimming=false) sets the 10 s timer → Navigator.MoveTo spam
-                    // every tick from an underwater position where nav has no mesh data.
+                    // Bypass timer when near liquid so swim-ascent handlers fire every tick
+                    // until the player clears the water (WotLK: IsSwimming=false on riverbed,
+                    // TraceLine(eye→feet, Liquid) catches that shallow-water case).
                     bool nearLiquid = me.IsSwimming ||
                         GameWorld.TraceLine(me.GetTraceLinePos(), me.Location, GameWorld.CGWorldFrameHitFlags.HitTestLiquid);
                     if (!Mount.AreMountTimersReady && !nearLiquid)

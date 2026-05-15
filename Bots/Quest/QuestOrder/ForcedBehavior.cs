@@ -1,7 +1,8 @@
 // ForcedBehavior.cs - Base class for forced quest behaviors
-// Ported from HB 4.3.4
+// Ported from HB 4.3.4, NavType added from HB Legion
 
 using System;
+using Styx;
 using TreeSharp;
 
 namespace Bots.Quest.QuestOrder
@@ -37,6 +38,12 @@ namespace Bots.Quest.QuestOrder
         /// Returns true when this behavior has completed its task.
         /// </summary>
         public abstract bool IsDone { get; }
+
+        /// <summary>
+        /// NavType for this behavior. null = auto-detect (Flightor.CanFly).
+        /// Legion: ForcedBehavior.NavType (nullable).
+        /// </summary>
+        public virtual NavType? NavType => null;
 
         /// <summary>
         /// Called when this behavior starts executing.

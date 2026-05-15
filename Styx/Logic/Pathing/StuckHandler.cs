@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Windows.Media;
@@ -14,18 +13,17 @@ namespace Styx.Logic.Pathing
 {
     /// <summary>
     /// Handles stuck detection and recovery for WoW 3.3.5a.
-    /// Direct port of HB 6.2.3 Class469 (MeshNavigator stuck handler).
-    /// Sequence: Dismount → Jump(1x, LOS-gated) → StrafeFwdL → StrafeFwdR → Dismount2 → StrafeL → StrafeR → Blackspot+Reverse
+    /// Stuck detection: HB 4.3.4 Class485.method_0() — WaitTimer(2s) + straight-line RunSpeed/2 threshold.
+    /// Unstick sequence: Dismount → Jump(1x, LOS-gated) → StrafeFwdL → StrafeFwdR → Dismount2 → StrafeL → StrafeR → Blackspot+Reverse
     /// </summary>
     internal class DefaultStuckHandler : StuckHandler
     {
         private const float UnstickResetDistanceSqr = 100f;
         private const float DismountRaycastDistance = 3f;
         private const float JumpRaycastDistance = 2f;
-        private const float ExpectedDistanceScale = 0.6f;
 
         private readonly WaitTimer _mountUpBlockTimer = new WaitTimer(TimeSpan.FromSeconds(10.0));
-        private readonly Stopwatch _movementStopwatch = new Stopwatch();
+        private readonly WaitTimer _stuckCheckTimer = new WaitTimer(TimeSpan.FromSeconds(2.0));
 
         private WoWPoint _lastCheckLocation = WoWPoint.Empty;
         private WoWPoint _lastUnstickLocation = WoWPoint.Empty;
@@ -42,7 +40,7 @@ namespace Styx.Logic.Pathing
         public DefaultStuckHandler()
         {
             _lastCheckLocation = WoWPoint.Empty;
-            _movementStopwatch.Restart();
+            _stuckCheckTimer.Reset();
         }
 
         public override void OnSetAsCurrent()
@@ -72,17 +70,20 @@ namespace Styx.Logic.Pathing
 
         private void OnMovementFlagsChanged(WoWMovement.MovementEventArgs e)
         {
-            if (e.Stop)
-            {
-                _movementStopwatch.Restart();
-                _lastCheckLocation = WoWPoint.Empty;
-            }
+            // HB 4.3.4 Class485: no timer reset on movement stop — the 2-second
+            // stuck check timer runs continuously and independently of movement events.
+            // Resetting it here would prevent detection during waypoint-to-waypoint navigation.
         }
 
         public override bool IsStuck()
         {
             var me = ObjectManager.Me;
             if (me == null)
+                return false;
+
+            // HB 4.3.4 Class485.IsStuck(): never fire stuck detection during combat —
+            // ranged classes (Balance Druid, Mage, etc.) stand still intentionally.
+            if (me.Combat)
                 return false;
 
             if (me.Stunned || me.Fleeing || me.Dazed || me.Rooted)
@@ -95,29 +96,37 @@ namespace Styx.Logic.Pathing
             if (activeMover == null || !activeMover.IsMe)
                 return false;
 
-            if (_movementStopwatch.ElapsedMilliseconds < 500L)
+            // HB 4.3.4 Class485.method_0(): check only every 2 seconds.
+            if (!_stuckCheckTimer.IsFinished)
                 return false;
 
+            _stuckCheckTimer.Reset();
+
             WoWPoint currentLocation = activeMover.Location;
-            if (_lastCheckLocation != WoWPoint.Empty)
+            if (_lastCheckLocation == WoWPoint.Empty)
             {
-                float expectedDistance = GetExpectedTravelDistance(activeMover, _movementStopwatch.Elapsed) * ExpectedDistanceScale;
-                float? pathDistance = Navigator.PathDistance(_lastCheckLocation, currentLocation, expectedDistance);
-                if (pathDistance != null && pathDistance < expectedDistance)
-                {
-                    Logging.WriteVerbose(Colors.Red, "We are stuck! (TPS: {0:F1}, Latency: {1}, loc: {2})!",
-                        GameStats.TicksPerSecond,
-                        StyxWoW.WoWClient.Latency,
-                        currentLocation);
-                    LogNearestGameObject();
-                    _lastCheckLocation = currentLocation;
-                    return true;
-                }
+                _lastCheckLocation = currentLocation;
+                return false;
             }
 
-            _movementStopwatch.Restart();
-            _lastCheckLocation = currentLocation;
-            return false;
+            // Straight-line distance — no PathDistance / navmesh query (HB 4.3.4 exact pattern).
+            // Threshold: RunSpeed / 2 ≈ 3.5 yards in 2 seconds at base run speed.
+            bool movedEnough = currentLocation.Distance(_lastCheckLocation) > activeMover.MovementInfo.RunSpeed / 2f;
+            if (movedEnough)
+            {
+                _lastCheckLocation = currentLocation;
+                return false;
+            }
+
+            Logging.WriteVerbose(Colors.Red, "We are stuck! (TPS: {0:F1}, Latency: {1}, loc: {2})!",
+                GameStats.TicksPerSecond,
+                StyxWoW.WoWClient.Latency,
+                currentLocation);
+            LogNearestGameObject();
+            // HB 4.3.4: do NOT update _lastCheckLocation when stuck.
+            // Next 2-second tick will still compare from the same reference point,
+            // keeping stuck detection active until Unstick() actually moves the bot.
+            return true;
         }
 
         public override void Unstick()
@@ -206,12 +215,12 @@ namespace Styx.Logic.Pathing
                 ResetUnstickAttempts();
             }
 
-            _movementStopwatch.Restart();
+            _stuckCheckTimer.Reset();
         }
 
         public override void Reset()
         {
-            _movementStopwatch.Restart();
+            _stuckCheckTimer.Reset();
             _lastCheckLocation = WoWPoint.Empty;
             ResetUnstickAttempts();
         }
@@ -270,13 +279,6 @@ namespace Styx.Logic.Pathing
                 nearestGameObject.Name);
         }
 
-        private float GetExpectedTravelDistance(WoWUnit mover, TimeSpan timeSpan)
-        {
-            float speed = mover.MovementInfo.IsSwimming
-                ? mover.MovementInfo.SwimSpeed
-                : mover.MovementInfo.RunSpeed;
-            return speed * (float)timeSpan.TotalSeconds;
-        }
 
 
     }
