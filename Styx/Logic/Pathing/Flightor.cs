@@ -117,6 +117,11 @@ namespace Styx.Logic.Pathing
         {
             if (StyxWoW.Me.HasAura("Sea Legs")) return false;
             if (MountHelper.Mounted)             return false;
+            // Raw WoW mount flag covers ground mounts and the CanFly-flag timing window
+            // right after casting a flying mount (SMSG_MOVE_SET_CAN_FLY may not yet be
+            // processed, so MountHelper.Mounted can return false while StyxWoW.Me.Mounted
+            // is already true). Mirrors the !StyxWoW.Me.Mounted guard in RemoveLootFilter.
+            if (StyxWoW.Me.Mounted)              return false;
             // HB WoD: never walk if already airborne — CalculatePathEx from mid-air always fails.
             if (StyxWoW.Me.MovementInfo.IsFlying) return false;
             if (StyxWoW.Me.IsSwimming)           return false;
@@ -180,7 +185,8 @@ namespace Styx.Logic.Pathing
             // Ground nav is faster than mounting and flying: prefer walking (HB smethod_9)
             if (ShouldWalk(destination))
             {
-                Navigator.MoveTo(destination);
+                // Project destination to player Z before ground nav — aerial Z causes CalculatePathEx:FAILED.
+                Navigator.MoveTo(new WoWPoint(destination.X, destination.Y, myLocation.Z));
                 return;
             }
 
@@ -229,6 +235,18 @@ namespace Styx.Logic.Pathing
                         _takeoffSpot        = WoWPoint.Empty;
                         _takeoffDestination = WoWPoint.Empty;
                     }
+                }
+
+                // HB 6.2.3 smethod_10 line 678: in WotLK 3.3.5a CanMount=false while IsSwimming=true.
+                // Without this guard, the bot falls into the CanMount=false→Navigator.MoveTo(waterZ)
+                // path which fails (navmesh has no water polygons) → infinite mount loop.
+                // Fix: ascend to surface via JumpAscend every pulse until !IsSwimming, then mount normally.
+                if (me.IsSwimming && !hasSeaLegs)
+                {
+                    WoWMovement.Move(WoWMovement.MovementDirection.JumpAscend);
+                    StyxWoW.Sleep(100);
+                    WoWMovement.MoveStop();
+                    return;
                 }
 
                 // F2/F3: If blocked from flying, find an outdoor spot and cache it (HB smethod_5).
@@ -284,10 +302,12 @@ namespace Styx.Logic.Pathing
                     //    ready yet (e.g. mount fired <10s ago for a quick gather). Calling
                     //    Navigator.MoveTo with an aerial waypoint spams CalculatePathEx:FAILED.
                     //    Just return — next tick retries CanMount until the timer expires.
-                    // 2) Ground-only map (!CanFly), or currently in combat: fall back to
-                    //    ground navigation as HB originally intended.
-                    if (!CanFly || me.Combat)
-                        Navigator.MoveTo(destination);
+                    // 2) Ground-only map (!CanFly) and not on any mount, or currently in combat:
+                    //    fall back to ground navigation as HB originally intended.
+                    //    !StyxWoW.Me.Mounted guard: prevents ground nav during the CanFly-flag
+                    //    timing window right after mounting (same pattern as RemoveLootFilter).
+                    if ((!CanFly && !StyxWoW.Me.Mounted) || me.Combat)
+                        Navigator.MoveTo(new WoWPoint(destination.X, destination.Y, myLocation.Z));
                 }
             }
             else
@@ -695,9 +715,12 @@ namespace Styx.Logic.Pathing
                     return true;
                 }
 
-                if (mover.MovementInfo.TimeMoved == 0U)
+                if (mover.IsMoving && mover.MovementInfo.TimeMoved == 0U)
                 {
-                    // Not moving at all — prime the next check
+                    // Bot is issuing movement commands but WoW hasn't advanced TimeMoved —
+                    // geometry/physics stuck (HB 4.3.4 exact condition: IsMoving && TimeMoved==0).
+                    // Do NOT prime during mount cast: player is !IsMoving and TimeMoved==0 which
+                    // falsely fires stuck ~600ms after every MountUp() call.
                     _antiStuckCheckPos = loc;
                     _antiStuckTimer.Reset();
                     return false;
