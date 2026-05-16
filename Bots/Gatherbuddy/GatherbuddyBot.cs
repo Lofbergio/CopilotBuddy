@@ -300,6 +300,9 @@ namespace Bots.Gatherbuddy
                 // [2] Any ground combat (or eating/drinking): reset per-node gather counters.
                 //     HB 6.2.3 Class670.method_2: Me.Combat || HasAura("Food") || HasAura("Drink")
                 //     Returns Failure so the tree continues to the combat subtree below.
+                //     Guard: don't reset the timer while flying. A mob that aggros during flight
+                //     must not suppress the BlacklistTimer — the bot needs [2] in CreateGatherBehavior
+                //     to fire so a terrain-blocked approach point gets blacklisted at 20 s.
                 new Decorator(
                     ctx => StyxWoW.Me.Combat ||
                            StyxWoW.Me.HasAura("Food") ||
@@ -307,7 +310,8 @@ namespace Bots.Gatherbuddy
                     new Action(ctx =>
                     {
                         _gatherAttemptCount = 0;
-                        _gatherTimer.Reset();
+                        if (!StyxWoW.Me.MovementInfo.IsFlying)
+                            _gatherTimer.Reset();
                         return RunStatus.Failure;
                     })
                 ),
@@ -893,7 +897,10 @@ namespace Bots.Gatherbuddy
                     )
                 ),
 
-                // [1] Three failed interact attempts — blacklist for 15 minutes and release.
+                // [1] Three failed interact attempts — node is inaccessible or persistently
+                //     refuses to open a loot frame (depleted by another player, server lag, etc).
+                //     HB 4.3.4 smethod_47: int_2 >= 3.  One attempt is not enough — the gather
+                //     cast can silently fail on the first try due to movement/server timing.
                 //     WoD: Class670.method_34/35
                 new Decorator(
                     ctx => _currentNode != null &&
@@ -901,9 +908,9 @@ namespace Bots.Gatherbuddy
                            LootTargeting.Instance.FirstObject == _currentNode,
                     new Action(ctx =>
                     {
-                        BlacklistNodes[_currentNode.Location] = "Failed 3 times";
+                        BlacklistNodes[_currentNode.Location] = "Failed interact";
                         Blacklist.Add(_currentNode.Guid, TimeSpan.FromMinutes(15));
-                        Log("Blacklisted {0} after 3 failed attempts.", _currentNode.Name);
+                        Log("Blacklisted {0} (no loot frame after 3 attempts).", _currentNode.Name);
                         _gatherAttemptCount = 0;
                         _approachPoint      = WoWPoint.Zero;
                         _gatherTimer.Reset();
@@ -1040,10 +1047,14 @@ namespace Bots.Gatherbuddy
                 ),
 
                 // [6] Within interact range — stop, face, interact, loot.
-                //     ContextChangeHandler provides FirstObject as ctx throughout the sequence.
+                //     Guard: !Me.Combat — HB does not enter the gather sequence during combat;
+                //     the combat subtree (root [4]) handles it. Without this guard, when
+                //     LevelBot returns Failure in combat, the tree falls through to [6] and
+                //     spams Interact every ~165ms until combat ends.
                 //     WoD: Sequence(CTX=method_56, [57,WC(58,59),WC(60,61),SetActivity,
                 //                                   62,DC(63,64),Lag,65,Wait(5,66,Seq(67,WC(68))),
                 //                                   DC(69,method_15)])
+                new Decorator(ctx => !StyxWoW.Me.Combat,
                 new Sequence(new ContextChangeHandler(ctx => LootTargeting.Instance.FirstObject),
                     new Action(ctx => { WoWMovement.MoveStop(); return RunStatus.Success; }),
                     // Wait until we have fully stopped falling before interacting.
@@ -1126,7 +1137,8 @@ namespace Bots.Gatherbuddy
                             return RunStatus.Success;
                         })
                     )
-                )
+                ) // end Sequence [6]
+                ) // end Decorator(!Combat) [6]
             );
         }
 
@@ -1267,10 +1279,6 @@ namespace Bots.Gatherbuddy
             bool herbsFull    = !GatherBuddySettings.Instance.GatherHerbs    || BagHelper.EmptyHerbSlots <= minFree;
             bool mineralsFull = !GatherBuddySettings.Instance.GatherMinerals || BagHelper.EmptyMineSlots <= minFree;
 
-            var nearbyHostiles = ObjectManager.GetObjectsOfType<WoWUnit>()
-                .Where(u => u.IsValid && u.IsAlive && u.IsHostile)
-                .ToList();
-
             for (int i = list.Count - 1; i >= 0; i--)
             {
                 if (!list[i].IsValid || list[i].BaseAddress == IntPtr.Zero)
@@ -1330,8 +1338,12 @@ namespace Bots.Gatherbuddy
                 }
 
                 // IgnoreElites: skip nodes guarded by an elite within 30 y.
+                // Build the hostile list lazily — only when the setting is on.
                 if (GatherBuddySettings.Instance.IgnoreElites)
                 {
+                    var nearbyHostiles = ObjectManager.GetObjectsOfType<WoWUnit>()
+                        .Where(u => u.IsValid && u.IsAlive && u.IsHostile)
+                        .ToList();
                     var elite = nearbyHostiles.FirstOrDefault(
                         u => u.Elite && u.Location.DistanceSqr(nodePos) < 30f * 30f);
                     if (elite != null)
