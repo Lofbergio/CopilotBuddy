@@ -298,14 +298,15 @@ namespace Styx.Logic.Combat
 
         /// <summary>
         /// Gets the remaining cooldown time for this spell.
-        /// HB 4.3.4 pattern: uses Lua GetSpellCooldown which correctly
-        /// includes GCD. The memory-based approach had timing issues.
+        /// WotLK 3.3.5a: GetSpellCooldown() takes a spell NAME string, not a numeric ID.
+        /// Passing the ID would be treated as a spellbook slot (valid range ~1-100) and
+        /// always returns 0 for large IDs like 17364.  Use Name directly.
         /// </summary>
         public TimeSpan CooldownTimeLeft
         {
             get
             {
-                double returnVal = Lua.GetReturnVal<double>(string.Format("local x,y=GetSpellCooldown({0}); return x+y-GetTime()", Id), 0U);
+                double returnVal = Lua.GetReturnVal<double>(string.Format("local x,y=GetSpellCooldown(\"{0}\"); if not x then return 0 end; return x+y-GetTime()", Name), 0U);
                 if (returnVal <= 0.0)
                     return TimeSpan.Zero;
                 return TimeSpan.FromSeconds(returnVal);
