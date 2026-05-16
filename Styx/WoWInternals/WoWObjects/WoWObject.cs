@@ -373,8 +373,9 @@ namespace Styx.WoWInternals.WoWObjects
         // Interaction offset in vtable (44 * 4 = 176)
         private const uint InteractVtableOffset = 176U;
         
-        // Timer to prevent spamming interactions
-        private WaitTimer _interactTimer = new WaitTimer(TimeSpan.FromMilliseconds(500));
+        // Timer to prevent spamming interactions — HB 4.3.4 WoWObject.cs line 866:
+        // private readonly WaitTimer waitTimer_0 = new WaitTimer(new TimeSpan(0, 0, 2));
+        private readonly WaitTimer _interactTimer = new WaitTimer(TimeSpan.FromSeconds(2));
         
         public virtual void Interact()
         {
