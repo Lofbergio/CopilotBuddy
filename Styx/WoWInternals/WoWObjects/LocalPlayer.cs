@@ -1395,7 +1395,8 @@ namespace Styx.WoWInternals.WoWObjects
 
         /// <summary>
         /// Gets the lowest durability percentage among equipped items (0.0 to 1.0).
-        /// HB 4.3.4: iterates Equipped.PhysicalItems, finds min DurabilityPercent / 100.0
+        /// HB 4.3.4: iterates Equipped.PhysicalItems, finds min DurabilityPercent.
+        /// item.DurabilityPercent already returns 0.0–1.0 (ratio), so no extra division.
         /// </summary>
         public double LowestDurabilityPercent
         {
@@ -1403,15 +1404,13 @@ namespace Styx.WoWInternals.WoWObjects
             {
                 try
                 {
-                    double lowest = 100.0;
+                    double lowest = 1.0;
                     foreach (var item in Inventory.Equipped.PhysicalItems)
                     {
                         if (item.DurabilityPercent < lowest)
-                        {
                             lowest = item.DurabilityPercent;
-                        }
                     }
-                    return lowest / 100.0;
+                    return lowest; // 0.0–1.0: item.DurabilityPercent is already a ratio
                 }
                 catch (Exception ex)
                 {

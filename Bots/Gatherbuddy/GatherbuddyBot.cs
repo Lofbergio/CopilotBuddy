@@ -578,9 +578,10 @@ namespace Bots.Gatherbuddy
                     )
                 ),
                 // Gear damaged below threshold — repair only.
+                // HB 3.3.5a smethod_188: ForceRepair || LowestDurabilityPercent <= MinDurability
                 new Decorator(
                     ctx => GatherBuddySettings.Instance.RepairAtVendor &&
-                           StyxWoW.Me.DurabilityPercent <= GatherBuddySettings.Instance.RepairDurabilityPercent,
+                           StyxWoW.Me.LowestDurabilityPercent <= GatherBuddySettings.Instance.RepairDurabilityPercent / 100.0,
                     CreateRepairBehavior()
                 )
             );
@@ -589,6 +590,7 @@ namespace Bots.Gatherbuddy
         /// <summary>
         /// Move to the nearest repair vendor, interact, repair all.
         /// WoD: method_5()
+        /// HB 3.3.5a smethod_169: selects gossip option by type (Vendor), not by index 0.
         /// </summary>
         private Composite CreateRepairBehavior()
         {
@@ -625,12 +627,24 @@ namespace Bots.Gatherbuddy
                     vendorUnit.Interact();
                     StyxWoW.SleepForLagDuration();
 
-                    // Some NPCs show a gossip frame before the merchant frame.
-                    // Select the first option ("Browse Wares" / "Repair") to open it.
-                    // WoD: method_95/96 — DecoratorContinue(!MerchantFrame.IsVisible && GossipFrame.IsVisible)
+                    // If a gossip frame is visible, find and select the Vendor gossip option.
+                    // HB 3.3.5a smethod_169: source.Where(go => go.Type == BotPoi.Type.GetGossipType())
+                    // Selecting option 0 is wrong when the NPC has a trainer option first.
                     if (!MerchantFrame.Instance.IsVisible && GossipFrame.Instance.IsVisible)
                     {
-                        GossipFrame.Instance.SelectGossipOption(0);
+                        var gossipEntries = GossipFrame.Instance.GossipOptionEntries;
+                        var vendorEntry = gossipEntries?
+                            .Cast<GossipEntry?>()
+                            .FirstOrDefault(e => e.HasValue && e.Value.Type == GossipEntry.GossipEntryType.Vendor);
+
+                        if (vendorEntry.HasValue)
+                            GossipFrame.Instance.SelectGossipOption(vendorEntry.Value.Index);
+                        else
+                        {
+                            Logging.WriteDebug("[GatherBuddy] No Vendor gossip option found at {0}, closing.", vendorUnit.Name);
+                            GossipFrame.Instance.Close();
+                            return RunStatus.Failure;
+                        }
                         StyxWoW.SleepForLagDuration();
                     }
 
@@ -685,11 +699,22 @@ namespace Bots.Gatherbuddy
                     StyxWoW.SleepForLagDuration();
 
                     // Some NPCs show a gossip frame before the merchant frame.
-                    // Select the first option ("Browse Wares") to open the merchant frame.
-                    // WoD: method_95/96 — DecoratorContinue(!MerchantFrame.IsVisible && GossipFrame.IsVisible)
+                    // HB 3.3.5a smethod_169: select by GossipEntryType.Vendor, not by index 0.
                     if (!MerchantFrame.Instance.IsVisible && GossipFrame.Instance.IsVisible)
                     {
-                        GossipFrame.Instance.SelectGossipOption(0);
+                        var gossipEntries = GossipFrame.Instance.GossipOptionEntries;
+                        var vendorEntry = gossipEntries?
+                            .Cast<GossipEntry?>()
+                            .FirstOrDefault(e => e.HasValue && e.Value.Type == GossipEntry.GossipEntryType.Vendor);
+
+                        if (vendorEntry.HasValue)
+                            GossipFrame.Instance.SelectGossipOption(vendorEntry.Value.Index);
+                        else
+                        {
+                            Logging.WriteDebug("[GatherBuddy] No Vendor gossip option found at {0}, closing.", vendorUnit.Name);
+                            GossipFrame.Instance.Close();
+                            return RunStatus.Failure;
+                        }
                         StyxWoW.SleepForLagDuration();
                     }
 
@@ -728,18 +753,41 @@ namespace Bots.Gatherbuddy
             return herbsFull && mineralsFull;
         }
 
+        // HB 3.3.5a smethod_12: don't re-mail within 2 minutes of a successful mail run.
+        private DateTime _lastMailedAt = DateTime.MinValue;
+        private static readonly TimeSpan MailCooldown = TimeSpan.FromMinutes(2);
+
         /// <summary>
         /// Returns true when MailToAlt is on, a recipient is set, a mailbox exists in the profile,
-        /// and there are non-soulbound items that qualify under the mail quality filters.
-        /// WoD: method_17 variant — smethod_160 (canRunDecoratorDelegate_65 gate).
+        /// and there are non-soulbound items that qualify, AND bags are getting full or mailbox is nearby.
+        /// HB 3.3.5a smethod_12: don't go to mailbox if it's far away AND bags still have 30+ free slots.
         /// </summary>
         private bool NeedsMailing(object ctx)
         {
             var s = GatherBuddySettings.Instance;
             if (!s.MailToAlt) return false;
-            if (string.IsNullOrEmpty(s.MailRecipient)) return false;
+
+            // Log once when no recipient is configured
+            if (string.IsNullOrEmpty(s.MailRecipient))
+            {
+                Logging.WriteDebug("[GatherBuddy] MailToAlt is enabled but no recipient name is set — skipping mailbox.");
+                return false;
+            }
+
             if (ProfileManager.CurrentProfile?.MailboxManager == null) return false;
             if (StyxWoW.Me == null || StyxWoW.Me.Combat || StyxWoW.Me.IsDead || StyxWoW.Me.IsGhost) return false;
+
+            // Cooldown: don't loop back to mailbox immediately after a successful mail run
+            if (DateTime.UtcNow - _lastMailedAt < MailCooldown) return false;
+
+            // HB 3.3.5a: skip mailbox if it's far away AND bags are mostly empty (>= 30 free slots)
+            var mailbox = ProfileManager.CurrentProfile.MailboxManager.GetClosestMailbox();
+            if (mailbox == null) return false;
+
+            bool mailboxClose = StyxWoW.Me.Location.Distance(mailbox.Location) < 200f;
+            bool bagsNearlyFull = StyxWoW.Me.FreeBagSlots < 30;
+            if (!mailboxClose && !bagsNearlyFull) return false;
+
             return GetItemsToMail().Length > 0;
         }
 
@@ -841,6 +889,8 @@ namespace Bots.Gatherbuddy
                     }
 
                     MailFrame.Instance.Close();
+                    // Mark successful mail run to prevent immediate re-entry (HB 3.3.5a cooldown)
+                    _lastMailedAt = DateTime.UtcNow;
                     return RunStatus.Success;
                 })
             );
