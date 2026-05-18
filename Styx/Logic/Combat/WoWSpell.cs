@@ -298,15 +298,19 @@ namespace Styx.Logic.Combat
 
         /// <summary>
         /// Gets the remaining cooldown time for this spell.
-        /// WotLK 3.3.5a: GetSpellCooldown() takes a spell NAME string, not a numeric ID.
-        /// Passing the ID would be treated as a spellbook slot (valid range ~1-100) and
-        /// always returns 0 for large IDs like 17364.  Use Name directly.
+        /// WotLK 3.3.5a: GetSpellCooldown() requires the spell name in the CLIENT'S LANGUAGE.
+        /// Passing the English name fails on non-English clients (e.g. "Blood Fury" on a Russian
+        /// client where the spell is "\208\175\209\128\208\190\209\129\209\130\209\140 \208\186\209\128\208\190\208\178\208\184").
+        /// Fix: use GetSpellInfo(id) to get the localized name first — language-independent.
         /// </summary>
         public TimeSpan CooldownTimeLeft
         {
             get
             {
-                double returnVal = Lua.GetReturnVal<double>(string.Format("local x,y=GetSpellCooldown(\"{0}\"); if not x then return 0 end; return x+y-GetTime()", Name), 0U);
+                // GetSpellInfo(id) returns the localized spell name regardless of client language.
+                // GetSpellCooldown(localizedName) then works on ALL clients.
+                double returnVal = Lua.GetReturnVal<double>(
+                    string.Format("local n=GetSpellInfo({0}); if not n then return 0 end; local x,y=GetSpellCooldown(n); if not x then return 0 end; return x+y-GetTime()", Id), 0U);
                 if (returnVal <= 0.0)
                     return TimeSpan.Zero;
                 return TimeSpan.FromSeconds(returnVal);
