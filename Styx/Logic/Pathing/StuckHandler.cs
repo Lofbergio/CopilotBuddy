@@ -107,7 +107,10 @@ namespace Styx.Logic.Pathing
             {
                 float expectedDist = GetExpectedDistance(activeMover, _stopwatch.Elapsed);
                 float? pathDist = Navigator.PathDistance(_lastCheckLocation, currentLocation, expectedDist);
-                if (pathDist != null && pathDist < expectedDist)
+                // PathDistance returns null when Detour yields a partial path (off-mesh terrain).
+                // Fall back to direct Euclidean distance so stuck fires even on elevated/off-mesh positions.
+                float effectiveDist = pathDist ?? _lastCheckLocation.Distance(currentLocation);
+                if (effectiveDist < expectedDist)
                 {
                     Logging.WriteVerbose(Colors.Red,
                         "We are stuck! (TPS: {0:F1}, Latency: {1}, loc: {2})!",
