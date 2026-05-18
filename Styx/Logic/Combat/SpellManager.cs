@@ -397,9 +397,19 @@ namespace Styx.Logic.Combat
 			if (accountForLagTolerance && me.ChanneledCastingSpellId == 0)
 			{
 				uint lag = StyxWoW.WoWClient.Latency * 2U;
-				if (me.IsCasting && (me.CurrentCastTimeLeft.TotalMilliseconds > lag || spell.CooldownTimeLeft.TotalMilliseconds > lag))
+				if (me.IsCasting)
+				{
+					// Block cast while casting, with lag-tolerance near cast end.
+					if (me.CurrentCastTimeLeft.TotalMilliseconds > lag || spell.CooldownTimeLeft.TotalMilliseconds > lag)
+						return false;
+					// WotLK safety net: UnitCastingInfo (Lua) may lag behind memory after
+					// CastSpellById injection — IsCasting=true from memory but both Lua
+					// checks returned 0. Block to prevent cast spam.
+					// (HB handled this naturally via WaitForCast() in all combat trees;
+					//  here we guard at the CanCast level for robustness.)
 					return false;
-				else if (!me.IsCasting && spell.CooldownTimeLeft.TotalMilliseconds > lag)
+				}
+				else if (spell.CooldownTimeLeft.TotalMilliseconds > lag)
 					return false;
 				else
 					return spell.CanCast;
