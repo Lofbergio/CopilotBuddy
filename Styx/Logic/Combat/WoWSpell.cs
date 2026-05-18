@@ -293,7 +293,40 @@ namespace Styx.Logic.Combat
         // HB 4.3.4 WoWSpell.cs line 426: delegates to CooldownTimeLeft
         public bool Cooldown
         {
-            get { return CooldownTimeLeft.TotalMilliseconds > 0.0; }
+            get
+            {
+                // Primary: ASM call to Spell_C__GetSpellCooldown — HB 3.3.5a method_0 pattern.
+                // Language-independent, no Lua involved, no timing race.
+                // ecx = SpellCooldownPtr (0xD3F5AC), args: push 0,0,0,0,spellId; call 0x807980
+                try
+                {
+                    ExecutorRand? executor = ObjectManager.Executor;
+                    if (executor != null)
+                    {
+                        lock (executor.AssemblyLock)
+                        {
+                            executor.Clear();
+                            executor.AddLine("push 0");
+                            executor.AddLine("push 0");
+                            executor.AddLine("push 0");
+                            executor.AddLine("push 0");
+                            executor.AddLine("push {0}", _id);
+                            executor.AddLine("mov ecx, {0}", 0xD3F5ACU); // SpellCooldownPtr
+                            executor.AddLine("call {0}", 8419712U);       // Spell_C__GetSpellCooldown = 0x807980
+                            executor.AddLine("retn");
+                            executor.Execute();
+                            int result = executor.Memory.Read<int>(executor.ReturnPointer);
+                            return result != 0;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Fall through to Lua-based check
+                }
+                // Fallback: Lua (may be unreliable on non-English clients or slow machines)
+                return CooldownTimeLeft.TotalMilliseconds > 0.0;
+            }
         }
 
         /// <summary>
@@ -355,14 +388,21 @@ namespace Styx.Logic.Combat
         }
 
         /// <summary>
-        /// Returns true if the spell is currently usable (power, stance, equipped items, etc.).
+        /// Returns true if the spell is currently usable (power, stance, equipped items, etc.)
+        /// AND not on cooldown.
         /// HB 4.3.4 WoWSpell.cs: delegates to IsUsableSpell Lua.
-        /// IsUsableSpell exists in the WoW 3.3.5a Lua API — returns (usable, nomana).
+        /// IsUsableSpell in WoW 3.3.5a does NOT check cooldowns — we pre-check Cooldown
+        /// (ASM-based, language-independent) so that instant off-GCD spells like Blood Fury
+        /// are never reported as castable while on their 2-minute cooldown.
         /// </summary>
         public bool CanCast
         {
             get
             {
+                // Cooldown uses ASM (language-independent). Block here before IsUsableSpell,
+                // which returns true even for spells on cooldown.
+                if (Cooldown)
+                    return false;
                 return Lua.GetReturnVal<bool>("return IsUsableSpell(select(1, GetSpellInfo(" + Id + ")))", 0U);
             }
         }
