@@ -710,17 +710,13 @@ namespace Bots.Grind
                                     }
                                 })
                             ),
-                            // Can't path to lootable
-                            new Decorator(
-                                ctx => BotPoi.Current.Location.DistanceSqr(StyxWoW.Me.Location) > 16.0 &&
-                                       !Navigator.CanNavigateFully(StyxWoW.Me.Location, BotPoi.Current.Location),
-                                new TreeSharp.Action(ctx =>
-                                {
-                                    Logging.Write("Can't generate a path to the lootable. Blacklisting it for 15 minutes.");
-                                    Blacklist.Add(BotPoi.Current.Guid, new TimeSpan(0, 15, 0));
-                                    BotPoi.Clear("Can't generate a path to lootable");
-                                })
-                            ),
+                            // HB 4.3.4 smethod_25/26: "Can't generate a path to lootable" blacklist.
+                            // REMOVED: In HB 4.3.4 + Tripper navmesh, CanNavigateFully() never returned false
+                            // for reachable WotLK terrain, so this check never fired in practice.
+                            // Our Detour navmesh returns DT_PARTIAL_RESULT for corpses slightly off-mesh
+                            // (slopes, geometry edges) — false positives that incorrectly blacklist real loot.
+                            // HB-parity fallback: loot sequence tries Interact, WaitLuaEvent("LOOT_OPENED")
+                            // times out after 3s, fallback action checks CanLoot and handles the blacklist.
                             // Stale loot POI: object despawned and no longer in ObjectManager
                             new Decorator(
                                 ctx => BotPoi.Current.AsObject == null,
