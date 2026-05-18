@@ -216,6 +216,25 @@ namespace Styx.Logic.Pathing
 
 			ApplyAliveQueryFilter(me.IsAlive);
 
+			// HB 4.3.4 Class81.MoveTo: WotLK movemaps contain no water polygons, so Detour
+			// always returns partial/failed for underwater destinations. When swimming and
+			// no valid ground path exists within 2000 units, bypass the navmesh and
+			// ClickToMove directly — matches what Flightor.MoveTo does for swimming.
+			if (me.IsSwimming)
+			{
+				var swimResult = FindPathResult(me.Location, destination);
+				bool hasGroundPath = swimResult != null
+				    && swimResult.Succeeded
+				    && !swimResult.IsPartialPath
+				    && swimResult.Points != null
+				    && ComputePathLength(swimResult.Points) <= 2000f;
+				if (!hasGroundPath)
+				{
+					Navigator.PlayerMover.MoveTowards(destination);
+					return MoveResult.Moved;
+				}
+			}
+
 			// Check if already at destination
 			float distance = me.Location.Distance(destination);
 			if (distance < precision)
@@ -1305,6 +1324,15 @@ namespace Styx.Logic.Pathing
 			float ex = point.X - closestX;
 			float ey = point.Y - closestY;
 			return (float)Math.Sqrt(ex * ex + ey * ey);
+		}
+
+		/// HB 4.3.4 Class81.smethod_7: total arc length of a navmesh point array.
+		private static float ComputePathLength(Vector3[] points)
+		{
+			float total = 0f;
+			for (int i = 1; i < points.Length; i++)
+				total += Vector3.Distance(points[i - 1], points[i]);
+			return total;
 		}
 
 		/// <summary>
