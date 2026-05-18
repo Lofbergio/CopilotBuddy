@@ -16,6 +16,14 @@
     <ApplicationIcon>Resources\bender.ico</ApplicationIcon>
     <!-- Exclude satellite assemblies (localization folders like cs, de, es, fr, it, ja, ko, pl, pt-BR, ru, tr, zh-Hans, zh-Hant) -->
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Assembly identity -->
+    <AssemblyVersion>1.0.5.0</AssemblyVersion>
+    <FileVersion>1.0.5.0</FileVersion>
+    <Version>1.0.5</Version>
+    <Company>Apoc, raphus, highvoltz, bobby53, xanathos, chinajade</Company>
+    <Product>HonorBuddy</Product>
+    <Copyright>Copyright © 2010–2015 Apoc, raphus, highvoltz, bobby53, xanathos, chinajade. Ported to WotLK 3.3.5a by Likon69.</Copyright>
+    <Description>HonorBuddy WotLK port — based on HB 4.3.4 / 6.2.3 source. Ported by Likon69.</Description>
   </PropertyGroup>
 
   <ItemGroup>

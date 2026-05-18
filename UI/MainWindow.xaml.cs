@@ -70,7 +70,9 @@ namespace CopilotBuddy.UI
 
             // Log version (HB 4.3.4: "Honorbuddy v{0} started.")
             var version = Assembly.GetExecutingAssembly().GetName().Version;
-            Logging.Write("CopilotBuddy v{0}.{1}.{2} started.", version.Major, version.Minor, version.Build);
+            string verStr = $"{version.Major}.{version.Minor}.{version.Build}";
+            Title = $"CopilotBuddy v{verStr} — HonorBuddy port by Likon69";
+            Logging.Write("CopilotBuddy v{0} started. Based on HonorBuddy by Apoc, raphus, highvoltz. Ported to WotLK 3.3.5a by Likon69.", verStr);
         }
 
         #endregion
