@@ -330,19 +330,39 @@
             </Viewbox>
         </Button>
 
-        <!-- Stop Button (hidden by default) -->
-        <Button x:Name="btnStop"
-                Visibility="Hidden"
-                HorizontalAlignment="Right"
-                Margin="0,0,8,26"
-                VerticalAlignment="Bottom"
-                Height="25"
-                Width="120"
-                Click="btnStop_Click">
-            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10,2,0,2">
-                <TextBlock Text="Stop"/>
-            </Viewbox>
-        </Button>
+        <!-- Stop/Pause SplitButton (hidden by default, shown when bot is running)     -->
+        <!-- Mirrors HB 6.2.3: btnStop = db:SplitButton with Pause MenuItem dropdown.  -->
+        <Grid x:Name="btnStopGroup"
+              Visibility="Hidden"
+              HorizontalAlignment="Right"
+              Margin="0,0,8,26"
+              VerticalAlignment="Bottom"
+              Width="120"
+              Height="25">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="17"/>
+            </Grid.ColumnDefinitions>
+            <Button x:Name="btnStop"
+                    Grid.Column="0"
+                    Click="btnStop_Click">
+                <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10,2,0,2">
+                    <TextBlock Text="Stop"/>
+                </Viewbox>
+            </Button>
+            <Button x:Name="btnStopArrow"
+                    Grid.Column="1"
+                    Padding="0"
+                    ToolTip="Pause / Resume"
+                    Click="btnStopArrow_Click">
+                <Button.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Pause" Click="btnPause_Click"/>
+                    </ContextMenu>
+                </Button.ContextMenu>
+                <TextBlock Text="&#x25BC;" FontSize="9" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+            </Button>
+        </Grid>
 
         <!-- Tab Control (Log and Info tabs) -->
         <TabControl x:Name="tabControl"
