@@ -10,10 +10,13 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Forms;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using GreenMagic;
 using Styx;
+using Styx.Common;
 using Styx.CommonBot;
 using Styx.Helpers;
 using Styx.Logic.BehaviorTree;
@@ -127,6 +130,7 @@ namespace CopilotBuddy.UI
         protected override void OnSourceInitialized(EventArgs e)
         {
             base.OnSourceInitialized(e);
+
             try
             {
                 var s = UISettings.Instance; // singleton already loaded in its ctor
@@ -465,6 +469,11 @@ namespace CopilotBuddy.UI
 
                 ObjectManager.Initialize(memory);
 
+                // HB 6.2.3: Initialize hotkeys against the WoW window handle so that
+                // hotkeys activate when WoW is in the foreground, not CopilotBuddy.
+                HotkeysManager.Initialize(ObjectManager.WoWProcess!.MainWindowHandle);
+                HotkeysManager.Register("Core_BringBotToForeground", Keys.F7, Styx.Common.ModifierKeys.Shift, BringBotToForeground);
+
                 _memory = memory;
                 _executor = ObjectManager.Executor;
                 return true;
@@ -650,7 +659,7 @@ namespace CopilotBuddy.UI
 
             _isRunning = true;
             btnStart.Visibility = Visibility.Hidden;
-            btnStop.Visibility = Visibility.Visible;
+            btnStopGroup.Visibility = Visibility.Visible;
             btnLoadProfile.IsEnabled = false;
             cmbBotSelector.IsEnabled = false;
             btnSettings.IsEnabled = false;
@@ -699,7 +708,7 @@ namespace CopilotBuddy.UI
 
             _isRunning = false;
             btnStart.Visibility = Visibility.Visible;
-            btnStop.Visibility = Visibility.Hidden;
+            btnStopGroup.Visibility = Visibility.Hidden;
             // Re-enable all controls that StartBot() disabled. Mirrors BotEvents_OnBotStopped
             // so the UI unlocks even when the worker thread never started (e.g. no profile loaded).
             btnLoadProfile.IsEnabled = true;
@@ -727,6 +736,44 @@ namespace CopilotBuddy.UI
             StopBot();
         }
 
+        private void BringBotToForeground(Hotkey _)
+        {
+            if (Dispatcher.Thread != Thread.CurrentThread)
+            {
+                Dispatcher.Invoke(() => BringBotToForeground(_));
+                return;
+            }
+            if (Visibility == Visibility.Hidden)
+                Visibility = Visibility.Visible;
+            Activate();
+        }
+
+        private void btnStopArrow_Click(object sender, RoutedEventArgs e)
+        {
+            if (btnStopArrow.ContextMenu != null)
+            {
+                btnStopArrow.ContextMenu.PlacementTarget = btnStopArrow;
+                btnStopArrow.ContextMenu.IsOpen = true;
+            }
+        }
+
+        private void btnPause_Click(object sender, RoutedEventArgs e)
+        {
+            var item = (System.Windows.Controls.MenuItem)sender;
+            if (TreeRoot.IsPaused)
+            {
+                item.Header = "Pause";
+                TreeRoot.Resume();
+                SetStatus("Running...");
+            }
+            else
+            {
+                item.Header = "Resume";
+                TreeRoot.Pause();
+                SetStatus("Paused");
+            }
+        }
+
         private void BotEvents_OnBotStopped(EventArgs args)
         {
             if (Dispatcher.Thread != Thread.CurrentThread)
@@ -737,7 +784,10 @@ namespace CopilotBuddy.UI
 
             _isRunning = false;
             btnStart.Visibility = Visibility.Visible;
-            btnStop.Visibility = Visibility.Hidden;
+            btnStopGroup.Visibility = Visibility.Hidden;
+            // Reset Pause MenuItem header back to "Pause" (HB 6.2.3 method_36 pattern).
+            if (btnStopArrow.ContextMenu?.Items[0] is System.Windows.Controls.MenuItem pauseItem)
+                pauseItem.Header = "Pause";
             btnLoadProfile.IsEnabled = true;
             cmbBotSelector.IsEnabled = true;
             btnSettings.IsEnabled = true;
