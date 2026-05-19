@@ -30,7 +30,7 @@ namespace PartyBot
 		// BotBase overrides
 		// ──────────────────────────────────────────────────────────────────────
 
-		public override string Name => "DiscoBot";
+		public override string Name => "Party Bot";
 
 		public override Composite Root
 		{
