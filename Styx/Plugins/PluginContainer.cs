@@ -25,6 +25,7 @@ namespace Styx.Plugins
 						try
 						{
 							Plugin.Initialize();
+							Plugin.OnEnable();
 						}
 						catch (Exception ex)
 						{
@@ -35,6 +36,7 @@ namespace Styx.Plugins
 					{
 						try
 						{
+							Plugin.OnDisable();
 							Plugin.Dispose();
 						}
 						catch (Exception ex)
