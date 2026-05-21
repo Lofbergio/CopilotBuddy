@@ -55,6 +55,22 @@ namespace Styx.WoWInternals
             }
         }
 
+        /// <summary>
+        /// Clears the internal Lua frame/table names so the next AttachEvent call
+        /// re-initializes cleanly. Call this after a logout/disconnect so stale
+        /// globals from the previous session don't cause GetField NullReference.
+        /// </summary>
+        public void Reset()
+        {
+            lock (_eventLock)
+            {
+                _frameName = null;
+                _eventTableName = null;
+                _filterTableName = null;
+                _registeredEventCount = 0;
+            }
+        }
+
         public void AttachEvent(string eventName, LuaEventHandlerDelegate handler)
         {
             lock (_eventLock)
