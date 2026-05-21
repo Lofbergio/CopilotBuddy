@@ -142,7 +142,7 @@ namespace Bots.Gatherbuddy
             // Log every setting on first load so the user can verify configuration.
             // WoD: method_9()
             Log("--------------- Settings ---------------");
-            foreach (var kvp in GatherBuddySettings.Instance.GetSettings())
+            foreach (var kvp in GatherbuddySettings.Instance.GetSettings())
                 Log("{0}: {1}", kvp.Key, kvp.Value);
             Log("----------------------------------------");
         }
@@ -216,7 +216,7 @@ namespace Bots.Gatherbuddy
         private void ReloadWaypoints()
         {
             _waypoints.Clear();
-            float heightMod = GatherBuddySettings.Instance.HeightModifier;
+            float heightMod = GatherbuddySettings.Instance.HeightModifier;
 
             if (ProfileManager.CurrentProfile?.GrindArea?.Hotspots != null &&
                 ProfileManager.CurrentProfile.GrindArea.Hotspots.Count > 0)
@@ -236,11 +236,11 @@ namespace Bots.Gatherbuddy
                 return;
             }
 
-            if (GatherBuddySettings.Instance.RandomizeHotspots)
+            if (GatherbuddySettings.Instance.RandomizeHotspots)
                 ShuffleList(_waypoints);
 
             _waypointQueue = new CircularQueue<WoWPoint>();
-            _waypointQueue.Mode = GatherBuddySettings.Instance.PathingType == PathType.Bounce
+            _waypointQueue.Mode = GatherbuddySettings.Instance.PathingType == PathType.Bounce
                 ? Styx.Helpers.QueueMode.Bounce
                 : Styx.Helpers.QueueMode.Circle;
             foreach (var wp in _waypoints)
@@ -357,11 +357,11 @@ namespace Bots.Gatherbuddy
                 // [7] BottingHours session cap.
                 //     WoD: Class670.method_11/12
                 new Decorator(
-                    ctx => GatherBuddySettings.Instance.BottingHours > 0f &&
-                           RunningTime.TotalHours >= GatherBuddySettings.Instance.BottingHours,
+                    ctx => GatherbuddySettings.Instance.BottingHours > 0f &&
+                           RunningTime.TotalHours >= GatherbuddySettings.Instance.BottingHours,
                     new Action(ctx =>
                     {
-                        Log("Ran for {0:F1} hours, stopping.", GatherBuddySettings.Instance.BottingHours);
+                        Log("Ran for {0:F1} hours, stopping.", GatherbuddySettings.Instance.BottingHours);
                         TreeRoot.Stop("GatherBuddy: BottingHours");
                         return RunStatus.Success;
                     })
@@ -370,7 +370,7 @@ namespace Bots.Gatherbuddy
                 // [8] Resurrection Sickness: mount up and jump-ascend once, then hold position.
                 //     WoD: Class670.method_13–18
                 new Decorator(
-                    ctx => GatherBuddySettings.Instance.WaitRezSickness &&
+                    ctx => GatherbuddySettings.Instance.WaitRezSickness &&
                            StyxWoW.Me.HasAura("Resurrection Sickness"),
                     new PrioritySelector(
                         // First tick with rez sickness: mount and ascend so we don't
@@ -491,7 +491,7 @@ namespace Bots.Gatherbuddy
                     new PrioritySelector(
                         // Spirit healer path: explicitly enabled, or no flight and can't navigate to corpse.
                         new Decorator(
-                            ctx => GatherBuddySettings.Instance.UseSpiritHealer ||
+                            ctx => GatherbuddySettings.Instance.UseSpiritHealer ||
                                    (!Flightor.CanFly &&
                                     StyxWoW.Me.CorpsePoint != WoWPoint.Empty &&
                                     !Navigator.CanNavigateFully(StyxWoW.Me.Location, StyxWoW.Me.CorpsePoint)),
@@ -580,8 +580,8 @@ namespace Bots.Gatherbuddy
                 // Gear damaged below threshold — repair only.
                 // HB 3.3.5a smethod_188: ForceRepair || LowestDurabilityPercent <= MinDurability
                 new Decorator(
-                    ctx => GatherBuddySettings.Instance.RepairAtVendor &&
-                           StyxWoW.Me.LowestDurabilityPercent <= GatherBuddySettings.Instance.RepairDurabilityPercent / 100.0,
+                    ctx => GatherbuddySettings.Instance.RepairAtVendor &&
+                           StyxWoW.Me.LowestDurabilityPercent <= GatherbuddySettings.Instance.RepairDurabilityPercent / 100.0,
                     CreateRepairBehavior()
                 )
             );
@@ -724,7 +724,7 @@ namespace Bots.Gatherbuddy
                     // Sell items — LevelBot.cs smethod_134 pattern.
                     Vendors.SellAllItems();
                     StyxWoW.SleepForLagDuration();
-                    if (GatherBuddySettings.Instance.RepairAtVendor)
+                    if (GatherbuddySettings.Instance.RepairAtVendor)
                     {
                         Lua.DoString("RepairAllItems()");
                         StyxWoW.SleepForLagDuration();
@@ -744,12 +744,12 @@ namespace Bots.Gatherbuddy
         {
             if (StyxWoW.Me == null || StyxWoW.Me.Combat || StyxWoW.Me.IsDead || StyxWoW.Me.IsGhost)
                 return false;
-            if (!GatherBuddySettings.Instance.VendorWhenFull)
+            if (!GatherbuddySettings.Instance.VendorWhenFull)
                 return false;
 
-            uint minFree      = (uint)GatherBuddySettings.Instance.MinFreeBagSlots;
-            bool herbsFull    = !GatherBuddySettings.Instance.GatherHerbs    || BagHelper.EmptyHerbSlots <= minFree;
-            bool mineralsFull = !GatherBuddySettings.Instance.GatherMinerals || BagHelper.EmptyMineSlots <= minFree;
+            uint minFree      = (uint)GatherbuddySettings.Instance.MinFreeBagSlots;
+            bool herbsFull    = !GatherbuddySettings.Instance.GatherHerbs    || BagHelper.EmptyHerbSlots <= minFree;
+            bool mineralsFull = !GatherbuddySettings.Instance.GatherMinerals || BagHelper.EmptyMineSlots <= minFree;
             return herbsFull && mineralsFull;
         }
 
@@ -764,7 +764,7 @@ namespace Bots.Gatherbuddy
         /// </summary>
         private bool NeedsMailing(object ctx)
         {
-            var s = GatherBuddySettings.Instance;
+            var s = GatherbuddySettings.Instance;
             if (!s.MailToAlt) return false;
 
             // Log once when no recipient is configured
@@ -798,7 +798,7 @@ namespace Bots.Gatherbuddy
         /// </summary>
         private WoWItem[] GetItemsToMail()
         {
-            var s = GatherBuddySettings.Instance;
+            var s = GatherbuddySettings.Instance;
             return StyxWoW.Me?.CarriedItems
                 .Where(item => item.IsValid
                     && !item.IsSoulbound
@@ -808,7 +808,7 @@ namespace Bots.Gatherbuddy
                 .ToArray() ?? Array.Empty<WoWItem>();
         }
 
-        private static bool IsMailQuality(WoWItemQuality quality, GatherBuddySettings s)
+        private static bool IsMailQuality(WoWItemQuality quality, GatherbuddySettings s)
         {
             switch (quality)
             {
@@ -882,9 +882,9 @@ namespace Bots.Gatherbuddy
                     WoWItem[] items = GetItemsToMail();
                     if (items.Length > 0)
                     {
-                        Log("Mailing {0} item(s) to {1}.", items.Length, GatherBuddySettings.Instance.MailRecipient);
+                        Log("Mailing {0} item(s) to {1}.", items.Length, GatherbuddySettings.Instance.MailRecipient);
                         MailFrame.Instance.SendMailWithManyAttachments(
-                            GatherBuddySettings.Instance.MailRecipient, 0, items);
+                            GatherbuddySettings.Instance.MailRecipient, 0, items);
                         StyxWoW.SleepForLagDuration();
                     }
 
@@ -973,7 +973,7 @@ namespace Bots.Gatherbuddy
                 //     WoD: Class670.method_36/37
                 new Decorator(
                     ctx => _gatherTimer.IsRunning &&
-                           _gatherTimer.Elapsed.TotalSeconds > GatherBuddySettings.Instance.BlacklistTimer,
+                           _gatherTimer.Elapsed.TotalSeconds > GatherbuddySettings.Instance.BlacklistTimer,
                     new Action(ctx =>
                     {
                         if (_currentNode != null)
@@ -1122,7 +1122,7 @@ namespace Bots.Gatherbuddy
                     new Action(ctx => { _gatherAttemptCount++; return RunStatus.Success; }),
                     // Face the node if FaceNodes is on — reduces "out of range" failures.
                     new DecoratorContinue(
-                        ctx => ctx is WoWGameObject && GatherBuddySettings.Instance.FaceNodes,
+                        ctx => ctx is WoWGameObject && GatherbuddySettings.Instance.FaceNodes,
                         new Action(ctx =>
                         {
                             if (ctx is WoWGameObject go)
@@ -1325,9 +1325,9 @@ namespace Bots.Gatherbuddy
         {
             bool canFly       = Flightor.CanFly;
             WoWPoint myLoc    = StyxWoW.Me.Location;
-            uint minFree      = (uint)GatherBuddySettings.Instance.MinFreeBagSlots;
-            bool herbsFull    = !GatherBuddySettings.Instance.GatherHerbs    || BagHelper.EmptyHerbSlots <= minFree;
-            bool mineralsFull = !GatherBuddySettings.Instance.GatherMinerals || BagHelper.EmptyMineSlots <= minFree;
+            uint minFree      = (uint)GatherbuddySettings.Instance.MinFreeBagSlots;
+            bool herbsFull    = !GatherbuddySettings.Instance.GatherHerbs    || BagHelper.EmptyHerbSlots <= minFree;
+            bool mineralsFull = !GatherbuddySettings.Instance.GatherMinerals || BagHelper.EmptyMineSlots <= minFree;
 
             for (int i = list.Count - 1; i >= 0; i--)
             {
@@ -1340,8 +1340,8 @@ namespace Bots.Gatherbuddy
                 // Units: keep if LootMobs+CanLoot, or SkinMobs+CanSkin.
                 if (list[i] is WoWUnit unit)
                 {
-                    bool wantLoot = GatherBuddySettings.Instance.LootMobs && unit.CanLoot;
-                    bool wantSkin = GatherBuddySettings.Instance.SkinMobs && unit.CanSkin;
+                    bool wantLoot = GatherbuddySettings.Instance.LootMobs && unit.CanLoot;
+                    bool wantSkin = GatherbuddySettings.Instance.SkinMobs && unit.CanSkin;
                     if (!wantLoot && !wantSkin)
                         list.RemoveAt(i);
                     continue;
@@ -1352,8 +1352,8 @@ namespace Bots.Gatherbuddy
                     { list.RemoveAt(i); continue; }
 
                 if (_avoidList.Contains(go.Entry))                                                                                    { list.RemoveAt(i); continue; }
-                if (GatherBuddySettings.Instance.BlacklistedEntries.Contains(go.Entry))                                                { list.RemoveAt(i); continue; }
-                if (!go.IsHerb && !go.IsMineral && !(GatherBuddySettings.Instance.GatherChests && go.IsChest && go.CanLoot))            { list.RemoveAt(i); continue; }
+                if (GatherbuddySettings.Instance.BlacklistedEntries.Contains(go.Entry))                                                { list.RemoveAt(i); continue; }
+                if (!go.IsHerb && !go.IsMineral && !(GatherbuddySettings.Instance.GatherChests && go.IsChest && go.CanLoot))            { list.RemoveAt(i); continue; }
                 if (go.IsHerb     && herbsFull)        { list.RemoveAt(i); continue; }
                 if (go.IsMineral  && mineralsFull)     { list.RemoveAt(i); continue; }
                 if (!go.CanLoot)                       { list.RemoveAt(i); continue; }
@@ -1375,7 +1375,7 @@ namespace Bots.Gatherbuddy
                 }
 
                 // NoNinja: skip any node another mounted player is clearly heading toward.
-                if (GatherBuddySettings.Instance.NoNinja && Flightor.MountHelper.Mounted)
+                if (GatherbuddySettings.Instance.NoNinja && Flightor.MountHelper.Mounted)
                 {
                     bool playerNearby = ObjectManager.GetObjectsOfType<WoWPlayer>()
                         .Any(p => !p.IsMe && p.IsAlive && p.Location.DistanceSqr(nodePos) < 15f * 15f);
@@ -1389,7 +1389,7 @@ namespace Bots.Gatherbuddy
 
                 // IgnoreElites: skip nodes guarded by an elite within 30 y.
                 // Build the hostile list lazily — only when the setting is on.
-                if (GatherBuddySettings.Instance.IgnoreElites)
+                if (GatherbuddySettings.Instance.IgnoreElites)
                 {
                     var nearbyHostiles = ObjectManager.GetObjectsOfType<WoWUnit>()
                         .Where(u => u.IsValid && u.IsAlive && u.IsHostile)

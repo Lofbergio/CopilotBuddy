@@ -62,14 +62,14 @@ namespace Bots.Gatherbuddy
         private void btnSaveAndClose_Click(object sender, RoutedEventArgs e)
         {
             ViewModel.SaveNodeSelection();
-            GatherBuddySettings.Instance.Save();
+            GatherbuddySettings.Instance.Save();
             DialogResult = true;
             Close();
         }
 
         private void btnCancel_Click(object sender, RoutedEventArgs e)
         {
-            GatherBuddySettings.Instance.Load();
+            GatherbuddySettings.Instance.Load();
             DialogResult = false;
             Close();
         }
@@ -104,7 +104,7 @@ namespace Bots.Gatherbuddy
     /// </summary>
     public class GatherBuddySettingsViewModel : INotifyPropertyChanged
     {
-        private readonly GatherBuddySettings _s = GatherBuddySettings.Instance;
+        private readonly GatherbuddySettings _s = GatherbuddySettings.Instance;
 
         public event PropertyChangedEventHandler? PropertyChanged;
 

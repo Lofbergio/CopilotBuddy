@@ -12,11 +12,11 @@ namespace Bots.Gatherbuddy
     /// Saved to Settings/GatherBuddySettings_{Name}.xml
     /// Pattern from HB 3.3.5a.
     /// </summary>
-    public class GatherBuddySettings : Settings
+    public class GatherbuddySettings : Settings
     {
-        public static readonly GatherBuddySettings Instance = new GatherBuddySettings();
+        public static readonly GatherbuddySettings Instance = new GatherbuddySettings();
 
-        public GatherBuddySettings()
+        public GatherbuddySettings()
             : base(Path.Combine(Logging.ApplicationPath,
                 string.Format("Settings\\GatherBuddySettings_{0}.xml",
                 (StyxWoW.Me != null) ? StyxWoW.Me.Name : "")))
