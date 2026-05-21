@@ -151,8 +151,10 @@ namespace Styx
             sourceFiles.AddRange(Directory.GetFiles(path, "*.cs", SearchOption.AllDirectories));
             Logging.Write("Found {0} source files", sourceFiles.Count);
 
-            // Gather all .dll files - load directly
-            var dllFiles = Directory.GetFiles(path, "*.dll", SearchOption.AllDirectories);
+            // Gather all .dll files - load directly, excluding Temp/ subdirectories
+            var dllFiles = Directory.GetFiles(path, "*.dll", SearchOption.AllDirectories)
+                .Where(f => !f.Contains(Path.DirectorySeparatorChar + "Temp" + Path.DirectorySeparatorChar))
+                .ToArray();
             Logging.Write("Found {0} dll files", dllFiles.Length);
             
             foreach (string dllFile in dllFiles)
