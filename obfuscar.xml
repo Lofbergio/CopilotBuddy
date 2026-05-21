@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<Obfuscator>
+  <!--
+    InPath  : Release build output (obfuscar reads from here)
+    OutPath : obfuscated output (separate folder to never overwrite originals)
+  -->
+  <Var name="InPath"  value="bin\x86\Release\net10.0-windows7.0" />
+  <Var name="OutPath" value="bin\x86\Release\net10.0-windows7.0\obfuscated" />
+
+  <!--
+    KeepPublicApi = true  : OBLIGATOIRE - les plugins/routines/quest behaviors sont compilés
+                            à la volée avec Roslyn contre cet exe. Tout type/méthode publique
+                            doit garder son nom exact.
+    RenameProperties = false : WPF XAML DataBinding utilise les noms de propriétés.
+    RenameEvents     = false : WPF event handlers liés en XAML.
+    HideStrings      = true  : Obfusque les string literals (offsets, patterns mémoire, etc.)
+    UseUnicodeNames  = true  : Noms renommés en unicode → illisibles dans dnSpy/ILSpy.
+    RegenerateDebugInfo = false : Pas de PDB dans le build Release.
+  -->
+  <Var name="KeepPublicApi"        value="true" />
+  <Var name="RenameProperties"     value="false" />
+  <Var name="RenameEvents"         value="false" />
+  <Var name="HideStrings"          value="true" />
+  <Var name="UseUnicodeNames"      value="true" />
+  <Var name="RegenerateDebugInfo"  value="false" />
+
+  <Module file="$(InPath)\CopilotBuddy.dll">
+
+    <!--
+      UI namespace : protégé entièrement.
+      Les classes code-behind XAML sont public donc déjà couvertes par KeepPublicApi,
+      mais le BAML (XAML compilé) référence les types par nom → on skip tout le namespace
+      pour éviter tout risque de mismatch BAML/assembly à l'exécution.
+    -->
+    <SkipNamespace name="CopilotBuddy.UI" />
+
+    <!--
+      P/Invoke vers Navigation.dll : méthodes public static extern.
+      Couvertes par KeepPublicApi mais on skip le namespace par sécurité.
+    -->
+    <SkipNamespace name="Tripper.Navigation" />
+
+  </Module>
+</Obfuscator>
