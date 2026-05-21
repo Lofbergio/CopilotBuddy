@@ -3,12 +3,13 @@ using System.ComponentModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using MahApps.Metro.Controls;
 using Styx.Helpers;
 using Styx.Plugins;
 
 namespace CopilotBuddy.UI
 {
-	public partial class PluginsWindow : Window
+	public partial class PluginsWindow : MetroWindow
 	{
 		public PluginsWindow()
 		{

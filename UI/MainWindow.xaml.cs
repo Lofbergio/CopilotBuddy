@@ -14,6 +14,7 @@ using System.Windows.Forms;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using MahApps.Metro.Controls;
 using GreenMagic;
 using Styx;
 using Styx.Common;
@@ -30,7 +31,7 @@ namespace CopilotBuddy.UI
     /// <summary>
     /// Main window for CopilotBuddy - HB 5.4.8 style interface.
     /// </summary>
-    public partial class MainWindow : Window
+    public partial class MainWindow : MetroWindow
     {
         #region Fields
 
@@ -73,7 +74,7 @@ namespace CopilotBuddy.UI
 
             // Log version (HB 4.3.4: "Honorbuddy v{0} started.")
             // AssemblyVersion is intentionally not set in .csproj (causes BAML crash under .NET 10).
-            const string BotVersion = "1.0.5";
+            const string BotVersion = "1.1.0";
             Title = $"CopilotBuddy v{BotVersion}";
             Logging.Write("CopilotBuddy v{0} started. Original HonorBuddy by Apoc, raphus, highvoltz, bobby53, xanathos, chinajade. Ported to WotLK 3.3.5a by Likon69.", BotVersion);
         }
@@ -135,13 +136,13 @@ namespace CopilotBuddy.UI
             {
                 var s = UISettings.Instance; // singleton already loaded in its ctor
 
-                // Size — must be positive
+                // Size — must be positive and non-default
                 if (s.MainWindowWidth > 0)  this.Width  = s.MainWindowWidth;
                 if (s.MainWindowHeight > 0) this.Height = s.MainWindowHeight;
 
-                // Position — reject -32000 (Windows "off-screen" sentinel for minimized windows)
-                if (s.MainWindowLocationX > -32000) this.Left = s.MainWindowLocationX;
-                if (s.MainWindowLocationY > -32000) this.Top  = s.MainWindowLocationY;
+                // Position — only restore if explicitly saved (-1 = never saved / first run)
+                if (s.MainWindowLocationX >= 0) this.Left = s.MainWindowLocationX;
+                if (s.MainWindowLocationY >= 0) this.Top  = s.MainWindowLocationY;
 
                 // State — never restore Minimized (window would start hidden)
                 if (s.MainWindowState != WindowState.Minimized)
@@ -501,11 +502,13 @@ namespace CopilotBuddy.UI
             // even when the window is currently maximized.
             try
             {
-                Rect bounds = (this.WindowState == WindowState.Normal)
-                    ? new Rect(this.Left, this.Top, this.Width, this.Height)
-                    : this.RestoreBounds;
+                // Always use RestoreBounds to get the Normal-state rect,
+                // even if currently maximized — avoids saving the -8 maximized offset.
+                Rect bounds = this.RestoreBounds;
+                if (bounds.IsEmpty || double.IsNaN(bounds.X))
+                    bounds = new Rect(this.Left, this.Top, this.Width, this.Height);
 
-                if (!bounds.IsEmpty && !double.IsNaN(bounds.X))
+                if (!bounds.IsEmpty && !double.IsNaN(bounds.X) && bounds.X >= 0 && bounds.Y >= 0)
                 {
                     UISettings.Instance.MainWindowLocationX = (int)bounds.X;
                     UISettings.Instance.MainWindowLocationY = (int)bounds.Y;

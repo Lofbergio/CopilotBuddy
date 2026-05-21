@@ -1,14 +1,16 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
+using MahApps.Metro.Controls;
 using Styx.Helpers;
+using Styx;
 
 namespace CopilotBuddy.UI
 {
     /// <summary>
     /// Settings window for CopilotBuddy, similar to HB WoD settings
     /// </summary>
-    public partial class SettingsWindow : Window
+    public partial class SettingsWindow : MetroWindow
     {
         public SettingsWindow()
         {
@@ -90,6 +92,32 @@ namespace CopilotBuddy.UI
             
             // Close the window
             Close();
+        }
+
+        private void btnClassConfig_Click(object sender, RoutedEventArgs e)
+        {
+            var routine = Styx.Logic.Combat.RoutineManager.Current;
+            if (routine != null && routine.WantButton)
+                routine.OnButtonPress();
+        }
+
+        private void btnBotConfig_Click(object sender, RoutedEventArgs e)
+        {
+            if (BotManager.Current == null) return;
+            var configForm = BotManager.Current.ConfigurationForm;
+            if (configForm == null) return;
+            if (configForm is System.Windows.Window window) { window.Owner = this; window.ShowDialog(); }
+            else if (configForm is System.Windows.Forms.Form winForm) { winForm.ShowDialog(); }
+        }
+
+        private void btnPlugins_Click(object sender, RoutedEventArgs e)
+        {
+            new PluginsWindow { Owner = this }.ShowDialog();
+        }
+
+        private void btnDevTools_Click(object sender, RoutedEventArgs e)
+        {
+            new DeveloperToolsWindow().Show();
         }
 
         private void btnChangeMeshPath_Click(object sender, RoutedEventArgs e)

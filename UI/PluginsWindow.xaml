@@ -1,136 +1,87 @@
-<Window x:Class="CopilotBuddy.UI.PluginsWindow"
+<mah:MetroWindow x:Class="CopilotBuddy.UI.PluginsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mah="http://metro.mahapps.com/winfx/xaml/controls"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="Plugins" 
-        Height="450" 
-        Width="400"
+        x:Name="Window"
+        Title="Plugins"
+        Width="301"
+        Height="324"
+        Background="{DynamicResource WindowBackgroundBrush}"
+        GlowBrush="{DynamicResource MahApps.Brushes.Accent}"
+        TitleCharacterCasing="Normal"
+        ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner"
-        Background="#2D2D30"
-        ResizeMode="CanResize">
-    
-    <Window.Resources>
-        <!-- Styles pour thème sombre -->
-        <Style TargetType="ListBox">
-            <Setter Property="Background" Value="#252526"/>
-            <Setter Property="Foreground" Value="#CCCCCC"/>
-            <Setter Property="BorderBrush" Value="#3F3F46"/>
-        </Style>
-        
-        <Style TargetType="CheckBox">
-            <Setter Property="Foreground" Value="#CCCCCC"/>
-        </Style>
-        
-        <Style TargetType="Label">
-            <Setter Property="Foreground" Value="#CCCCCC"/>
-        </Style>
-        
-        <Style TargetType="Button">
-            <Setter Property="Background" Value="#3F3F46"/>
-            <Setter Property="Foreground" Value="#CCCCCC"/>
-            <Setter Property="BorderBrush" Value="#555555"/>
-            <Setter Property="Padding" Value="8,4"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" 
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="1"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" 
-                                            VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="#505050"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter Property="Background" Value="#606060"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </Window.Resources>
-
-    <Grid Margin="10">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
-        <!-- Liste des plugins -->
+        Icon="pack://application:,,,/Resources/bender.ico">
+    <Grid x:Name="LayoutRoot">
         <ListBox x:Name="lstPlugins"
-                 Grid.Row="0"
-                 SelectionMode="Single"
-                 SelectionChanged="LstPlugins_SelectionChanged"
-                 HorizontalContentAlignment="Stretch">
+                 HorizontalAlignment="Left"
+                 Margin="8,8,0,69.88"
+                 Width="270"
+                 HorizontalContentAlignment="Stretch"
+                 SelectionChanged="LstPlugins_SelectionChanged">
             <ListBox.ItemTemplate>
                 <DataTemplate>
-                    <StackPanel Orientation="Horizontal" Margin="5">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch">
                         <CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}"
-                                  VerticalAlignment="Center"
                                   Checked="Plugin_CheckedChanged"
-                                  Unchecked="Plugin_CheckedChanged"
-                                  Margin="0,0,10,0"/>
-                        <TextBlock Text="{Binding Name}" 
-                                   VerticalAlignment="Center"
-                                   Foreground="#CCCCCC"
-                                   FontSize="14"/>
+                                  Unchecked="Plugin_CheckedChanged"/>
+                        <Label HorizontalAlignment="Stretch" Content="{Binding Name}"/>
                     </StackPanel>
                 </DataTemplate>
             </ListBox.ItemTemplate>
         </ListBox>
-
-        <!-- Informations du plugin sélectionné -->
-        <Grid Grid.Row="1" Margin="0,10,0,0">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-
-            <Label Grid.Row="0" Grid.Column="0" Content="Author:" FontWeight="Bold" Margin="0,0,10,0"/>
-            <Label Grid.Row="0" Grid.Column="1" x:Name="lblAuthor" Content=""/>
-
-            <Label Grid.Row="1" Grid.Column="0" Content="Version:" FontWeight="Bold" Margin="0,0,10,0"/>
-            <Label Grid.Row="1" Grid.Column="1" x:Name="lblVersion" Content=""/>
-        </Grid>
-
-        <!-- Boutons d'action -->
-        <StackPanel Grid.Row="2" 
-                    Orientation="Horizontal" 
-                    HorizontalAlignment="Left"
-                    Margin="0,10,0,0">
-            <Button x:Name="btnSettings"
-                    Content="Settings"
-                    Width="90"
-                    Height="28"
-                    Click="BtnSettings_Click"
-                    IsEnabled="False"/>
-            <Button x:Name="btnRefresh"
-                    Content="Refresh"
-                    Width="90"
-                    Height="28"
-                    Margin="10,0,0,0"
-                    Click="BtnRefresh_Click"/>
-        </StackPanel>
-
-        <!-- Bouton Close -->
-        <Button Grid.Row="3"
-                Content="Close"
+        <Label x:Name="lblAuthorLabel"
+               Height="25"
+               HorizontalAlignment="Left"
+               Margin="8,0,0,50"
+               VerticalAlignment="Bottom"
+               Width="59">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Author:"/>
+            </Viewbox>
+        </Label>
+        <Label x:Name="lblVersionLabel"
+               Height="25"
+               HorizontalAlignment="Left"
+               Margin="8,0,0,30"
+               VerticalAlignment="Bottom"
+               Width="59">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Version:"/>
+            </Viewbox>
+        </Label>
+        <Label x:Name="lblAuthor"
+               HorizontalAlignment="Left"
+               Margin="54.323,0,0,49.92"
+               VerticalAlignment="Bottom"/>
+        <Label x:Name="lblVersion"
+               HorizontalAlignment="Left"
+               Margin="54.323,0,0,29.96"
+               VerticalAlignment="Bottom"/>
+        <Button x:Name="btnSettings"
+                Height="22"
+                HorizontalAlignment="Left"
+                Margin="8,0,0,8"
+                VerticalAlignment="Bottom"
                 Width="90"
-                Height="28"
+                Click="BtnSettings_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock x:Name="tbSettingsButtonText" Text="Settings"/>
+            </Viewbox>
+        </Button>
+        <Button x:Name="btnRecompile"
+                Height="22"
+                Width="90"
                 HorizontalAlignment="Right"
-                Margin="0,10,0,0"
-                Click="BtnClose_Click"/>
+                Margin="0,0,8,8"
+                VerticalAlignment="Bottom"
+                Click="BtnRefresh_Click">
+            <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock x:Name="tbRecompileButtonText" Text="Recompile All"/>
+            </Viewbox>
+        </Button>
     </Grid>
-</Window>
+</mah:MetroWindow>

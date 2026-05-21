@@ -13,6 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
+using MahApps.Metro.Controls;
 using Styx;
 using Styx.Helpers;
 using Styx.Logic.Pathing;
@@ -22,7 +23,7 @@ using Styx.WoWInternals.WoWObjects;
 
 namespace CopilotBuddy.UI
 {
-    public partial class DeveloperToolsWindow : Window
+    public partial class DeveloperToolsWindow : MetroWindow
     {
         // ObservableCollections for data binding
         private readonly ObservableCollection<WGameObject> _gameObjects = new ObservableCollection<WGameObject>();

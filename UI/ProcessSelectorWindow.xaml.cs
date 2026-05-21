@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Windows;
 using GreenMagic;
+using MahApps.Metro.Controls;
 using Styx;
 using Styx.Offsets;
 using Styx.WoWInternals;
@@ -14,7 +15,7 @@ namespace CopilotBuddy.UI
     /// Process selector dialog shown when multiple WoW instances are running.
     /// Ported from HB 4.3.4 ProcessSelectorWindow with 6.2.3 improvements.
     /// </summary>
-    public partial class ProcessSelectorWindow : Window
+    public partial class ProcessSelectorWindow : MetroWindow
     {
         #region Fields
 
