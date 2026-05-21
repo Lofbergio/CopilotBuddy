@@ -2629,21 +2629,37 @@ namespace Bots.DungeonBuddy
 
         private Composite CreateFollowBehavior()
         {
+            // Guard: IsLeader() = PartyMode.Leader OR IsTank() — matches HB 4.3.4 ScriptHelpers.IsLeader().
+            // Using IsLeader() instead of IsTank() ensures a PartyMode.Leader DPS/Healer also skips
+            // follow behavior and lets the dungeon script drive navigation.
             return new Decorator(
                   ctx => StyxWoW.Me.CurrentMap.IsDungeon && !StyxWoW.Me.Combat &&
-                       !StyxWoW.Me.IsTank(), // IsTank() = extension method (role-based via UnitGroupRolesAssigned)
+                       !StyxWoW.Me.IsLeader(),
                 new Action(ctx =>
                 {
-                    var tank = Helpers.ScriptHelpers.Tank;
-                    if (tank == null || !tank.IsAlive)
+                    // Priority 1: follow tank (LFG role = Tank).
+                    // Priority 2 (HB 4.3.4 DungeonBot fallback): if no tank role assigned,
+                    // follow first alive party member ordered by Guid — covers pre-made groups
+                    // where PartyMode.Leader is set but LFG role is not "TANK".
+                    WoWPlayer followTarget = Helpers.ScriptHelpers.Tank;
+                    if (followTarget == null || !followTarget.IsAlive)
+                    {
+                        followTarget = StyxWoW.Me.GroupInfo.RaidMembers
+                            .Select(m => m.ToPlayer())
+                            .Where(p => p != null && p.IsAlive && p.Guid != StyxWoW.Me.Guid)
+                            .OrderBy(p => p.Guid)
+                            .FirstOrDefault();
+                    }
+
+                    if (followTarget == null)
                         return RunStatus.Failure;
 
                     float followDist = DungeonBuddySettings.Instance.FollowingDistance;
-                    bool tankTooFar = StyxWoW.Me.Location.DistanceSqr(tank.Location) > followDist * followDist;
-                    bool tankOffBossPath = !IsUnitOnPathToCurrentBoss(tank);
-                    if (tankTooFar || tankOffBossPath)
+                    bool tooFar = StyxWoW.Me.Location.DistanceSqr(followTarget.Location) > followDist * followDist;
+                    bool offBossPath = !IsUnitOnPathToCurrentBoss(followTarget);
+                    if (tooFar || offBossPath)
                     {
-                        Navigator.MoveTo(tank.Location);
+                        Navigator.MoveTo(followTarget.Location);
                         return RunStatus.Running;
                     }
 
