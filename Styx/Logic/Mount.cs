@@ -5,6 +5,7 @@ using Styx.Combat.CombatRoutine;
 using Styx.Helpers;
 using Styx.Logic.Pathing;
 using Styx.Logic.POI;
+using Styx.Logic.Combat;
 using Styx.WoWInternals;
 using Styx.WoWInternals.WoWObjects;
 using Styx.WoWInternals.World;
@@ -220,20 +221,41 @@ namespace Styx.Logic
 			AutoDetectMount();
 
 			LocalPlayer? me = Me;
-			if (me == null || me.Level < 20)
+			if (me == null)
 				return false;
 
+			if (me.Mounted || me.Dead || me.IsGhost)
+				return false;
+
+			// Ghost Wolf (Shaman) / Travel Form (Druid): fallback when regular mounts can't be used.
+			// Both spells are outdoors-only in WotLK 3.3.5a (Wowhead verified).
+			// In combat → Travel Form only (instant). Ghost Wolf is 2s cast, useless in combat.
+			// No ground mounts yet → Ghost Wolf or Travel Form out-of-combat.
+			// Already in a speed form → skip (nothing to do).
+			bool regularMountBlocked = !me.IsOutdoors || me.Combat
+				|| (MountHelper.GroundMounts?.Count ?? 0) == 0;
+			if (regularMountBlocked)
+			{
+				if (me.HasAura("Ghost Wolf") || me.HasAura("Travel Form"))
+					return false;
+				return TryUseShapeshiftSpeedBuff(me);
+			}
+
+			// --- Regular mount path ---
+			if (me.Level < 20)
+				return false;
+
+            //bool canFly = me.MovementInfo.CanFly;
 			// Choose the right mount for this zone up front so the guard and log are accurate.
-			bool canFly = me.MovementInfo.CanFly;
+			// Flightor.CanFly checks IsFlyableArea() + riding skill — NOT the raw movement flag
+			// (me.MovementInfo.CanFly is only set while airborne, so it was always false on the ground).
+			bool canFly = Flightor.CanFly;
 			string flyingMountName = CharacterSettings.Instance.FlyingMountName;
 			string effectiveMountName = (canFly && !string.IsNullOrEmpty(flyingMountName))
 				? flyingMountName
 				: LevelbotSettings.Instance.MountName;
 
 			if (string.IsNullOrEmpty(effectiveMountName))
-				return false;
-
-			if (me.Mounted)
 				return false;
 
 			if (!CanMount())
@@ -254,7 +276,7 @@ namespace Styx.Logic
 			if (me == null) return;
 
 			// Use flying mount in fly zones, ground mount everywhere else.
-			bool canFly = me.MovementInfo.CanFly;
+			bool canFly = Flightor.CanFly;
 			string flyingMountName = CharacterSettings.Instance.FlyingMountName;
 			string mountName = (canFly && !string.IsNullOrEmpty(flyingMountName))
 				? flyingMountName
@@ -287,6 +309,7 @@ namespace Styx.Logic
 
 				if (!string.IsNullOrEmpty(lastError) && me.LastRedErrorMessage != lastError)
 				{
+					Logging.Write("You can't mount here.");
 					AddCantMountSpot(me.Location);
 					break;
 				}
@@ -298,6 +321,50 @@ namespace Styx.Logic
 			// (e.g. spots recorded during a previous combat pass at this exact location)
 			if (me.Mounted)
 				RemoveCantMountSpotsNear(me.Location, 10f);
+		}
+
+		/// <summary>
+		/// Attempts to use Ghost Wolf (Shaman) or Travel Form (Druid) as a speed buff
+		/// when regular mounts can't be used (in combat, or no ground mounts yet).
+		/// WotLK 3.3.5a (Wowhead verified):
+		/// - Both Ghost Wolf and Travel Form have the "Can only be used outdoors" flag.
+		///   Neither works indoors — returns false immediately.
+		/// - Ghost Wolf: 2s cast, no explicit combat ban but interrupted by damage in combat.
+		/// - Travel Form: instant cast, usable in combat (no cast to interrupt).
+		/// </summary>
+		private static bool TryUseShapeshiftSpeedBuff(LocalPlayer me)
+		{
+			// Both spells are outdoors-only in WotLK 3.3.5a.
+			if (!me.IsOutdoors)
+				return false;
+
+			// In combat: Travel Form only (instant, won't be interrupted).
+			// Ghost Wolf is a 2s cast — interrupted by combat damage, not viable.
+			if (me.Combat)
+			{
+				if (SpellManager.HasSpell("Travel Form"))
+				{
+					Logging.Write("Mounting: Using Travel Form since we are in combat.");
+					SpellManager.Cast("Travel Form");
+					return true;
+				}
+				return false;
+			}
+
+			// Out of combat, no ground mounts — use class speed buff as fallback
+			if (SpellManager.HasSpell("Ghost Wolf"))
+			{
+				Logging.Write("Mounting: Using Ghost Wolf since we don't have any mounts yet.");
+				SpellManager.Cast("Ghost Wolf");
+				return true;
+			}
+			if (SpellManager.HasSpell("Travel Form"))
+			{
+				Logging.Write("Mounting: Using Travel Form since we don't have any mounts yet.");
+				SpellManager.Cast("Travel Form");
+				return true;
+			}
+			return false;
 		}
 
 		private static int GetMountIndex(string mountName)
@@ -388,7 +455,7 @@ namespace Styx.Logic
 			if (!_cantMountSpots.Contains(location))
 			{
 				_cantMountSpots.Add(location);
-				Logging.WriteDebug("Added can't mount spot at: {0}", location);
+				Logging.Write(System.Drawing.Color.Red, "Blacklisted mount spot at: {0}", location);
 			}
 		}
 
