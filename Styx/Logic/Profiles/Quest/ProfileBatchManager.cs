@@ -1,7 +1,9 @@
 using Styx.Helpers;
 using Styx.Logic.Questing;
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Reflection;
 
 namespace Styx.Logic.Profiles.Quest
@@ -45,9 +47,13 @@ namespace Styx.Logic.Profiles.Quest
             if (behavior == null) return;
             if (_currentBatch.IsCompiled)
             {
-                // Profile restarted without Reset() — start a fresh batch.
-                Logging.WriteDebug("[ProfileBatchManager] Batch already compiled, starting new batch.");
+                // Carry forward Definition (CompileString) code so methods like void Log(...)
+                // defined in an earlier batch remain available to expressions in the new batch.
+                var priorDefs = _currentBatch.GetDefinitionCode().ToList();
+                Logging.WriteDebug("[ProfileBatchManager] Batch already compiled, starting new batch (carrying {0} definition(s)).", priorDefs.Count);
                 _currentBatch = new CompileBatch();
+                foreach (string def in priorDefs)
+                    _currentBatch.Add(def);
             }
 
             Type type = behavior.GetType();

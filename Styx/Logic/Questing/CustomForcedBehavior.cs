@@ -512,10 +512,16 @@ public abstract class CustomForcedBehavior
 
   public virtual string SubversionRevision => "Unknown";
 
+  // Mirrors HB xelement_1: set by ForcedCodeBehavior before Activator.CreateInstance so the
+  // behavior constructor can access Element immediately (e.g. to read CDATA).
+  [ThreadStatic]
+  internal static XElement PendingElement;
+
   protected CustomForcedBehavior(Dictionary<string, string> args)
   {
     this._args = args;
     this._elementName = $"{this.GetType().Name}-v{this.ExtractVersionFromSubversionTag(this.SubversionRevision)}";
+    this.Element = PendingElement;
   }
 
   public XElement Element { get; set; }

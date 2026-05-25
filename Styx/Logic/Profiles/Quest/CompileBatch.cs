@@ -50,7 +50,9 @@ namespace Styx.Logic.Profiles.Quest
                 "Styx.Logic.Questing",
                 "Styx.WoWInternals",
                 "Styx.WoWInternals.WoWObjects",
+                "Styx.Logic.BehaviorTree",
                 "Buddy.Coroutines",
+                "TreeSharp",
             };
         }
 
@@ -59,6 +61,13 @@ namespace Styx.Logic.Profiles.Quest
         public bool HasPendingExpressions => _expressionCounter > 0;
         public CompileError[] Errors { get; private set; }
         public IReadOnlyList<string> Imports => _imports.ToList().AsReadOnly();
+
+        /// <summary>
+        /// Returns all raw code strings registered via Add() (Type="Definition" entries).
+        /// Used by ProfileBatchManager to carry definitions forward into new batches.
+        /// </summary>
+        public IEnumerable<string> GetDefinitionCode()
+            => _entries.OfType<CodeEntry>().Select(e => e.Code);
 
         public void AddImport(string import)
         {

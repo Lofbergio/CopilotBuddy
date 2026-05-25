@@ -24,10 +24,21 @@ public class ForcedCodeBehavior : ForcedBehavior
     {
         if (codeNode == null)
             throw new ArgumentNullException(nameof(codeNode));
-        this.customBehavior = ForcedCodeBehavior.CreateCustomBehaviorInstance(codeNode.AssemblyGetter(), codeNode.Arguments);
+        // Set PendingElement before construction so the behavior ctor can read CDATA from Element.
+        CustomForcedBehavior.PendingElement = codeNode.Element;
+        try
+        {
+            this.customBehavior = ForcedCodeBehavior.CreateCustomBehaviorInstance(codeNode.AssemblyGetter(), codeNode.Arguments);
+        }
+        finally
+        {
+            CustomForcedBehavior.PendingElement = null;
+        }
         if (this.customBehavior == null)
             throw new Exception("Unable to create instance of UserDefinedObjective");
-        this.customBehavior.Element = codeNode.Element;
+        // Ensure Element is set even if the ctor somehow missed it.
+        if (this.customBehavior.Element == null)
+            this.customBehavior.Element = codeNode.Element;
         ProfileBatchManager.Register(this.customBehavior);
     }
 
