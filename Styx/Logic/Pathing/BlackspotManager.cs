@@ -492,7 +492,7 @@ namespace Styx.Logic.Pathing
                 {
                     // Tiles might not be loaded yet; retry on tile-loaded/map-change, not every pathfind.
                     _failedBlackspotMarks.Add(spot);
-                    Logging.WriteDebug($"[Blackspot] No polygons found at {spot.Location} (radius {spot.Radius}) - tile not loaded?");
+                    Logging.Write($"Warning: QueryPolygons failed while applying blackspot {spot.Location} with radius {spot.Radius} - tile not loaded?");
                     return;
                 }
                 

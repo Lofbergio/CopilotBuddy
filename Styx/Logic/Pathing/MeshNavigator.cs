@@ -784,7 +784,7 @@ namespace Styx.Logic.Pathing
 									combatStart = DateTime.UtcNow;
 								else if ((DateTime.UtcNow - combatStart.Value).TotalSeconds > 4.0)
 								{
-									Logging.WriteDiagnostic(System.Windows.Media.Colors.Red,
+									Logging.Write(System.Drawing.Color.Red,
 										"Path search aborted due to combat.");
 									aborted = true;
 									break;
@@ -816,14 +816,14 @@ namespace Styx.Logic.Pathing
 
 			if (result == null || result.Points == null || result.Points.Length == 0)
 			{
-				Logging.WriteDiagnostic(System.Windows.Media.Colors.Red,
+				Logging.Write(System.Drawing.Color.Red,
 					"Could not generate path from {0} to {1} on map {2} (status: {3})",
 					me.Location, destination, me.MapId, result?.Status);
 				return false;
 			}
 
 			if (result.IsPartialPath)
-				Logging.WriteDiagnostic(System.Windows.Media.Colors.Orange,
+				Logging.Write(System.Drawing.Color.Orange,
 					"Could not generate full path from {0} to {1} (time used: {2})",
 					me.Location, destination, result.Elapsed);
 			else if (result.Elapsed.TotalMilliseconds > 50.0)
