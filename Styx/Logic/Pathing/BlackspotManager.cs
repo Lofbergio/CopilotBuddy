@@ -371,9 +371,10 @@ namespace Styx.Logic.Pathing
         /// </summary>
         public static void EnsureBlackspotsMarked()
         {
-            uint currentMapId = StyxWoW.Me?.MapId ?? 0;
-            if (currentMapId == 0)
+            var meRef = StyxWoW.Me;
+            if (meRef == null)
                 return;
+            uint currentMapId = meRef.MapId;
                 
             // If map changed, clear marked blackspots to force re-marking
             if (_lastMarkedMapId != currentMapId)
@@ -416,13 +417,13 @@ namespace Styx.Logic.Pathing
         /// </summary>
         private static void MarkBlackspotPolygons(Blackspot spot)
         {
-            uint mapId = StyxWoW.Me?.MapId ?? 0;
-            if (mapId == 0)
+            var me = StyxWoW.Me;
+            if (me == null)
             {
                 Logging.WriteDebug($"[Blackspot] Cannot mark polygons - no map loaded");
                 return;
             }
-            MarkBlackspotPolygons(spot, mapId);
+            MarkBlackspotPolygons(spot, me.MapId);
         }
         
         /// <summary>

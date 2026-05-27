@@ -544,7 +544,7 @@ namespace Styx.Logic
                                     if (!removed)
                                     {
                                         bool tooNearBlackspot = Targeting.IsTooNearBlackspot(currentProfile != null ? currentProfile.Blackspots : null, location);
-                                        if (tooNearBlackspot)
+                                        if (tooNearBlackspot || (currentProfile != null && IsNotWithinHotspotRange(location, false)))
                                         {
                                             removed = true;
                                         }
