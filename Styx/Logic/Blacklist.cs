@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using Styx.Helpers;
 using Styx.WoWInternals.WoWObjects;
 
 namespace Styx.Logic
@@ -60,6 +61,7 @@ namespace Styx.Logic
 
         public static void Add(ulong guid, TimeSpan end)
         {
+            Logging.WriteDebug("Blacklisting {0:X16} for {1}", guid, end);
             if (Blacklist._blacklistedGuids.ContainsKey(guid))
             {
                 Dictionary<ulong, DateTime> dictionary = Blacklist._blacklistedGuids;
