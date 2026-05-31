@@ -65,7 +65,10 @@ namespace Styx.Logic
 				return;
 
 			if (me.Shapeshift != ShapeshiftForm.Normal)
+			{
+				Logging.WriteDebug("Canceling Shapeshift form: {0}", me.Shapeshift);
 				Lua.DoString("CancelShapeshiftForm()");
+			}
 		}
 
 		public static void Dismount(string reason)
