@@ -169,6 +169,12 @@ namespace Styx
         /// </summary>
         public static Memory? Memory => ObjectManager.Wow;
 
+        /// <summary>
+        /// True if the overlay has already been created by a plugin (e.g. BuddyControlPanel).
+        /// Does NOT trigger lazy creation — safe to call when no plugin is active.
+        /// </summary>
+        public static bool IsOverlayActive => _overlayManager != null;
+
         public static OverlayManager Overlay
         {
             get
