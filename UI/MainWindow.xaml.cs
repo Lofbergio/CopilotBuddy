@@ -580,7 +580,11 @@ namespace CopilotBuddy.UI
         {
             if (Thread.CurrentThread != Dispatcher.Thread)
             {
-                Dispatcher.BeginInvoke(new Logging.LogMessageDelegate(OnLogMessage), messages);
+                // DispatcherPriority.Background ensures input events (clicks, keyboard)
+                // at DispatcherPriority.Input are processed before log rendering.
+                // Without this, heavy navigation debug logging starves the UI thread.
+                Dispatcher.BeginInvoke(DispatcherPriority.Background,
+                    new Logging.LogMessageDelegate(OnLogMessage), messages);
                 return;
             }
 
