@@ -21,10 +21,12 @@ namespace Styx.Logic.Pathing
 		// all ground navmesh path following. Navigator is the static facade that routes to it.
 		private static MeshNavigator? _meshNavigator;
 
-		// WotLK no-fly zone IDs — areas where flying is forbidden or problematic
+		// WotLK no-fly zone IDs — indoor dungeon areas where flying makes no sense.
+		// NOTE: Dalaran (4395) is NOT listed here. Flying was allowed in Dalaran in WotLK 3.3.5a
+		// (the no-fly restriction was introduced in Cataclysm). Flightor relies on IsFlyableArea()
+		// from the Lua API to detect the actual flyable status.
 		private static readonly HashSet<uint> _noFlyZoneIds = new HashSet<uint>
 		{
-			4395, // Dalaran city (no flying allowed)
 			4613, // The Pit of Saron (indoor dungeon entrance area)
 			4820, // Halls of Reflection
 		};
