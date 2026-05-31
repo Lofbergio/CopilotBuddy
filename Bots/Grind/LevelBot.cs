@@ -296,6 +296,7 @@ namespace Bots.Grind
                            StyxWoW.Me.Location.DistanceSqr(StyxWoW.Me.CorpsePoint) > 40.0 &&
                            !Navigator.CanNavigateFully(StyxWoW.Me.Location, StyxWoW.Me.CorpsePoint),
                     new Sequence(
+                        new TreeSharp.Action(ctx => Logging.Write("Corpse point has no mesh. MapId: {0} Location: {1}", StyxWoW.Me.MapId, StyxWoW.Me.CorpsePoint)),
                         new TreeSharp.Action(ctx => Logging.Write("Can't navigate to our corpse. Trying the spirit healer instead! DEBUG: {0}", StyxWoW.Me.CorpsePoint)),
                         new TreeSharp.Action(ctx => ShouldUseSpiritHealer = true)
                     )
@@ -915,19 +916,20 @@ namespace Bots.Grind
                         new Decorator(
                             ctx => BotPoi.Current.Location.Distance(StyxWoW.Me.Location) <= 5.0,
                             new PrioritySelector(
-                                // Vendor not found
+                            // Vendor/mailbox not found
                                 new Decorator(
                                     ctx => BotPoi.Current.AsObject == null,
                                     new Sequence(
                                         new TreeSharp.Action(ctx => Logging.Write(System.Drawing.Color.Red, 
-                                            "Could not find vendor {0}[{1}], blacklisting.", 
+                                            "Could not find {0} {1}[{2}], blacklisting.",
+                                            BotPoi.Current.Type == PoiType.Mail ? "mailbox" : "vendor",
                                             BotPoi.Current.Name, BotPoi.Current.Entry)),
                                         new DecoratorContinue(
                                             ctx => BotPoi.Current.AsVendor != null,
                                             new TreeSharp.Action(ctx => 
                                                 ProfileManager.CurrentProfile.VendorManager.Blacklist.Add(BotPoi.Current.AsVendor))
                                         ),
-                                        new ActionClearPoi("Vendor was blacklisted")
+                                        new ActionClearPoi("Vendor/mailbox was blacklisted")
                                     )
                                 ),
                                 // Interact with vendor
@@ -937,7 +939,7 @@ namespace Bots.Grind
                                         new TreeSharp.Action(ctx => Navigator.PlayerMover.MoveStop()),
                                         new TreeSharp.Action(ctx => SleepForLag()),
                                         new TreeSharp.Action(ctx => BotPoi.Current.AsObject.Interact()),
-                                        new Wait(5, ctx => IsVendorFrameOpen(),
+                                        new WaitContinue(5, ctx => IsVendorFrameOpen(),
                                             new PrioritySelector(
                                                 new DecoratorFrameIsVisible<GossipFrame>(new Sequence(
                                                     new TreeSharp.Action(ctx =>
@@ -953,6 +955,19 @@ namespace Bots.Grind
                                                     new Wait(5, ctx => !GossipFrame.Instance.IsVisible, new ActionIdle())
                                                 )),
                                                 new ActionIdle()
+                                            )
+                                        ),
+                                        // Fly POI: if TaxiFrame never opened after 5 seconds, blacklist the flight master
+                                        new DecoratorContinue(
+                                            ctx => BotPoi.Current.Type == PoiType.Fly && !TaxiFrame.Instance.IsVisible,
+                                            new Sequence(
+                                                new TreeSharp.Action(ctx => Logging.Write("Taximap failed to open. Blacklisting the flight master.")),
+                                                new TreeSharp.Action(ctx =>
+                                                {
+                                                    if (BotPoi.Current.AsObject != null)
+                                                        Blacklist.Add(BotPoi.Current.AsObject.Guid, TimeSpan.FromMinutes(30));
+                                                }),
+                                                new ActionClearPoi("Flight master blacklisted")
                                             )
                                         )
                                     )
@@ -970,7 +985,15 @@ namespace Bots.Grind
                                                     new ActionDebugString("Selling items"),
                                                     new ActionSetActivity("Selling Items"),
                                                     new TreeSharp.Action(ctx => Vendors.SellAllItems()),
-                                                    new ActionSleep(2000)
+                                                    new ActionSleep(2000),
+                                                    new DecoratorContinue(
+                                                        ctx => StyxWoW.Me.FreeBagSlots < 2,
+                                                        new Sequence(
+                                                            new TreeSharp.Action(ctx => Logging.Write(System.Drawing.Color.Red,
+                                                                "We have just done a sell run and bags are still full. Stopping the bot.")),
+                                                            new TreeSharp.Action(ctx => TreeRoot.Stop())
+                                                        )
+                                                    )
                                                 )
                                             ),
                                             new DecoratorContinue(
@@ -1018,6 +1041,14 @@ namespace Bots.Grind
                                             new ActionDebugString("Mailing items"),
                                             new ActionSetActivity("Mailing Items"),
                                             new TreeSharp.Action(ctx => Vendors.MailAllItems()),
+                                            new DecoratorContinue(
+                                                ctx => StyxWoW.Me.FreeBagSlots < 2,
+                                                new Sequence(
+                                                    new TreeSharp.Action(ctx => Logging.Write(System.Drawing.Color.Red,
+                                                        "We have just done a mail run and bags are still full. Stopping the bot.")),
+                                                    new TreeSharp.Action(ctx => TreeRoot.Stop())
+                                                )
+                                            ),
                                             new ActionClearPoi("Done mailing")
                                         )),
                                         // Buy
