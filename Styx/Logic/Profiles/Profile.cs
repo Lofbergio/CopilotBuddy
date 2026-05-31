@@ -770,7 +770,7 @@ namespace Styx.Logic.Profiles
 						}
 						catch (ProfileException ex)
 						{
-							Logging.WriteDebug(ex.Message);
+							Logging.Write(Logging.ColorError, "Profile parse error: {0}", ex.Message);
 						}
 						break;
 					case "questorder":
