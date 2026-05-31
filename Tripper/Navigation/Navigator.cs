@@ -211,40 +211,35 @@ namespace Tripper.Navigation
         /// </summary>
         private void InitializeQueryFilters()
         {
-            // HB 6.2.3 GetNewDefaultQueryFilter:
-            // Include = All, Exclude = Unwalkable | Transport
-            QueryFilter defaultFilter = new QueryFilter
-            {
-                IncludeFlags = AbilityFlags.All,
-                ExcludeFlags = AbilityFlags.Unwalkable | AbilityFlags.Transport,
-                AreaCosts = new Dictionary<AreaType, float>
-                {
-                    { AreaType.Ground, 1.66f },
-                    { AreaType.Water, 3.33f },
-                    { AreaType.Road, 1.0f }
-                }
-            };
-            _queryFilters["Default"] = defaultFilter;
+            // HB 6.2.3: dictionary_0["Default"] = WowNavigator.GetNewDefaultQueryFilter()
+            WowQueryFilter defaultWow = GetNewDefaultQueryFilter();
+            _queryFilters["Default"] = ToQueryFilter(defaultWow);
 
-            QueryFilter hordeFilter = defaultFilter.Clone();
-            hordeFilter.ExcludeFlags |= AbilityFlags.Alliance;
-            hordeFilter.AreaCosts[AreaType.Alliance] = 50.0f;
-            _queryFilters["Horde"] = hordeFilter;
+            // HB 6.2.3 smethod_2() — Horde filter
+            WowQueryFilter hordeWow = GetNewDefaultQueryFilter();
+            hordeWow.ExcludeFlags |= AbilityFlags.Alliance;
+            hordeWow.AreaCosts[AreaType.Alliance] = 50.0f;
+            _queryFilters["Horde"] = ToQueryFilter(hordeWow);
 
-            QueryFilter allianceFilter = defaultFilter.Clone();
-            allianceFilter.ExcludeFlags |= AbilityFlags.Horde;
-            allianceFilter.AreaCosts[AreaType.Horde] = 50.0f;
-            _queryFilters["Alliance"] = allianceFilter;
+            // HB 6.2.3 smethod_1() — Alliance filter
+            WowQueryFilter allianceWow = GetNewDefaultQueryFilter();
+            allianceWow.ExcludeFlags |= AbilityFlags.Horde;
+            allianceWow.AreaCosts[AreaType.Horde] = 50.0f;
+            _queryFilters["Alliance"] = ToQueryFilter(allianceWow);
 
-            QueryFilter hordeDeathKnightStartFilter = hordeFilter.Clone();
-            hordeDeathKnightStartFilter.ExcludeFlags &= ~AbilityFlags.Transport;
-            hordeDeathKnightStartFilter.IncludeFlags |= AbilityFlags.Transport;
-            _queryFilters["Horde_DeathKnightStart"] = hordeDeathKnightStartFilter;
+            WowQueryFilter hordeDeathKnightWow = GetNewDefaultQueryFilter();
+            hordeDeathKnightWow.ExcludeFlags |= AbilityFlags.Alliance;
+            hordeDeathKnightWow.AreaCosts[AreaType.Alliance] = 50.0f;
+            hordeDeathKnightWow.ExcludeFlags &= ~AbilityFlags.Transport;
+            hordeDeathKnightWow.IncludeFlags |= AbilityFlags.Transport;
+            _queryFilters["Horde_DeathKnightStart"] = ToQueryFilter(hordeDeathKnightWow);
 
-            QueryFilter allianceDeathKnightStartFilter = allianceFilter.Clone();
-            allianceDeathKnightStartFilter.ExcludeFlags &= ~AbilityFlags.Transport;
-            allianceDeathKnightStartFilter.IncludeFlags |= AbilityFlags.Transport;
-            _queryFilters["Alliance_DeathKnightStart"] = allianceDeathKnightStartFilter;
+            WowQueryFilter allianceDeathKnightWow = GetNewDefaultQueryFilter();
+            allianceDeathKnightWow.ExcludeFlags |= AbilityFlags.Horde;
+            allianceDeathKnightWow.AreaCosts[AreaType.Horde] = 50.0f;
+            allianceDeathKnightWow.ExcludeFlags &= ~AbilityFlags.Transport;
+            allianceDeathKnightWow.IncludeFlags |= AbilityFlags.Transport;
+            _queryFilters["Alliance_DeathKnightStart"] = ToQueryFilter(allianceDeathKnightWow);
         }
 
         /// <summary>
@@ -2018,7 +2013,23 @@ namespace Tripper.Navigation
             var args = new TileLoadedEventArgs(mapId, tileX, tileY);
             TileLoaded?.Invoke(this, args);
             OnTileLoaded?.Invoke(this, args);
-            OnSubTileLoaded?.Invoke(this, args);
+
+            // V5 mmtile format: each ADT contains a 4×4 grid of 16 Detour sub-tiles.
+            // Fire OnSubTileLoaded once per sub-tile so consumers get fine-grained events,
+            // matching HB 6.2.3 WorldMeshManager.eventHandler_1 behaviour.
+            if (OnSubTileLoaded != null)
+            {
+                var adt = new TileIdentifier(tileX, tileY);
+                int n = MeshMapCalculator.Default.SubTilesPerAdt;
+                for (int subX = 0; subX < n; subX++)
+                {
+                    for (int subY = 0; subY < n; subY++)
+                    {
+                        TileIdentifier detourTile = MeshMapCalculator.Default.GetDetourTile(adt, subX, subY);
+                        OnSubTileLoaded.Invoke(this, new TileLoadedEventArgs(mapId, detourTile.X, detourTile.Y));
+                    }
+                }
+            }
         }
 
         private void RaiseMapLoaded(uint mapId)
