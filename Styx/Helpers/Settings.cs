@@ -128,7 +128,7 @@ namespace Styx.Helpers
 		{
 			Type type = this.GetType();
 			PropertyInfo[] properties = type.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.GetProperty | BindingFlags.SetProperty);
-			XElement root = new XElement(type.Name);
+			XElement root = new XElement(System.Xml.XmlConvert.EncodeName(type.Name));
 
 			foreach (PropertyInfo propertyInfo in properties)
 			{
@@ -178,7 +178,7 @@ namespace Styx.Helpers
 			}
 
 			Type type = this.GetType();
-			if (root.Name != type.Name)
+			if (root.Name != System.Xml.XmlConvert.EncodeName(type.Name))
 			{
 				throw new ArgumentException(
 					string.Format("The settings file does not match the type that is being loaded! Root name is \"{0}\", expected \"{1}\".",
