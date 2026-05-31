@@ -120,6 +120,7 @@ namespace Styx
                 TreeRoot.Stop();
             }
             BotBase oldBot = Current;
+            Logging.Write("Changing current bot to: {0}", bot.Name);
             Current = bot;
 
             // Fire bot changed event
