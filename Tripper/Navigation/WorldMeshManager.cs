@@ -55,7 +55,9 @@ namespace Tripper.Navigation
 
         public bool LoadTile(TileIdentifier tid)
         {
-            if (!_navigator.IsLoaded || _navigator.CurrentMapId == 0)
+            // Do NOT check CurrentMapId == 0 here — Eastern Kingdoms is map 0.
+            // Guard on IsLoaded only; CurrentMapId == 0 is valid for EK.
+            if (!_navigator.IsLoaded)
             {
                 return false;
             }
