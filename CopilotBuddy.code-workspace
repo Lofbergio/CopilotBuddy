@@ -1,22 +1,17 @@
 {
-    "folders": [
-        {
-            "path": "."
-        },
-        {
-            "path": "../hb decompile/.hb 4.3.4"
-        },
-        {
-            "path": "../hb decompile/.hb 6.2.3"
-        },
-        {
-            "path": "../Navigation C++"
-        },
-        {
-            "path": "../Navigation View3D/Extractor_projects-master/mangostwo-server/src/tools/Extractor_projects/Movemap-Generator"
-        },
-        {
-            "path": "../hb decompile/.hb legion 3.0.904 for wow 7.3.2"
-        }
-    ]
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../hb decompile/.hb 6.2.3"
+		},
+		{
+			"path": "../hb decompile/.hb 4.3.4"
+		},
+		{
+			"path": "../Navigation C++"
+		}
+	],
+	"settings": {}
 }
