@@ -107,7 +107,7 @@ namespace Styx.Logic.Pathing
 					_currentProvider.PathPrecision = value;
 			}
 		}
-		public static int LoadTilesAroundRadius { get; set; } = 2;
+		public static int LoadTilesAroundRadius { get; set; } = 1;
 		public static float FlyingMountHeight { get; set; } = 25f;
 
 		/// <summary>

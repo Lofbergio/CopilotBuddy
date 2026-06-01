@@ -198,8 +198,7 @@ namespace Styx.Logic.Pathing
                 // so mounting is appropriate.  Mount.MountUp() is a no-op when cooldown is active.
                 if (!CanFly && !StyxWoW.Me.Mounted)
                     Mount.MountUp();
-                // Project destination to player Z before ground nav — aerial Z causes CalculatePathEx:FAILED.
-                Navigator.MoveTo(new WoWPoint(destination.X, destination.Y, myLocation.Z));
+                Navigator.MoveTo(destination);
                 return;
             }
 
@@ -213,7 +212,7 @@ namespace Styx.Logic.Pathing
                 // Don't attempt flying-mount logic here — just do ground navigation.
                 if (!CanFly)
                 {
-                    Navigator.MoveTo(new WoWPoint(destination.X, destination.Y, myLocation.Z));
+                    Navigator.MoveTo(destination);
                     return;
                 }
 
@@ -329,7 +328,7 @@ namespace Styx.Logic.Pathing
                     //    !StyxWoW.Me.Mounted guard: prevents ground nav during the CanFly-flag
                     //    timing window right after mounting (same pattern as RemoveLootFilter).
                     if ((!CanFly && !StyxWoW.Me.Mounted) || me.Combat)
-                        Navigator.MoveTo(new WoWPoint(destination.X, destination.Y, myLocation.Z));
+                        Navigator.MoveTo(destination);
                 }
             }
             else

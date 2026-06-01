@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using Styx.Helpers;
@@ -157,11 +156,7 @@ namespace Styx.Logic.Pathing
 			var pos = new Vector3(me.Location.X, me.Location.Y, me.Location.Z);
 			try
 			{
-				var _sw = Stopwatch.StartNew();
 				TripperNavigator.EnsureTilesAroundPosition(mapId, pos, 1);
-				_sw.Stop();
-				if (_sw.ElapsedMilliseconds > 2)
-					Logging.WriteDiagnostic("[MeshNav] UpdateMaps EnsureTiles map={0} {1}ms", mapId, _sw.ElapsedMilliseconds);
 			}
 			catch { }
 		}
@@ -262,9 +257,6 @@ namespace Styx.Logic.Pathing
 			{
 				if (!_pathRegenThrottle.IsFinished)
 					return MoveResult.Moved;
-
-				Logging.WriteDiagnostic("[MeshNav] PathRegen trigger: destChanged={0} needsRegen={1} dest={2}",
-					destinationChanged, needsPathRegen, destination);
 
 				_pathRegenThrottle.Reset();
 				_destination = destination;
@@ -561,7 +553,12 @@ namespace Styx.Logic.Pathing
 			BlackspotManager.EnsureBlackspotsMarked();
 			ApplyAliveQueryFilter(ObjectManager.Me?.IsAlive ?? true);
 
+			var sw = System.Diagnostics.Stopwatch.StartNew();
 			var result = TripperNavigator.FindPath(mapId, start, end, true);
+			sw.Stop();
+			if (sw.ElapsedMilliseconds > 5)
+				Logging.WriteDiagnostic($"[Nav] GeneratePath {sw.ElapsedMilliseconds}ms map={mapId} dist={(end - start).Length():F0}y");
+
 			if (result.Status.Succeeded && result.Points != null && result.Points.Length > 0)
 			{
 				var path = new WoWPoint[result.Points.Length];
@@ -742,10 +739,6 @@ namespace Styx.Logic.Pathing
 			int capturedRadius = Navigator.LoadTilesAroundRadius;
 			var capturedMid = hasMiddle ? (start + end) * 0.5f : Vector3.Zero;
 
-			Logging.WriteDiagnostic("[MeshNav] PathGen START map={0} dist={1:F1}y dest={2}",
-				mapId, me.Location.Distance(destination), destination);
-			var _genSw = Stopwatch.StartNew();
-
 			var navTask = System.Threading.Tasks.Task.Run(() =>
 			{
 				try
@@ -762,16 +755,14 @@ namespace Styx.Logic.Pathing
 			TripperNav.PathFindResult result;
 			try
 			{
-				if (navTask.Wait(10))
+				// Wait(0): never spin on the render thread — if A* isn't instant, release frame immediately.
+				// HB 6.2.3 uses ReleaseFrame for all long paths; 10ms initial wait was causing 15 FPS in dense zones.
+				if (navTask.Wait(0))
 				{
 					result = navTask.Result;
 				}
 				else
 				{
-					_genSw.Stop();
-					Logging.WriteDiagnostic("[MeshNav] PathGen >10ms ({0}ms so far) → ReleaseFrame. map={1} dist={2:F1}y",
-						_genSw.ElapsedMilliseconds, mapId, me.Location.Distance(destination));
-					_genSw.Restart();
 					using (StyxWoW.Memory.ReleaseFrame(true))
 					{
 						int waitSlice = Math.Max(10, 1000 / Math.Max(1, (int)TreeRoot.TicksPerSecond));
@@ -829,10 +820,6 @@ namespace Styx.Logic.Pathing
 			{
 				navTask.Dispose();
 			}
-
-			_genSw.Stop();
-			Logging.WriteDiagnostic("[MeshNav] PathGen DONE {0}ms pts={1} map={2}",
-				_genSw.ElapsedMilliseconds, result?.Points?.Length ?? 0, capturedMapId);
 
 			if (result == null || result.Points == null || result.Points.Length == 0)
 			{
