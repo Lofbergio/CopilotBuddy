@@ -107,10 +107,10 @@ namespace Styx.Logic.Pathing
             {
                 float expectedDist = GetExpectedDistance(activeMover, _stopwatch.Elapsed);
                 float? pathDist = Navigator.PathDistance(_lastCheckLocation, currentLocation, expectedDist);
-                // PathDistance returns null when Detour yields a partial path (off-mesh terrain).
-                // Fall back to direct Euclidean distance so stuck fires even on elevated/off-mesh positions.
-                float effectiveDist = pathDist ?? _lastCheckLocation.Distance(currentLocation);
-                if (effectiveDist < expectedDist)
+                // HB 6.2.3 Class469: only evaluate stuck when PathDistance is available.
+                // Null typically means partial/off-mesh path; treating that as zero causes
+                // false stuck detections during normal looting/micro-adjust movement.
+                if (pathDist.HasValue && pathDist.Value < expectedDist)
                 {
                     Logging.WriteVerbose(Colors.Red,
                         "We are stuck! (TPS: {0:F1}, Latency: {1}, loc: {2})!",

@@ -490,6 +490,10 @@ namespace Styx.Logic.Pathing
 			}
 			catch { }
 
+			// Do not issue movement while a mount cast is in progress.
+			if (me.IsCasting)
+				return MoveResult.Moved;
+
 			// NOTE: Navigator.MoveTo is PURE GROUND NAV — no Flightor routing here.
 			// In HB, Flightor is called by the bot base directly. If Navigator.MoveTo
 			// delegated to Flightor, and Flightor checks CanNavigateFully/GetPathDistance
