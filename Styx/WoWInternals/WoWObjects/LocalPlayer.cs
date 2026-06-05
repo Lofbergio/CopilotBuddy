@@ -461,12 +461,14 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
-                // FIX: Was base.IsDead (CurrentHealth==0) which is FALSE for ghosts (health==1).
                 // base.IsGhost (CurrentHealth==1) is the correct check for released-spirit state.
                 // Dead (health=0) -> IsDead=true, IsGhost=false -> release spirit
                 // Ghost (health=1) -> IsDead=false, IsGhost=true -> corpse run
                 // Alive (health>1) -> IsDead=false, IsGhost=false -> normal play
-                return base.IsGhost && CorpsePoint != WoWPoint.Empty;
+                // NOTE: Do NOT add && CorpsePoint != WoWPoint.Empty here — CorpsePoint can read
+                // as zero right after release (timing/offset race), causing IsGhost=false during
+                // ghost state and bypassing the MountUp dead/ghost guard (mount-while-dead bug).
+                return base.IsGhost;
             }
         }
         
