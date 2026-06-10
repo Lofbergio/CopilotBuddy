@@ -110,7 +110,7 @@ namespace Styx.Logic.Pathing
 				throw new InvalidOperationException("This MeshNavigator instance is already in use");
 			base.OnSetAsCurrent(); // StuckHandler.OnSetAsCurrent()
 			BotEvents.OnPulse += OnPulse;
-			Navigator.TripperNavigator.OnNavigatorLogMessage += OnNavigatorLog;
+			Navigator.TripperNavigator.LogMessage += OnNavigatorLog;
 			_isCurrent = true;
 		}
 
@@ -124,7 +124,7 @@ namespace Styx.Logic.Pathing
 			if (!_isCurrent)
 				throw new InvalidOperationException("This MeshNavigator instance is not in use");
 			BotEvents.OnPulse -= OnPulse;
-			Navigator.TripperNavigator.OnNavigatorLogMessage -= OnNavigatorLog;
+			Navigator.TripperNavigator.LogMessage -= OnNavigatorLog;
 			base.OnRemoveAsCurrent(); // StuckHandler.OnRemoveAsCurrent()
 			_isCurrent = false;
 		}

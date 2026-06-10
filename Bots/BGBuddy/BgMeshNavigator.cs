@@ -1,7 +1,7 @@
 // Ported from: .hb 4.3.4/Honorbuddy/Honorbuddy/ns5/Class80.cs
 // Target path: Bots/BGBuddy/BgMeshNavigator.cs
 // Deobfuscated: Class80         → BgMeshNavigator
-//              method_10        → OnSubTileLoaded (same body as method_11)
+//              method_10        → OnTileLoaded (1x1 reading, single event per ADT)
 //              method_11        → OnTileLoaded
 //              bool_1           → _pathRandomized
 //              dictionary_0     → _savedPolyAreas
@@ -57,14 +57,12 @@ namespace Bots.BGBuddy
         public override void OnSetAsCurrent()
         {
             base.OnSetAsCurrent();
-            StyxNav.TripperNavigator.OnTileLoaded += OnTileLoaded;
-            StyxNav.TripperNavigator.OnSubTileLoaded += OnTileLoaded;
+            StyxNav.TripperNavigator.TileLoaded += OnTileLoaded;
         }
 
         public override void OnRemoveAsCurrent()
         {
-            StyxNav.TripperNavigator.OnTileLoaded -= OnTileLoaded;
-            StyxNav.TripperNavigator.OnSubTileLoaded -= OnTileLoaded;
+            StyxNav.TripperNavigator.TileLoaded -= OnTileLoaded;
             base.OnRemoveAsCurrent();
         }
 
@@ -73,7 +71,7 @@ namespace Bots.BGBuddy
         #region Tile loaded — blackspot injection (HB Class80.method_10 / method_11)
 
         /// <summary>
-        /// Called when any navmesh tile or sub-tile is loaded.
+        /// Called when a 1x1 navmesh tile is loaded.
         /// Resets path randomization state and re-injects BG profile blackspots.
         /// </summary>
         private void OnTileLoaded(object? sender, TileLoadedEventArgs e)
