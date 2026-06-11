@@ -312,11 +312,9 @@ namespace Bots.Gatherbuddy
                 ),
 
                 // [2] Any ground combat (or eating/drinking): reset per-node gather counters.
-                //     HB 6.2.3 Class670.method_2: Me.Combat || HasAura("Food") || HasAura("Drink")
+                //     HB 6.2.3 Class670.method_2/3: Me.Combat || HasAura("Food") || HasAura("Drink")
+                //     and stopwatch_0.Reset() runs unconditionally (no IsFlying guard).
                 //     Returns Failure so the tree continues to the combat subtree below.
-                //     Guard: don't reset the timer while flying. A mob that aggros during flight
-                //     must not suppress the BlacklistTimer — the bot needs [2] in CreateGatherBehavior
-                //     to fire so a terrain-blocked approach point gets blacklisted at 20 s.
                 new Decorator(
                     ctx => StyxWoW.Me.Combat ||
                            StyxWoW.Me.HasAura("Food") ||
@@ -324,8 +322,7 @@ namespace Bots.Gatherbuddy
                     new Action(ctx =>
                     {
                         _gatherAttemptCount = 0;
-                        if (!StyxWoW.Me.MovementInfo.IsFlying)
-                            _gatherTimer.Reset();
+                        _gatherTimer.Reset();
                         return RunStatus.Failure;
                     })
                 ),
@@ -427,6 +424,27 @@ namespace Bots.Gatherbuddy
                     ctx => _waypointQueue != null &&
                            _waypointQueue.Count > 0 &&
                            StyxWoW.Me.Location.Distance2DSqr(_waypointQueue.Peek()) < ArrivalThresholdSqr,
+                    new Action(ctx =>
+                    {
+                        _waypointQueue.Dequeue();
+                        return RunStatus.Success;
+                    })
+                ),
+
+                // [9.5] HB 6.2.3 Class670.method_27/28: when a node is detected, if the NEXT
+                //       waypoint is closer to the node than to the CURRENT waypoint target,
+                //       the player has effectively passed the current one — drop it so the
+                //       bot resumes the route from the nearest forward waypoint instead of
+                //       backtracking to the missed one. DecoratorContinue so evaluation
+                //       proceeds to [10] and the gather still runs this tick.
+                new DecoratorContinue(
+                    ctx => LootTargeting.Instance.FirstObject != null &&
+                           _waypointQueue != null &&
+                           _waypointQueue.Count > 2 &&
+                           _waypointQueue.ElementAt(1)
+                               .Distance2D(_waypointQueue.Peek())
+                               > _waypointQueue.ElementAt(1)
+                                   .Distance2D(LootTargeting.Instance.FirstObject.Location),
                     new Action(ctx =>
                     {
                         _waypointQueue.Dequeue();
@@ -623,7 +641,15 @@ namespace Bots.Gatherbuddy
                     if (vendorUnit == null)
                     {
                         TreeRoot.StatusText = "Moving to repair vendor";
-                        if (Flightor.CanFly)
+                        // Use Flightor in flyable maps (Outland 530 / Northrend 571) when a flying
+                        // mount is available. Don't gate on Flightor.CanFly because that requires
+                        // IsFlyableArea() Lua to return true, which can fail on private servers or
+                        // when the player is briefly out of a flyable sub-zone (e.g. z=-100.68).
+                        uint map = StyxWoW.Me.MapId;
+                        bool inFlyableMap = map == 530U || map == 571U;
+                        if (inFlyableMap && Flightor.MountHelper.FlyingMount != null)
+                            Flightor.MoveTo(vendor.Location, 40f);
+                        else if (Flightor.CanFly)
                             Flightor.MoveTo(vendor.Location, 40f);
                         else
                             Navigator.MoveTo(vendor.Location);
