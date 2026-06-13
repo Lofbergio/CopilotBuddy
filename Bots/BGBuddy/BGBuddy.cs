@@ -368,17 +368,21 @@ namespace Bots.BGBuddy
 
         /// <summary>
         /// Logic when not inside a battleground: deserter wait, queueing, BG acceptance.
+        /// Ported from HB 4.3.4 BGBuddy.method_3.
         /// </summary>
         private Composite CreateOutsideBattlegroundLogic()
         {
             return new Decorator(
                 ctx => !Styx.Logic.Battlegrounds.IsInsideBattleground,
                 new PrioritySelector(
+                    // [0] Death behavior (HB 4.3.4 smethod_32)
                     LevelBot.CreateDeathBehavior(),
+                    // [1] Vendor behavior
                     LevelBot.CreateVendorBehavior(),
+                    // [2] Combat behavior
                     LevelBot.CreateCombatBehavior(),
 
-                    // Deserter debuff — wait it out
+                    // [3] Deserter debuff — wait it out (HB 4.3.4 smethod_4: HasDeserterAura)
                     new Decorator(
                         ctx => StyxWoW.Me.HasAura("Deserter"),
                         new Sequence(
@@ -387,14 +391,16 @@ namespace Bots.BGBuddy
                             new ActionIdle()
                         )),
 
-                    // Short cooldown between actions
+                    // [4] Short cooldown between actions (HB 4.3.4 smethod_7: !IsFinished, smethod_15: Reset)
+                    //    smethod_8 (reset) returns RunStatus.Failure so the PrioritySelector continues
+                    //    to the queue actions. Returning Success here would stop the tree prematurely.
                     new Decorator(
                         ctx => !_internalTimer.IsFinished,
                         new ActionAlwaysSucceed()
                     ),
-                    new Action(ctx => _internalTimer.Reset()),
+                    new Action(ctx => { _internalTimer.Reset(); return RunStatus.Failure; }),
 
-                    // Waiting for BG confirmation popup — accept it
+                    // [5] Waiting for BG confirmation popup — accept it (HB 4.3.4 smethod_9: WaitingForConfirmation)
                     new Decorator(
                         ctx => Styx.Logic.Battlegrounds.WaitingForConfirmation,
                         new PrioritySelector(
@@ -410,7 +416,7 @@ namespace Bots.BGBuddy
                             )
                         )),
 
-                    // In party but not leader — wait for leader to queue
+                    // [6] In party but not leader — wait for leader to queue (HB 4.3.4 smethod_18: InPartyNotLeader)
                     new Decorator(
                         ctx => StyxWoW.Me.IsInParty && !StyxWoW.Me.IsGroupLeader,
                         new Sequence(
@@ -418,24 +424,27 @@ namespace Bots.BGBuddy
                             new ActionIdle()
                         )),
 
-                    // Queue #1
+                    // [7] Queue #1 (HB 4.3.4 smethod_20: ShouldQueue1)
+                    //     Queue1 maps to WoW BG slot 1
                     new Decorator(
                         ctx => BGBuddySettings.Instance.Queue1 != BattlegroundType.None
                             && !Styx.Logic.Battlegrounds.IsQueuedForBattleground(BGBuddySettings.Instance.Queue1),
                         new Sequence(
                             new Action(ctx => Logger.Write(BGBuddyResources.QueueingUpFor, BGBuddySettings.Instance.Queue1)),
-                            new Action(ctx => Styx.Logic.Battlegrounds.JoinBattlefield(BGBuddySettings.Instance.Queue1, StyxWoW.Me.IsInParty))
+                            new Action(ctx => Styx.Logic.Battlegrounds.JoinBattlefield(1, BGBuddySettings.Instance.Queue1, StyxWoW.Me.IsInParty))
                         )),
 
-                    // Queue #2
+                    // [8] Queue #2 (HB 4.3.4 smethod_23: ShouldQueue2)
+                    //     Queue2 maps to WoW BG slot 2
                     new Decorator(
                         ctx => BGBuddySettings.Instance.Queue2 != BattlegroundType.None
                             && !Styx.Logic.Battlegrounds.IsQueuedForBattleground(BGBuddySettings.Instance.Queue2),
                         new Sequence(
                             new Action(ctx => Logger.Write(BGBuddyResources.QueueingUpFor, BGBuddySettings.Instance.Queue2)),
-                            new Action(ctx => Styx.Logic.Battlegrounds.JoinBattlefield(BGBuddySettings.Instance.Queue2, StyxWoW.Me.IsInParty))
+                            new Action(ctx => Styx.Logic.Battlegrounds.JoinBattlefield(2, BGBuddySettings.Instance.Queue2, StyxWoW.Me.IsInParty))
                         )),
 
+                    // [9] Idle — nothing to do (HB 4.3.4 array[10] = ActionIdle)
                     new ActionIdle()
                 )
             );
