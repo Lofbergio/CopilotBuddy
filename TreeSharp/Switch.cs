@@ -113,7 +113,11 @@ namespace TreeSharp
 
             if (Selection == null)
             {
-                throw new IndexOutOfRangeException("No valid statement was found to match the switch value.");
+                // Match HB 4.3.4 / 6.2.3 reference behaviour: when no argument matches and no
+                // default branch is supplied, return Failure so the parent composite can pick
+                // another branch. Throwing here stalls the tree (e.g. PartyBot "Moving to leader").
+                yield return RunStatus.Failure;
+                yield break;
             }
 
             Selection.Start(context);
