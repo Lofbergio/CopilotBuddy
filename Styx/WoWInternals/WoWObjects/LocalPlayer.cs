@@ -2605,77 +2605,61 @@ namespace Styx.WoWInternals.WoWObjects
         public SpecType SpecType => Specialization;
 
         /// <summary>
-        /// FEAT-39: Detects the player's spec type from talent tree points.
-        /// Analyzes the primary talent tree to determine role.
+        /// FEAT-39: Detects the player's spec type from learned talents via SpellManager.
+        /// Ported from HB 4.3.4 LocalPlayer.SpecType (line 1053 of the decompile).
+        /// Uses spell-name lookups (Meditation/Vengeance/Shamanism/Moonfury) which are
+        /// locale-independent (spell names come from the client's DBC and match the
+        /// internal English identifier regardless of UI language).
         /// </summary>
         public SpecType Specialization
         {
             get
             {
-                try
+                // 1. Healer talents grant "Meditation" (Priest, Paladin, Mage via talent,
+                //    Shaman, Druid via Partial, Monk). If learned, always Healer.
+                if (SpellManager.HasSpell("Meditation"))
+                    return SpecType.Healer;
+
+                // 2. Tank talents grant "Vengeance" (Warrior Prot, Paladin Prot,
+                //    DK Blood, Druid Feral, Monk Brewmaster). For non-Druid, always Tank.
+                //    Druid Feral is handled separately (bear form = tank).
+                if (SpellManager.HasSpell("Vengeance") && Class != WoWClass.Druid)
+                    return SpecType.Tank;
+
+                // 3. Class-specific defaults — fall through to the class's typical spec.
+                switch (Class)
                 {
-                    // Get talent points per tree: returns tab1pts, tab2pts, tab3pts
-                    var results = Lua.GetReturnValues(
-                        "local n1,n2,n3=0,0,0; " +
-                        "local _,_,p1=GetTalentTabInfo(1); n1=p1; " +
-                        "local _,_,p2=GetTalentTabInfo(2); n2=p2; " +
-                        "local _,_,p3=GetTalentTabInfo(3); n3=p3; " +
-                        "return n1,n2,n3");
-                    if (results != null && results.Count >= 3)
-                    {
-                        int t1 = Lua.ParseLuaValue<int>(results[0]);
-                        int t2 = Lua.ParseLuaValue<int>(results[1]);
-                        int t3 = Lua.ParseLuaValue<int>(results[2]);
-                        int maxPoints = Math.Max(t1, Math.Max(t2, t3));
-                        if (maxPoints == 0) return SpecType.None;
-
-                        // Determine primary tree index (1-indexed)
-                        int primaryTree;
-                        if (t1 >= t2 && t1 >= t3) primaryTree = 1;
-                        else if (t2 >= t1 && t2 >= t3) primaryTree = 2;
-                        else primaryTree = 3;
-
-                        // Get tree role name
-                        var roleResults = Lua.GetReturnValues(
-                            $"local _,name = GetTalentTabInfo({primaryTree}); return name");
-                        // Role detection is class-specific — use tree name as heuristic
-                        // This is approximate; precise mappings require class+tree combos
-                        if (roleResults != null && roleResults.Count > 0)
-                        {
-                            string treeName = roleResults[0].ToLower();
-                            // Tank trees
-                            if (treeName == "protection" || treeName == "blood")
-                                return SpecType.Tank;
-                            // Feral Combat: bear form = tank, cat form = melee DPS (matches HB 4.3.4 SpecType logic)
-                            if (treeName == "feral combat")
-                            {
-                                if (Shapeshift == ShapeshiftForm.Bear || Shapeshift == ShapeshiftForm.DireBear)
-                                    return SpecType.Tank;
-                                return SpecType.MeleeDps;
-                            }
-                            // Healer trees
-                            if (treeName == "holy" || treeName == "discipline" || treeName == "restoration")
-                                return SpecType.Healer;
-                            // Ranged DPS trees
-                            if (treeName == "arcane" || treeName == "fire" || treeName == "frost" ||
-                                treeName == "shadow" || treeName == "destruction" || treeName == "affliction" ||
-                                treeName == "demonology" || treeName == "balance" || treeName == "elemental" ||
-                                treeName == "marksmanship" || treeName == "beast mastery" || treeName == "survival")
-                            {
-                                // Frost DK is melee, not ranged — "frost" tree name is shared with Mage
-                                if (treeName == "frost" && Class == WoWClass.DeathKnight)
-                                    return SpecType.MeleeDps;
-                                return SpecType.RangedDps;
-                            }
-                            // Melee DPS trees
-                            if (treeName == "arms" || treeName == "fury" || treeName == "retribution" ||
-                                treeName == "combat" || treeName == "assassination" || treeName == "subtlety" ||
-                                treeName == "enhancement" || treeName == "unholy")
-                                return SpecType.MeleeDps;
-                        }
-                    }
+                    case WoWClass.Warrior:     // Default: Arms/Fury. Protection detected above via Vengeance.
+                        return SpecType.MeleeDps;
+                    case WoWClass.Paladin:     // Default: Retribution. Holy/Prot detected above.
+                        return SpecType.MeleeDps;
+                    case WoWClass.Hunter:      // All three trees are ranged DPS.
+                        return SpecType.RangedDps;
+                    case WoWClass.Rogue:       // All three trees are melee DPS.
+                        return SpecType.MeleeDps;
+                    case WoWClass.Priest:      // Default: Shadow. Disc/Holy detected above via Meditation.
+                        return SpecType.RangedDps;
+                    case WoWClass.DeathKnight: // Default: Frost/Unholy. Blood detected above via Vengeance.
+                        return SpecType.MeleeDps;
+                    case WoWClass.Shaman:      // "Shamanism" talent = Elemental spec (ranged DPS).
+                        return SpellManager.HasSpell("Shamanism")
+                            ? SpecType.RangedDps
+                            : SpecType.MeleeDps;
+                    case WoWClass.Mage:        // All three trees are ranged DPS.
+                        return SpecType.RangedDps;
+                    case WoWClass.Warlock:     // All three trees are ranged DPS.
+                        return SpecType.RangedDps;
+                    case WoWClass.Druid:
+                        // "Moonfury" talent = Balance spec (ranged DPS).
+                        if (SpellManager.HasSpell("Moonfury"))
+                            return SpecType.RangedDps;
+                        // Feral: tank role → bear form, otherwise Cat form = melee DPS.
+                        if ((Role & WoWPartyMember.GroupRole.Tank) != WoWPartyMember.GroupRole.None)
+                            return SpecType.Tank;
+                        if (Shapeshift != ShapeshiftForm.Cat)
+                            return SpecType.Tank;
+                        return SpecType.MeleeDps;
                 }
-                catch { }
                 return SpecType.None;
             }
         }
