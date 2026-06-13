@@ -18,6 +18,14 @@
     <FileVersion>1.4.1.0</FileVersion>
     <!-- Exclude satellite assemblies (localization folders like cs, de, es, fr, it, ja, ko, pl, pt-BR, ru, tr, zh-Hans, zh-Hant) -->
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Force all NuGet package assemblies to be copied to the output directory,
+         even those not transitively used by the application's compiled code.
+         This is needed because the runtime SourceCompiler resolves plugin
+         references from $(OutDir), including WCF (System.ServiceModel.*) and
+         System.Drawing.Common which the WPF app itself does not import. Without
+         this, those DLLs would be missing from bin\Debug\net10.0-windows7.0\
+         and any plugin compiled at runtime using WCF / System.Drawing would fail. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
 
   </PropertyGroup>
 
@@ -71,6 +79,12 @@
     <PackageReference Include="System.Threading.AccessControl" Version="4.3.0" />
     <PackageReference Include="System.IO.FileSystem.Watcher" Version="4.3.0" />
     <PackageReference Include="System.Runtime.Serialization.Xml" Version="4.3.0" />
+    <!-- WCF support for plugins that use NetNamedPipeBinding (e.g. HBRelogHelper).
+         System.ServiceModel is no longer part of the .NET runtime starting with .NET 5+
+         and must be supplied via NuGet. These packages ship the assemblies that get
+         copied next to CopilotBuddy.exe so the runtime SourceCompiler can reference them. -->
+    <PackageReference Include="System.ServiceModel.Primitives" Version="8.0.0" />
+    <PackageReference Include="System.ServiceModel.NetNamedPipe" Version="8.0.0" />
   </ItemGroup>
 
 </Project>
