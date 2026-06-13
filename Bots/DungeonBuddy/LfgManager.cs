@@ -5,6 +5,7 @@ using Bots.DungeonBuddy.Enums;
 using Styx;
 using Styx.Helpers;
 using Styx.WoWInternals;
+using Styx.WoWInternals.WoWObjects; // for SpecType
 using Styx.Combat.CombatRoutine; // for WoWClass enum
 
 namespace Bots.DungeonBuddy
@@ -73,7 +74,11 @@ namespace Bots.DungeonBuddy
         public static void QueueForRandomDungeon()
         {
             Logging.Write("[DungeonBuddy] Queuing for Random Dungeon via UI (Instancebuddy style)...");
-            
+
+            // Apply the user-configured Role setting before clicking Join, so the
+            // LFG popup reflects the role the user picked (HB 5.4.8/6.2.3 pattern).
+            SetLfgRoles();
+
             // Just like Instancebuddy, we rely on the user having selected their roles and the random dungeon manually.
             Lua.DoString(@"
                 if not LFDQueueFrame then LoadAddOn('Blizzard_LFGUI') end
@@ -87,7 +92,9 @@ namespace Bots.DungeonBuddy
         public static void QueueForRandomHeroic()
         {
             Logging.Write("[DungeonBuddy] Queuing for Random Heroic via UI (Instancebuddy style)...");
-            
+
+            SetLfgRoles();
+
             Lua.DoString(@"
                 if not LFDQueueFrame then LoadAddOn('Blizzard_LFGUI') end
                 LFDQueueFrame_Join();
@@ -100,7 +107,9 @@ namespace Bots.DungeonBuddy
         public static void QueueForSpecificDungeon(uint dungeonId)
         {
             Logging.Write($"[DungeonBuddy] Queuing for dungeon ID {dungeonId}...");
-            
+
+            SetLfgRoles();
+
             Lua.DoString($@"
                 ClearAllLFGDungeons();
                 SetLFGDungeon({dungeonId}, true);
@@ -164,16 +173,33 @@ namespace Bots.DungeonBuddy
         // ROLE SELECTION
         // ═══════════════════════════════════════════════════════════
 
-        private static PartyRole _currentRole = PartyRole.Dps;
-
         /// <summary>
-        /// Définit le rôle pour le LFG
+        /// Sets the LFG role checkboxes via SetLFGRoles() based on
+        /// DungeonBuddySettings.Instance.Role.
+        /// Ported from HB 5.4.8 / 6.2.3 Class374.smethod_7.
+        /// Auto mode picks the role from the player's current spec
+        /// (via StyxWoW.Me.SpecType — HB 4.3.4 spell-based detection).
         /// </summary>
-        public static void SetRole(PartyRole role)
+        public static void SetLfgRoles()
         {
-            // Removed to prevent "You did not select any valid slots" error.
-            // The user manually selects their role in the UI, just like in the original Instancebuddy.
-            _currentRole = role;
+            Logging.WriteDebug("Setting roles.");
+
+            var role = DungeonBuddySettings.Instance.Role;
+            var spec = StyxWoW.Me?.SpecType ?? SpecType.None;
+
+            // HB 4.3.4/5.4.8/6.2.3 pattern: when Role=Auto, fall back to SpecType.
+            // Spell-based spec detection is locale-independent.
+            bool tank = role == QueueRole.Tank
+                || (role == QueueRole.Auto && spec == SpecType.Tank);
+            bool healer = role == QueueRole.Healer
+                || (role == QueueRole.Auto && spec == SpecType.Healer);
+            bool damage = role == QueueRole.Damage
+                || (role == QueueRole.Auto && (spec == SpecType.MeleeDps || spec == SpecType.RangedDps));
+
+            // SetLFGRoles(leader, tank, healer, dps) — preserve the existing leader flag
+            // (first return value) and only update the three role flags.
+            // GetLFGRoles() returns "leader,tank,healer,dps" as a comma-separated string.
+            Lua.DoString($"SetLFGRoles(GetLFGRoles(),{(tank ? "true" : "false")},{(healer ? "true" : "false")},{(damage ? "true" : "false")})");
         }
 
         /// <summary>
