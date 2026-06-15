@@ -130,16 +130,18 @@ namespace Styx.Logic.Pathing
 		}
 
 		/// <summary>
-		/// HB 6.2.3 method_1 bound to BotEvents.OnPulse:
-		/// Updates faction area type + calls UpdateMaps() each pulse.
+		/// HB 6.2.3 method_1: updates faction area type on pulse.
+		/// Tile streaming (UpdateMaps) is NOT called here - HB only triggers
+		/// UpdateMaps on faction change and from ProfileManager when a profile
+		/// is active. Calling it per-pulse causes constant tile preloading
+		/// even in bots without an XML profile (e.g. BGBuddy, QuestBot behaviors).
+		/// Source: .hb 6.2.3 MeshNavigator.method_1 / ProfileManager.UpdateMaps
 		/// </summary>
 		private void OnPulse(object sender, EventArgs e)
 		{
 			var me = ObjectManager.Me;
 			if (me != null)
 				_factionAreaType = me.IsHorde ? TripperNav.AreaType.Horde : TripperNav.AreaType.Alliance;
-
-			UpdateMaps();
 		}
 
 		/// <summary>
@@ -222,9 +224,8 @@ namespace Styx.Logic.Pathing
 			// ClickToMove directly — matches what Flightor.MoveTo does for swimming.
 			if (me.IsSwimming)
 			{
-				var swimResult = FindPathResult(me.Location, destination);
-				bool hasGroundPath = swimResult != null
-				    && swimResult.Succeeded
+				var swimResult = FindPath(me.Location, destination);
+				bool hasGroundPath = swimResult.Succeeded
 				    && !swimResult.IsPartialPath
 				    && swimResult.Points != null
 				    && ComputePathLength(swimResult.Points) <= 2000f;
@@ -268,8 +269,22 @@ namespace Styx.Logic.Pathing
 					_ridingElevator = false;
 				}
 
-				if (!GeneratePathInternal(me, destination))
+				// HB 6.2.3 MeshNavigator.FindPath → MeshMovePath assignment.
+				var pathResult = FindPath(me.Location, destination);
+				if (!pathResult.Succeeded || pathResult.Points == null || pathResult.Points.Length == 0)
+				{
+					Logging.Write(System.Drawing.Color.Red,
+						"Could not generate path from {0} to {1} on map {2} (status: {3})",
+						me.Location, destination, me.MapId, pathResult.Status);
 					return MoveResult.PathGenerationFailed;
+				}
+
+				foreach (var point in pathResult.Points)
+					_currentPath.Add(new WoWPoint(point.X, point.Y, point.Z));
+				_currentFlags = pathResult.Flags;
+				_currentPolyTypes = pathResult.PolyTypes;
+				_currentAbilityFlags = pathResult.AbilityFlags;
+				_isPartialPath = pathResult.IsPartialPath;
 
 				_currentPathIndex = 0;
 				_suppressDriftCheck = false;
@@ -575,9 +590,8 @@ namespace Styx.Logic.Pathing
 		/// </summary>
 		public override bool CanNavigateWithin(WoWPoint from, WoWPoint to, float distanceTolerancy)
 		{
-			TripperNav.PathFindResult? result = FindPathResult(from, to);
-			return result != null
-			       && result.Succeeded
+			TripperNav.PathFindResult result = FindPath(from, to);
+			return result.Succeeded
 			       && result.Points != null
 			       && result.Points.Length != 0
 			       && Vector3.DistanceSquared(result.Points[result.Points.Length - 1], new Vector3(to.X, to.Y, to.Z)) < distanceTolerancy * distanceTolerancy;
@@ -588,8 +602,8 @@ namespace Styx.Logic.Pathing
 		/// </summary>
 		public override bool CanNavigateFully(WoWPoint from, WoWPoint to)
 		{
-			TripperNav.PathFindResult? result = FindPathResult(from, to);
-			return result != null && result.Succeeded && !result.IsPartialPath;
+			TripperNav.PathFindResult result = FindPath(from, to);
+			return result.Succeeded && !result.IsPartialPath;
 		}
 
 		/// <summary>
@@ -597,8 +611,8 @@ namespace Styx.Logic.Pathing
 		/// </summary>
 		public override float? PathDistance(WoWPoint from, WoWPoint to, float maxDistance = float.MaxValue)
 		{
-			TripperNav.PathFindResult? result = FindPathResult(from, to);
-			if (result == null || !result.Succeeded || result.IsPartialPath || result.Points == null || result.Points.Length == 0)
+			TripperNav.PathFindResult result = FindPath(from, to);
+			if (!result.Succeeded || result.IsPartialPath || result.Points == null || result.Points.Length == 0)
 				return null;
 
 			Vector3 start = new Vector3(from.X, from.Y, from.Z);
@@ -691,15 +705,17 @@ namespace Styx.Logic.Pathing
 		// Source: .hb 6.2.3 MeshNavigator.cs line 38
 		private static void OnNavigatorLog(string msg) => Logging.WriteDiagnostic(System.Windows.Media.Colors.LightBlue, msg);
 
-		private TripperNav.PathFindResult? FindPathResult(WoWPoint from, WoWPoint to)
+		/// <summary>
+		/// HB 6.2.3 MeshNavigator.FindPath — single entry point for navmesh path queries.
+		/// All public methods (GeneratePath, CanNavigateWithin, CanNavigateFully, PathDistance)
+		/// and MoveTo's regen / swim-check route through here.
+		/// </summary>
+		public TripperNav.PathFindResult FindPath(WoWPoint from, WoWPoint to)
 		{
 			if (!Navigator.IsNavigatorLoaded)
-				return null;
+				return new TripperNav.PathFindResult();
 
 			uint mapId = (uint)(ObjectManager.Me?.MapId ?? 0);
-			if (mapId == 0)
-				return null;
-
 			var start = new Vector3(from.X, from.Y, from.Z);
 			var end = new Vector3(to.X, to.Y, to.Z);
 
@@ -720,132 +736,6 @@ namespace Styx.Logic.Pathing
 		/// Generates path via navmesh. Returns true on success.
 		/// HB 6.2.3 MeshNavigator method — uses Task.Run for tile loading (non-blocking).
 		/// </summary>
-		private bool GeneratePathInternal(LocalPlayer me, WoWPoint destination)
-		{
-			if (!Navigator.IsNavigatorLoaded)
-				return false;
-
-			uint mapId = (uint)(me.MapId);
-			var start = new Vector3(me.Location.X, me.Location.Y, me.Location.Z);
-			var end = new Vector3(destination.X, destination.Y, destination.Z);
-
-			BlackspotManager.EnsureBlackspotsMarked();
-
-			float distSqr = Vector3.DistanceSquared(start, end);
-			bool hasMiddle = distSqr > 40000f;
-			var capturedStart = start;
-			var capturedEnd = end;
-			uint capturedMapId = mapId;
-			int capturedRadius = Navigator.LoadTilesAroundRadius;
-			var capturedMid = hasMiddle ? (start + end) * 0.5f : Vector3.Zero;
-
-			var navTask = System.Threading.Tasks.Task.Run(() =>
-			{
-				try
-				{
-					TripperNavigator.EnsureTilesAroundPosition(capturedMapId, capturedStart, capturedRadius);
-					TripperNavigator.EnsureTilesAroundPosition(capturedMapId, capturedEnd, capturedRadius);
-					if (hasMiddle)
-						TripperNavigator.EnsureTilesAroundPosition(capturedMapId, capturedMid, capturedRadius);
-				}
-				catch { }
-				return TripperNavigator.FindPath(capturedMapId, capturedStart, capturedEnd, true);
-			});
-
-			TripperNav.PathFindResult result;
-			try
-			{
-				// Wait(0): never spin on the render thread — if A* isn't instant, release frame immediately.
-				// HB 6.2.3 uses ReleaseFrame for all long paths; 10ms initial wait was causing 15 FPS in dense zones.
-				if (navTask.Wait(0))
-				{
-					result = navTask.Result;
-				}
-				else
-				{
-					using (StyxWoW.Memory.ReleaseFrame(true))
-					{
-						int waitSlice = Math.Max(10, 1000 / Math.Max(1, (int)TreeRoot.TicksPerSecond));
-						// HB 6.2.3 method_16: cancel path after 4s in combat.
-						bool inCombat = false;
-						DateTime? combatStart = null;
-						bool aborted = false;
-
-						while (!navTask.Wait(waitSlice))
-						{
-							try
-							{
-								StyxWoW.Memory.ClearCache();
-								using (StyxWoW.Memory.AcquireFrame())
-								{
-									ObjectManager.Update();
-									WoWMovement.Pulse();
-								}
-							}
-							catch { }
-
-							inCombat = StyxWoW.Me?.IsActuallyInCombat == true;
-							if (inCombat)
-							{
-								if (combatStart == null)
-									combatStart = DateTime.UtcNow;
-								else if ((DateTime.UtcNow - combatStart.Value).TotalSeconds > 4.0)
-								{
-									Logging.Write(System.Drawing.Color.Red,
-										"Path search aborted due to combat.");
-									aborted = true;
-									break;
-								}
-							}
-							else
-							{
-								combatStart = null;
-							}
-						}
-
-						if (aborted)
-						{
-							navTask.Dispose();
-							return false;
-						}
-					}
-					result = navTask.Result;
-				}
-			}
-			catch
-			{
-				result = null!;
-			}
-			finally
-			{
-				navTask.Dispose();
-			}
-
-			if (result == null || result.Points == null || result.Points.Length == 0)
-			{
-				Logging.Write(System.Drawing.Color.Red,
-					"Could not generate path from {0} to {1} on map {2} (status: {3})",
-					me.Location, destination, me.MapId, result?.Status);
-				return false;
-			}
-
-			if (result.IsPartialPath)
-				Logging.Write(System.Drawing.Color.Orange,
-					"Could not generate full path from {0} to {1} (time used: {2})",
-					me.Location, destination, result.Elapsed);
-			else if (result.Elapsed.TotalMilliseconds > 50.0)
-				Logging.WriteDiagnostic("Successfully generated path from {0} to {1} in {2}",
-					me.Location, destination, result.Elapsed);
-
-			foreach (var point in result.Points)
-				_currentPath.Add(new WoWPoint(point.X, point.Y, point.Z));
-
-			_currentFlags = result.Flags;
-			_currentPolyTypes = result.PolyTypes;
-			_currentAbilityFlags = result.AbilityFlags;
-			_isPartialPath = result.IsPartialPath;
-			return true;
-		}
 
 		#endregion
 
@@ -1239,7 +1129,14 @@ namespace Styx.Logic.Pathing
 
 		#region Internal — door handling (HB 6.2.3 method_7/8)
 
-		private MoveResult? HandleDoors(LocalPlayer me)
+		// protected virtual so BgMeshNavigator (the BG-specific navigator set in
+		// BGBuddy.Start) can opt out — the WSG/IoC/SotA/AV gates open by server
+		// script when the prep timer expires and the API still reports IsClosed=true
+		// for several seconds, causing the bot to spam Interact() on a sliding door
+		// it should just walk through. HB 4.3.4 BgMeshNavigator (ns5/Class80) had
+		// no door handling at all; we keep the open-world door-click logic in the
+		// base class and no-op it from the BG subclass.
+		protected virtual MoveResult? HandleDoors(LocalPlayer me)
 		{
 			if (!_doorScanTimer.IsFinished)
 				return null;
