@@ -91,7 +91,6 @@ namespace Bots.Grind
                         }
                     }
                     LootFrame.Instance.Loot(slot);
-                    Lua.DoString("ConfirmLootSlot({0})", slot + 1);
                 }
                 Lua.DoString("CloseLoot();");
             }
