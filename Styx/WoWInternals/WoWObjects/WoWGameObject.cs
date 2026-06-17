@@ -291,7 +291,7 @@ namespace Styx.WoWInternals.WoWObjects
                     if (State != WoWGameObjectState.Ready) return false; // Already harvested.
                     WoWSkill? skill = ObjectManager.Me.GetSkill(SkillLine.Herbalism);
                     if (skill == null) return false;
-                    int effectiveSkill = skill.CurrentValue;
+                    int effectiveSkill = skill.CurrentValue + (int)skill.Bonus;
                     // Tauren racial: +15 Herbalism
                     if (StyxWoW.Me.Race == WoWRace.Tauren)
                         effectiveSkill += 15;
@@ -305,7 +305,7 @@ namespace Styx.WoWInternals.WoWObjects
                     WoWSkill? skill = ObjectManager.Me.GetSkill(SkillLine.Mining);
                     if (skill == null) return false;
                     uint? required = RequiredSkill;
-                    return !required.HasValue || required.Value == 0 || skill.CurrentValue >= required.Value;
+                    return !required.HasValue || required.Value == 0 || (skill.CurrentValue + (int)skill.Bonus) >= required.Value;
                 }
                 // Check locked chests (lockpicking skill)
                 else if (IsChest && Locked)
