@@ -346,11 +346,12 @@ namespace Bots.Grind
                     ctx => ctx != null && ((WoWObject)ctx).DistanceSqr < 16.0,
                     new Sequence(
                         new TreeSharp.Action(ctx => ((WoWObject)ctx).Interact()),
-                        new Wait(5, 
+                        new Wait(5,
                             ctx => Lua.GetReturnVal<bool>("return StaticPopup1:IsVisible() or GossipFrame:IsVisible()", 0),
-                            new PrioritySelector(
+                            new Sequence(
+                                // GossipFrame path: select Healer gossip option (decorator skips if frame absent)
                                 new DecoratorFrameIsVisible<GossipFrame>(
-                                    new TreeSharp.Action(ctx => 
+                                    new TreeSharp.Action(ctx =>
                                     {
                                         var entry = GossipFrame.Instance.GossipOptionEntries
                                             .FirstOrDefault(e => e.Type == GossipEntry.GossipEntryType.Healer);
@@ -358,9 +359,9 @@ namespace Bots.Grind
                                             GossipFrame.Instance.SelectGossipOption(entry.Index);
                                     })
                                 ),
-                                new Sequence(
-                                    new TreeSharp.Action(ctx => Lua.DoString("StaticPopup1Button1:Click()"))
-                                ),
+                                // StaticPopup1 path: click the "Resurrect" button
+                                new TreeSharp.Action(ctx => Lua.DoString("StaticPopup1Button1:Click()")),
+                                // HB 4.3.4 smethod_80 — reset state regardless of which path triggered
                                 new TreeSharp.Action(ctx =>
                                 {
                                     SleepForLag();
