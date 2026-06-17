@@ -120,7 +120,7 @@ namespace CopilotBuddy.UI
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
-                FileName = "https://discord.gg/zA3mjdbr3J",
+                FileName = "https://discord.gg/ep5TcGMCcB",
                 UseShellExecute = true
             });
         }
