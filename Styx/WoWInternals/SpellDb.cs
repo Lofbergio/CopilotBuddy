@@ -151,6 +151,32 @@ namespace Styx.WoWInternals
         }
 
         /// <summary>
+        /// Checks if a spell with the given name exists in the database. Used as the
+        /// fallback for SpellManager.HasSpell(string) so passive talents (Vengeance,
+        /// Meditation, Shamanism, Moonfury, etc.) that the player has not actively
+        /// cast can still be detected for role identification. Ported from HB 4.3.4
+        /// SpellManager.HasSpell (line 16) which fell back to RawSpells — CopilotBuddy's
+        /// SpellManager.RawSpells was a broken clone of _knownSpells, so we look up the
+        /// full Spells.bin database directly. O(N) but called only when the known-spell
+        /// cache misses, and N=49816 in the worst case.
+        /// </summary>
+        public static bool HasSpellByName(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+                return false;
+            if (!_initialized)
+                Initialize();
+            if (_spells == null)
+                return false;
+            foreach (var spell in _spells.Values)
+            {
+                if (string.Equals(spell.Name, name, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Gets the total number of spells in the database
         /// </summary>
         public static int Count
