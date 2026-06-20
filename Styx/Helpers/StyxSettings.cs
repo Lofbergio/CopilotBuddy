@@ -25,6 +25,7 @@ namespace Styx.Helpers
         }
 
         private string[]? _enabledPlugins;
+        private string _language = "";
         private int _formLocationX = 20;
         private int _formLocationY = 20;
         private bool _useExperimentalPathFollowing = true;
@@ -45,6 +46,17 @@ namespace Styx.Helpers
         {
             get { return _enabledPlugins; }
             set { _enabledPlugins = value; }
+        }
+
+        /// <summary>
+        /// UI culture code (e.g. "en-US", "fr-FR", "zh-Hans", "ru-RU").
+        /// Empty = auto-detect from system. Restart required for changes to take effect.
+        /// </summary>
+        [Setting]
+        public string Language
+        {
+            get { return _language; }
+            set { _language = value ?? ""; }
         }
 
         /// <summary>

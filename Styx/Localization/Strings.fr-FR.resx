@@ -1,0 +1,594 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <data name="AppTitle" xml:space="preserve">
+    <value>CopilotBuddy</value>
+  </data>
+  <data name="SettingsTitle" xml:space="preserve">
+    <value>Paramètres &amp; Outils</value>
+  </data>
+  <data name="PluginsTitle" xml:space="preserve">
+    <value>Plugins</value>
+  </data>
+  <data name="DeveloperToolsTitle" xml:space="preserve">
+    <value>Outils développeur</value>
+  </data>
+  <data name="SelectWoWTitle" xml:space="preserve">
+    <value>Sélectionner un WoW</value>
+  </data>
+  <data name="SelectWoWDescription" xml:space="preserve">
+    <value>Sélectionnez le processus WoW auquel vous attacher :</value>
+  </data>
+  <data name="LblAuthor" xml:space="preserve">
+    <value>Auteur :</value>
+  </data>
+  <data name="LblVersion" xml:space="preserve">
+    <value>Version :</value>
+  </data>
+  <data name="RecompileAll" xml:space="preserve">
+    <value>Tout recompiler</value>
+  </data>
+  <data name="LblFactionName" xml:space="preserve">
+    <value>Nom de faction :</value>
+  </data>
+  <data name="LblGroupID" xml:space="preserve">
+    <value>ID de groupe :</value>
+  </data>
+  <data name="LblGroupID2" xml:space="preserve">
+    <value>ID de groupe 2 :</value>
+  </data>
+  <data name="LblVendorType" xml:space="preserve">
+    <value>Type de vendeur :</value>
+  </data>
+  <data name="LblRefresh" xml:space="preserve">
+    <value>Actualiser</value>
+  </data>
+  <data name="LblLoadProfileButtonText" xml:space="preserve">
+    <value>Charger le profil</value>
+  </data>
+  <data name="LblPauseButtonText" xml:space="preserve">
+    <value>Pause</value>
+  </data>
+  <data name="LblEnhancedMode" xml:space="preserve">
+    <value>Mode amélioré</value>
+  </data>
+  <data name="LblFromFileSystem" xml:space="preserve">
+    <value>Depuis le système de fichiers</value>
+  </data>
+  <data name="LblFromBuddyStore" xml:space="preserve">
+    <value>Depuis le Buddy Store</value>
+  </data>
+  <data name="LblFromWebSource" xml:space="preserve">
+    <value>Depuis le Web</value>
+  </data>
+  <data name="LblRecent" xml:space="preserve">
+    <value>Récents</value>
+  </data>
+  <data name="LblShowPath" xml:space="preserve">
+    <value>Afficher le chemin</value>
+  </data>
+  <data name="LblTargetInfo" xml:space="preserve">
+    <value>Infos cible</value>
+  </data>
+  <data name="LblNavigation" xml:space="preserve">
+    <value>Navigation</value>
+  </data>
+  <data name="ReportBug" xml:space="preserve">
+    <value>Signaler un bug</value>
+  </data>
+  <data name="LblDungeonQueueType" xml:space="preserve">
+    <value>Vous devez changer le type de file en Spécifique avant d'éditer la liste des donjons</value>
+  </data>
+  <data name="TabBagItems" xml:space="preserve">
+    <value>Objets du sac</value>
+  </data>
+  <data name="LogNoneDesc" xml:space="preserve">
+    <value>Aucun : aucun log</value>
+  </data>
+  <data name="LogQuietDesc" xml:space="preserve">
+    <value>Silencieux : logs minimaux</value>
+  </data>
+  <data name="LogNormalDesc" xml:space="preserve">
+    <value>Normal : logs standards</value>
+  </data>
+  <data name="LogVerboseDesc" xml:space="preserve">
+    <value>Verbeux : logs détaillés</value>
+  </data>
+  <data name="LogDiagnosticDesc" xml:space="preserve">
+    <value>Diagnostic : tous les logs</value>
+  </data>
+  <data name="GroupLanguage" xml:space="preserve">
+    <value>Langue</value>
+  </data>
+  <data name="LblLanguage" xml:space="preserve">
+    <value>Langue :</value>
+  </data>
+  <data name="LangAuto" xml:space="preserve">
+    <value>Auto (langue du système)</value>
+  </data>
+  <data name="LblLanguageRestart" xml:space="preserve">
+    <value>Redémarrez Honorbuddy pour appliquer les changements.</value>
+  </data>
+  <data name="BGBuddyConfigTitle" xml:space="preserve">
+    <value>Config BGBuddy</value>
+  </data>
+  <data name="DungeonBuddyConfigTitle" xml:space="preserve">
+    <value>Config DungeonBuddy</value>
+  </data>
+  <data name="GatherBuddySettingsTitle" xml:space="preserve">
+    <value>Paramètres GatherBuddy</value>
+  </data>
+  <data name="TabLog" xml:space="preserve">
+    <value>Journal</value>
+  </data>
+  <data name="TabInfo" xml:space="preserve">
+    <value>Infos</value>
+  </data>
+  <data name="TabProfiles" xml:space="preserve">
+    <value>Profils</value>
+  </data>
+  <data name="TabQuests" xml:space="preserve">
+    <value>Quêtes</value>
+  </data>
+  <data name="TabObjects" xml:space="preserve">
+    <value>Objets</value>
+  </data>
+  <data name="TabUnits" xml:space="preserve">
+    <value>Unités</value>
+  </data>
+  <data name="Pause" xml:space="preserve">
+    <value>Pause</value>
+  </data>
+  <data name="Ready" xml:space="preserve">
+    <value>Prêt</value>
+  </data>
+  <data name="EnhancedMode" xml:space="preserve">
+    <value>Mode amélioré</value>
+  </data>
+  <data name="LoadProfile" xml:space="preserve">
+    <value>Charger le profil</value>
+  </data>
+  <data name="Settings" xml:space="preserve">
+    <value>Paramètres</value>
+  </data>
+  <data name="BotConfig" xml:space="preserve">
+    <value>Config bot</value>
+  </data>
+  <data name="ClassConfig" xml:space="preserve">
+    <value>Config classe</value>
+  </data>
+  <data name="Plugins" xml:space="preserve">
+    <value>Plugins</value>
+  </data>
+  <data name="DeveloperTools" xml:space="preserve">
+    <value>Outils développeur</value>
+  </data>
+  <data name="Start" xml:space="preserve">
+    <value>Démarrer</value>
+  </data>
+  <data name="Stop" xml:space="preserve">
+    <value>Arrêter</value>
+  </data>
+  <data name="Navigation" xml:space="preserve">
+    <value>Navigation</value>
+  </data>
+  <data name="ShowPath" xml:space="preserve">
+    <value>Afficher le chemin</value>
+  </data>
+  <data name="TargetInfo" xml:space="preserve">
+    <value>Infos cible</value>
+  </data>
+  <data name="ReloadScripts" xml:space="preserve">
+    <value>Recharger scripts</value>
+  </data>
+  <data name="DisableMovement" xml:space="preserve">
+    <value>Désactiver déplacement</value>
+  </data>
+  <data name="EnableMovement" xml:space="preserve">
+    <value>Activer déplacement</value>
+  </data>
+  <data name="CopyXML" xml:space="preserve">
+    <value>Copier XML</value>
+  </data>
+  <data name="Refresh" xml:space="preserve">
+    <value>Actualiser</value>
+  </data>
+  <data name="SaveAndClose" xml:space="preserve">
+    <value>Enregistrer &amp; Fermer</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>Annuler</value>
+  </data>
+  <data name="Select" xml:space="preserve">
+    <value>Sélectionner</value>
+  </data>
+  <data name="SelectAll" xml:space="preserve">
+    <value>Tout sélectionner</value>
+  </data>
+  <data name="UnselectAll" xml:space="preserve">
+    <value>Tout désélectionner</value>
+  </data>
+  <data name="GenerateBlackspot" xml:space="preserve">
+    <value>Générer zone interdite</value>
+  </data>
+  <data name="GenerateHotspot" xml:space="preserve">
+    <value>Générer point chaud</value>
+  </data>
+  <data name="GroupGeneral" xml:space="preserve">
+    <value>Général</value>
+  </data>
+  <data name="GroupLogging" xml:space="preserve">
+    <value>Journalisation</value>
+  </data>
+  <data name="GroupMount" xml:space="preserve">
+    <value>Monture</value>
+  </data>
+  <data name="GroupVendorsFlightPaths" xml:space="preserve">
+    <value>Vendeurs &amp; Routes de vol</value>
+  </data>
+  <data name="GroupMailRefreshments" xml:space="preserve">
+    <value>Courrier et Rafraîchissements</value>
+  </data>
+  <data name="GroupCombatLoot" xml:space="preserve">
+    <value>Combat / Butin</value>
+  </data>
+  <data name="GroupDeathSafety" xml:space="preserve">
+    <value>Mort / Sécurité</value>
+  </data>
+  <data name="GroupGathering" xml:space="preserve">
+    <value>Cueillette</value>
+  </data>
+  <data name="GroupAntiNinja" xml:space="preserve">
+    <value>Anti-Voleur</value>
+  </data>
+  <data name="GroupHerbs" xml:space="preserve">
+    <value>Herbes</value>
+  </data>
+  <data name="GroupMinerals" xml:space="preserve">
+    <value>Minerais</value>
+  </data>
+  <data name="GroupBagItems" xml:space="preserve">
+    <value>Objets du sac</value>
+  </data>
+  <data name="GroupBossList" xml:space="preserve">
+    <value>Liste des boss</value>
+  </data>
+  <data name="GroupCommon" xml:space="preserve">
+    <value>Commun</value>
+  </data>
+  <data name="GroupCopyInfo" xml:space="preserve">
+    <value>Copier les infos</value>
+  </data>
+  <data name="GroupCopyXML" xml:space="preserve">
+    <value>Copier XML</value>
+  </data>
+  <data name="GroupCurrentTargetInfo" xml:space="preserve">
+    <value>Infos cible actuelle</value>
+  </data>
+  <data name="GroupDistance" xml:space="preserve">
+    <value>Distance</value>
+  </data>
+  <data name="GroupDungeonList" xml:space="preserve">
+    <value>Liste des donjons</value>
+  </data>
+  <data name="GroupDungeonSelection" xml:space="preserve">
+    <value>Sélection du donjon</value>
+  </data>
+  <data name="GroupEntry" xml:space="preserve">
+    <value>Entrée</value>
+  </data>
+  <data name="GroupFactionID" xml:space="preserve">
+    <value>ID de faction</value>
+  </data>
+  <data name="GroupGUID" xml:space="preserve">
+    <value>GUID</value>
+  </data>
+  <data name="GroupGameObjects" xml:space="preserve">
+    <value>Objets du jeu</value>
+  </data>
+  <data name="GroupLocalPlayerInfo" xml:space="preserve">
+    <value>Infos joueur local</value>
+  </data>
+  <data name="GroupLockType" xml:space="preserve">
+    <value>Type de verrou</value>
+  </data>
+  <data name="GroupLootList" xml:space="preserve">
+    <value>Liste du butin</value>
+  </data>
+  <data name="GroupLooting" xml:space="preserve">
+    <value>Butin</value>
+  </data>
+  <data name="GroupMail" xml:space="preserve">
+    <value>Courrier</value>
+  </data>
+  <data name="GroupName" xml:space="preserve">
+    <value>Nom</value>
+  </data>
+  <data name="GroupNavigation" xml:space="preserve">
+    <value>Navigation</value>
+  </data>
+  <data name="GroupNodeSelection" xml:space="preserve">
+    <value>Sélection du nœud</value>
+  </data>
+  <data name="GroupPosition" xml:space="preserve">
+    <value>Position</value>
+  </data>
+  <data name="GroupQueue" xml:space="preserve">
+    <value>File d'attente</value>
+  </data>
+  <data name="GroupSecret" xml:space="preserve">
+    <value>Secret</value>
+  </data>
+  <data name="GroupSellQualityFilters" xml:space="preserve">
+    <value>Filtres de qualité de vente</value>
+  </data>
+  <data name="GroupSessionTimer" xml:space="preserve">
+    <value>Minuteur de session</value>
+  </data>
+  <data name="GroupSettings" xml:space="preserve">
+    <value>Paramètres</value>
+  </data>
+  <data name="GroupSpellFocus" xml:space="preserve">
+    <value>Focalisation de sort</value>
+  </data>
+  <data name="GroupStackCount" xml:space="preserve">
+    <value>Quantité</value>
+  </data>
+  <data name="GroupTargetList" xml:space="preserve">
+    <value>Liste des cibles</value>
+  </data>
+  <data name="GroupType" xml:space="preserve">
+    <value>Type</value>
+  </data>
+  <data name="GroupVendorRepair" xml:space="preserve">
+    <value>Vendeur / Réparation</value>
+  </data>
+  <data name="GroupViewAuras" xml:space="preserve">
+    <value>Voir les auras</value>
+  </data>
+  <data name="ChkUseMount" xml:space="preserve">
+    <value>Utiliser une monture</value>
+  </data>
+  <data name="ChkRandomMount" xml:space="preserve">
+    <value>Monture aléatoire</value>
+  </data>
+  <data name="ChkAutomatic" xml:space="preserve">
+    <value>Automatique</value>
+  </data>
+  <data name="ChkLearnFlightPaths" xml:space="preserve">
+    <value>Apprendre les routes de vol</value>
+  </data>
+  <data name="ChkUseFlightPaths" xml:space="preserve">
+    <value>Utiliser les routes de vol</value>
+  </data>
+  <data name="ChkFindVendorsAuto" xml:space="preserve">
+    <value>Trouver les vendeurs automatiquement</value>
+  </data>
+  <data name="ChkTrainNewSkills" xml:space="preserve">
+    <value>Former aux nouveaux sorts</value>
+  </data>
+  <data name="ChkLogoutForInactivity" xml:space="preserve">
+    <value>Déconnexion pour inactivité</value>
+  </data>
+  <data name="ChkUseFrameLock" xml:space="preserve">
+    <value>Utiliser le verrou de cadre</value>
+  </data>
+  <data name="ChkKillBetweenHotspots" xml:space="preserve">
+    <value>Tuer entre les points chauds</value>
+  </data>
+  <data name="ChkHearthExitTimer" xml:space="preserve">
+    <value>Pierre de foyer &amp; Quitter au minuteur</value>
+  </data>
+  <data name="ChkWaitRezSickness" xml:space="preserve">
+    <value>Attendre la fin de la malédiction de résurrection</value>
+  </data>
+  <data name="ChkUseSpiritHealer" xml:space="preserve">
+    <value>Utiliser le guérisseur d'esprits (éviter la course au corps)</value>
+  </data>
+  <data name="ChkVendorWhenFull" xml:space="preserve">
+    <value>Aller au vendeur quand les sacs sont pleins</value>
+  </data>
+  <data name="ChkRepairAtVendor" xml:space="preserve">
+    <value>Réparer chez le vendeur</value>
+  </data>
+  <data name="ChkSkinMobs" xml:space="preserve">
+    <value>Dépecer les mobs</value>
+  </data>
+  <data name="ChkNinjaSkin" xml:space="preserve">
+    <value>Vol de peau</value>
+  </data>
+  <data name="ChkLootMobs" xml:space="preserve">
+    <value>Butiner les mobs</value>
+  </data>
+  <data name="ChkLootChests" xml:space="preserve">
+    <value>Butiner les coffres</value>
+  </data>
+  <data name="ChkLootCorpses" xml:space="preserve">
+    <value>Butiner les cadavres</value>
+  </data>
+  <data name="ChkMailToAlt" xml:space="preserve">
+    <value>Envoyer les objets à l'alt</value>
+  </data>
+  <data name="ChkNoNinja" xml:space="preserve">
+    <value>Ne pas voler les nœuds des autres joueurs</value>
+  </data>
+  <data name="ChkFaceNodes" xml:space="preserve">
+    <value>Faire face aux nœuds avant la cueillette</value>
+  </data>
+  <data name="ChkGatherHerbs" xml:space="preserve">
+    <value>Cueillir les herbes</value>
+  </data>
+  <data name="ChkGatherMinerals" xml:space="preserve">
+    <value>Cueillir les minerais</value>
+  </data>
+  <data name="ChkGatherChests" xml:space="preserve">
+    <value>Cueillir les coffres (trésor)</value>
+  </data>
+  <data name="ChkHarvestHerbs" xml:space="preserve">
+    <value>Récolter les herbes</value>
+  </data>
+  <data name="ChkHarvestMinerals" xml:space="preserve">
+    <value>Récolter les mines</value>
+  </data>
+  <data name="ChkRandomizeHotspots" xml:space="preserve">
+    <value>Ordre aléatoire des points chauds</value>
+  </data>
+  <data name="ChkIgnoreElites" xml:space="preserve">
+    <value>Ignorer les mobs élites</value>
+  </data>
+  <data name="ChkShowAllDungeons" xml:space="preserve">
+    <value>Afficher tous les donjons</value>
+  </data>
+  <data name="LblMountName" xml:space="preserve">
+    <value>Nom de la monture :</value>
+  </data>
+  <data name="LblFlyingMount" xml:space="preserve">
+    <value>Monture volante :</value>
+  </data>
+  <data name="LblMountDistance" xml:space="preserve">
+    <value>Distance de monture :</value>
+  </data>
+  <data name="LblDrinkAmount" xml:space="preserve">
+    <value>Quantité de boisson :</value>
+  </data>
+  <data name="LblFoodAmount" xml:space="preserve">
+    <value>Quantité de nourriture :</value>
+  </data>
+  <data name="LblMailRecipient" xml:space="preserve">
+    <value>Destinataire du courrier :</value>
+  </data>
+  <data name="LblFoodName" xml:space="preserve">
+    <value>Nom de la nourriture ou ID :</value>
+  </data>
+  <data name="LblDrinkName" xml:space="preserve">
+    <value>Nom de la boisson ou ID :</value>
+  </data>
+  <data name="LblBlacklistTimer" xml:space="preserve">
+    <value>Minuteur de liste noire :</value>
+  </data>
+  <data name="LblBottingHours" xml:space="preserve">
+    <value>Heures de bot :</value>
+  </data>
+  <data name="LblDetectionRange" xml:space="preserve">
+    <value>Portée de détection :</value>
+  </data>
+  <data name="LblHeightModifier" xml:space="preserve">
+    <value>Modificateur de hauteur :</value>
+  </data>
+  <data name="LblLogLevel" xml:space="preserve">
+    <value>Niveau de log :</value>
+  </data>
+  <data name="LblLootRadius" xml:space="preserve">
+    <value>Rayon de butin :</value>
+  </data>
+  <data name="LblMinFreeSlots" xml:space="preserve">
+    <value>Emplacements libres min. :</value>
+  </data>
+  <data name="LblMountUpDistance" xml:space="preserve">
+    <value>Distance de montage :</value>
+  </data>
+  <data name="LblPathType" xml:space="preserve">
+    <value>Type de chemin :</value>
+  </data>
+  <data name="LblPullDistance" xml:space="preserve">
+    <value>Distance d'attraction :</value>
+  </data>
+  <data name="LblQueue1" xml:space="preserve">
+    <value>File #1 :</value>
+  </data>
+  <data name="LblQueue2" xml:space="preserve">
+    <value>File #2 :</value>
+  </data>
+  <data name="LblRecipient" xml:space="preserve">
+    <value>Destinataire :</value>
+  </data>
+  <data name="LblRepairBelow" xml:space="preserve">
+    <value>Réparer en dessous de :</value>
+  </data>
+  <data name="LblTicksPerSecond" xml:space="preserve">
+    <value>Ticks par seconde :</value>
+  </data>
+  <data name="LblMailQualities" xml:space="preserve">
+    <value>Envoyer les objets de ces qualités :</value>
+  </data>
+  <data name="LblSellQualities" xml:space="preserve">
+    <value>Vendre les objets de ces qualités au vendeur :</value>
+  </data>
+  <data name="LblBottingHoursLimit" xml:space="preserve">
+    <value>Heures de bot (0 = aucune limite)</value>
+  </data>
+  <data name="LblMailMax" xml:space="preserve">
+    <value>Contenu (0 = aucune limite)</value>
+  </data>
+  <data name="LblContent" xml:space="preserve">
+    <value>Contenu</value>
+  </data>
+  <data name="LogNone" xml:space="preserve">
+    <value>Aucun</value>
+  </data>
+  <data name="LogQuiet" xml:space="preserve">
+    <value>Silencieux</value>
+  </data>
+  <data name="LogNormal" xml:space="preserve">
+    <value>Normal</value>
+  </data>
+  <data name="LogDiagnostic" xml:space="preserve">
+    <value>Diagnostic</value>
+  </data>
+  <data name="LogVerbose" xml:space="preserve">
+    <value>Verbeux</value>
+  </data>
+  <data name="PathBounce" xml:space="preserve">
+    <value>Rebondir</value>
+  </data>
+  <data name="PathCircle" xml:space="preserve">
+    <value>Cercle</value>
+  </data>
+  <data name="ColorBlue" xml:space="preserve">
+    <value>Bleu</value>
+  </data>
+  <data name="ColorGreen" xml:space="preserve">
+    <value>Vert</value>
+  </data>
+  <data name="ColorGrey" xml:space="preserve">
+    <value>Gris</value>
+  </data>
+  <data name="ColorPurple" xml:space="preserve">
+    <value>Violet</value>
+  </data>
+  <data name="ColorWhite" xml:space="preserve">
+    <value>Blanc</value>
+  </data>
+</root>

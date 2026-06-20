@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Styx;
 using Styx.Helpers;
+using Styx.Localization;
 
 namespace CopilotBuddy.UI
 {
@@ -16,6 +17,8 @@ namespace CopilotBuddy.UI
     {
         protected override void OnStartup(StartupEventArgs e)
         {
+            Globalization.ApplyLanguage(StyxSettings.Instance?.Language);
+
             base.OnStartup(e);
 
             // Background thread exceptions (non-Dispatcher)

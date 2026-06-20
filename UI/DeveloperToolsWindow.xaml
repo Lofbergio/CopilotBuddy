@@ -4,8 +4,9 @@
         xmlns:mah="http://metro.mahapps.com/winfx/xaml/controls"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="clr-namespace:Styx.Localization"
         mc:Ignorable="d"
-        x:Name="Window" Title="Developer Tools" Width="711" MinWidth="711" Height="480" MinHeight="480"
+        x:Name="Window" Title="{loc:Resx DeveloperToolsTitle}" Width="711" MinWidth="711" Height="480" MinHeight="480"
         TitleCharacterCasing="Normal"
         Background="{DynamicResource WindowBackgroundBrush}">
   <mah:MetroWindow.Resources>
@@ -26,12 +27,12 @@
   <Grid x:Name="LayoutRoot">
     <TabControl x:Name="tabControl" Margin="0">
       <!-- Tab: Profiles -->
-      <TabItem Header="Profiles">
+      <TabItem Header="{loc:Resx TabProfiles}">
         <Grid>
-          <GroupBox x:Name="groupBox" Foreground="#FFFFFFFF" Header="Local Player Info" HorizontalAlignment="Left" Margin="8,8,0,0"
+          <GroupBox x:Name="groupBox" Foreground="#FFFFFFFF" Header="{loc:Resx GroupLocalPlayerInfo}" HorizontalAlignment="Left" Margin="8,8,0,0"
                     VerticalAlignment="Top" Height="62.96" Width="333">
             <Grid>
-              <TextBlock x:Name="textBlock" HorizontalAlignment="Left" TextWrapping="Wrap" Text="Position:"
+              <TextBlock x:Name="textBlock" HorizontalAlignment="Left" TextWrapping="Wrap" Text="{loc:Resx GroupPosition}"
                          Foreground="#FFFFFFFF" Margin="8,8,0,0" VerticalAlignment="Top"/>
               <TextBlock MouseDown="tbLocalPlayerLocation_MouseDown" x:Name="tbLocalPlayerLocation" Margin="57.143,8,0,0"
                          TextWrapping="Wrap" Text="&lt;0, 0, 0&gt;" VerticalAlignment="Top" Foreground="#FFFFFFFF"
@@ -42,51 +43,51 @@
             </Grid>
           </GroupBox>
           
-          <GroupBox x:Name="groupBox_Copy" Foreground="#FFFFFFFF" Header="Current Target Info" HorizontalAlignment="Left" Margin="8,74.96,0,0"
+          <GroupBox x:Name="groupBox_Copy" Foreground="#FFFFFFFF" Header="{loc:Resx GroupCurrentTargetInfo}" HorizontalAlignment="Left" Margin="8,74.96,0,0"
                     Width="333" Height="227" VerticalAlignment="Top">
             <Grid>
-              <TextBlock x:Name="textBlock2" HorizontalAlignment="Left" TextWrapping="Wrap" Text="Position:"
+              <TextBlock x:Name="textBlock2" HorizontalAlignment="Left" TextWrapping="Wrap" Text="{loc:Resx GroupPosition}"
                          Foreground="#FFFFFFFF" Margin="8,8,0,0" VerticalAlignment="Top"/>
               <TextBlock MouseDown="HandleTextBlockDoubleClick" x:Name="tbCTLocation" Margin="92,8,0,0"
                          TextWrapping="NoWrap" Text="0,0,0" VerticalAlignment="Top" Foreground="#FFFFFFFF"
                          ToolTip="Double Click to Copy" HorizontalAlignment="Left"/>
-              <TextBlock x:Name="textBlock2_Copy" HorizontalAlignment="Left" TextWrapping="Wrap" Text="Name:"
+              <TextBlock x:Name="textBlock2_Copy" HorizontalAlignment="Left" TextWrapping="Wrap" Text="{loc:Resx GroupName}"
                          Foreground="#FFFFFFFF" Margin="8,27.96,0,0" VerticalAlignment="Top"/>
               <TextBlock MouseDown="HandleTextBlockDoubleClick" x:Name="tbCTName" Margin="92,27.96,0,0"
                          TextWrapping="NoWrap" Text="Empty" VerticalAlignment="Top" Foreground="#FFFFFFFF"
                          ToolTip="Double Click to Copy" HorizontalAlignment="Left"/>
-              <TextBlock x:Name="textBlock2_Copy1" HorizontalAlignment="Left" TextWrapping="Wrap" Text="Entry (ID):"
+              <TextBlock x:Name="textBlock2_Copy1" HorizontalAlignment="Left" TextWrapping="Wrap" Text="{loc:Resx GroupEntry}"
                          Foreground="#FFFFFFFF" Margin="8,47.92,0,0" VerticalAlignment="Top"/>
               <TextBlock MouseDown="HandleTextBlockDoubleClick" x:Name="tbCTEntry" Margin="92,47.92,0,0" TextWrapping="Wrap"
                          Text="0" Foreground="#FFFFFFFF" ToolTip="Double Click to Copy" HorizontalAlignment="Left" Height="16"
                          VerticalAlignment="Top"/>
-              <TextBlock x:Name="textBlock2_Copy2" HorizontalAlignment="Left" TextWrapping="Wrap" Text="Faction ID:"
+              <TextBlock x:Name="textBlock2_Copy2" HorizontalAlignment="Left" TextWrapping="Wrap" Text="{loc:Resx GroupFactionID}"
                          Foreground="#FFFFFFFF" Margin="8,67.88,0,0" VerticalAlignment="Top"/>
               <TextBlock MouseDown="HandleTextBlockDoubleClick" x:Name="tbCTFactionId" Margin="92,67.88,0,0"
                          TextWrapping="Wrap" Text="0" VerticalAlignment="Top" Foreground="#FFFFFFFF"
                          ToolTip="Double Click to Copy" HorizontalAlignment="Left"/>
-              <TextBlock x:Name="textBlock2_Copy3" HorizontalAlignment="Left" TextWrapping="Wrap" Text="Faction Name:"
+              <TextBlock x:Name="textBlock2_Copy3" HorizontalAlignment="Left" TextWrapping="Wrap" Text="{loc:Resx LblFactionName}"
                          Foreground="#FFFFFFFF" Margin="8,87.84,0,0" Height="15" VerticalAlignment="Top"/>
               <TextBlock MouseDown="HandleTextBlockDoubleClick" x:Name="tbCTFactionName" Margin="92,87.84,0,0"
                          TextWrapping="NoWrap" Text="Unknown" Foreground="#FFFFFFFF" ToolTip="Double Click to Copy"
                          HorizontalAlignment="Left" Height="15" VerticalAlignment="Top"/>
-              <TextBlock x:Name="textBlock2_Copy4" HorizontalAlignment="Left" TextWrapping="Wrap" Text="Group ID:"
+              <TextBlock x:Name="textBlock2_Copy4" HorizontalAlignment="Left" TextWrapping="Wrap" Text="{loc:Resx LblGroupID}"
                          Foreground="#FFFFFFFF" Margin="8,107,0,0" Height="16" VerticalAlignment="Top"/>
               <TextBlock MouseDown="HandleTextBlockDoubleClick" x:Name="tbCTGroup1" Margin="92,107,0,0" TextWrapping="Wrap"
                          Text="0" Foreground="#FFFFFFFF" ToolTip="Double Click to Copy" HorizontalAlignment="Left" Height="16"
                          VerticalAlignment="Top"/>
-              <TextBlock x:Name="textBlock2_Copy5" HorizontalAlignment="Left" TextWrapping="Wrap" Text="Group ID 2:"
+              <TextBlock x:Name="textBlock2_Copy5" HorizontalAlignment="Left" TextWrapping="Wrap" Text="{loc:Resx LblGroupID2}"
                          Foreground="#FFFFFFFF" Margin="8,127,0,0" Height="16" VerticalAlignment="Top"/>
               <TextBlock MouseDown="HandleTextBlockDoubleClick" x:Name="tbCTGroup2" Margin="92,127,0,0" TextWrapping="Wrap"
                          Text="0" Foreground="#FFFFFFFF" ToolTip="Double Click to Copy" HorizontalAlignment="Left" Height="16"
                          VerticalAlignment="Top"/>
-              <TextBlock x:Name="textBlock2_Copy6" HorizontalAlignment="Left" TextWrapping="Wrap" Text="Vendor Type:"
+              <TextBlock x:Name="textBlock2_Copy6" HorizontalAlignment="Left" TextWrapping="Wrap" Text="{loc:Resx LblVendorType}"
                          Foreground="#FFFFFFFF" Margin="8,147,0,0" RenderTransformOrigin="0.485,-0.664" Height="16"
                          VerticalAlignment="Top"/>
               <TextBlock MouseDown="HandleTextBlockDoubleClick" x:Name="tbCTVendorType" Margin="92,147,0,0"
                          TextWrapping="Wrap" Text="None" Foreground="#FFFFFFFF" ToolTip="Double Click to Copy"
                          HorizontalAlignment="Left" Height="16" VerticalAlignment="Top"/>
-              <Button Click="btnCopyCTXmlInfo_Click" x:Name="btnCopyCTXmlInfo" Content="Copy XML" Margin="8,0,0,8"
+              <Button Click="btnCopyCTXmlInfo_Click" x:Name="btnCopyCTXmlInfo" Content="{loc:Resx CopyXML}" Margin="8,0,0,8"
                       VerticalAlignment="Bottom" HorizontalAlignment="Left" Width="75"/>
               <Button Click="btnRefreshCTInfo_Click" x:Name="btnRefreshCTInfo" HorizontalAlignment="Right"
                       Margin="0,0,8,8" VerticalAlignment="Bottom" Width="18" Height="18"
@@ -94,13 +95,13 @@
             </Grid>
           </GroupBox>
           
-          <GroupBox x:Name="groupBox2" Foreground="#FFFFFFFF" Header="Quests" Margin="347.303,8,8,8">
+          <GroupBox x:Name="groupBox2" Foreground="#FFFFFFFF" Header="{loc:Resx TabQuests}" Margin="347.303,8,8,8">
             <Grid>
               <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
                 <TreeView x:Name="tvQuests">
                   <FrameworkElement.ContextMenu>
                     <ContextMenu>
-                      <MenuItem Click="CopyQuestOrderXML" x:Name="CopyXML" Header="Copy XML"/>
+                      <MenuItem Click="CopyQuestOrderXML" x:Name="CopyXML" Header="{loc:Resx CopyXML}"/>
                     </ContextMenu>
                   </FrameworkElement.ContextMenu>
                 </TreeView>
@@ -115,11 +116,11 @@
             </Grid>
           </GroupBox>
           
-          <GroupBox x:Name="groupBox1" Foreground="#FFFFFFFF" Header="Common" Margin="8,308,0,8" HorizontalAlignment="Left" Width="333">
+          <GroupBox x:Name="groupBox1" Foreground="#FFFFFFFF" Header="{loc:Resx GroupCommon}" Margin="8,308,0,8" HorizontalAlignment="Left" Width="333">
             <Grid>
-              <Button Click="btnGenerateBlackspot_Click" x:Name="btnGenerateBlackspot" Content="Generate Blackspot"
+              <Button Click="btnGenerateBlackspot_Click" x:Name="btnGenerateBlackspot" Content="{loc:Resx GenerateBlackspot}"
                       VerticalAlignment="Top" Margin="8,8,0,0" HorizontalAlignment="Left" Width="117"/>
-              <Button Click="btnGenerateHotspot_Click" x:Name="btnGenerateHotspot" Content="Generate Hotspot"
+              <Button Click="btnGenerateHotspot_Click" x:Name="btnGenerateHotspot" Content="{loc:Resx GenerateHotspot}"
                       VerticalAlignment="Top" Margin="8,32,0,0" HorizontalAlignment="Left" Width="117"/>
             </Grid>
           </GroupBox>
@@ -127,29 +128,29 @@
       </TabItem>
       
       <!-- Tab: General -->
-      <TabItem Header="General">
+      <TabItem Header="{loc:Resx TabObjects}">
         <Grid>
-          <GroupBox Name="groupBox_LootList" Foreground="#FFFFFFFF" Header="Loot List" Margin="6,8,12,0" Width="671" Height="186"
+          <GroupBox Name="groupBox_LootList" Foreground="#FFFFFFFF" Header="{loc:Resx GroupLootList}" Margin="6,8,12,0" Width="671" Height="186"
                     VerticalAlignment="Top">
             <Grid>
               <ListView Name="lvLootList">
                 <ListView.View>
                   <GridView>
-                    <GridViewColumn Header="Name" DisplayMemberBinding="{Binding Name, Mode=OneTime}"/>
-                    <GridViewColumn Header="Distance" DisplayMemberBinding="{Binding Distance, Mode=OneTime}"/>
+                    <GridViewColumn Header="{loc:Resx GroupName}" DisplayMemberBinding="{Binding Name, Mode=OneTime}"/>
+                    <GridViewColumn Header="{loc:Resx GroupDistance}" DisplayMemberBinding="{Binding Distance, Mode=OneTime}"/>
                   </GridView>
                 </ListView.View>
               </ListView>
             </Grid>
           </GroupBox>
-          <GroupBox Name="groupBox_TargetList" Foreground="#FFFFFFFF" Header="Target List" Margin="6,200,12,0" Height="186"
+          <GroupBox Name="groupBox_TargetList" Foreground="#FFFFFFFF" Header="{loc:Resx GroupTargetList}" Margin="6,200,12,0" Height="186"
                     VerticalAlignment="Top" Width="671">
             <Grid>
               <ListView Name="lvTargetsList">
                 <ListView.View>
                   <GridView>
-                    <GridViewColumn Header="Name" DisplayMemberBinding="{Binding Name, Mode=OneTime}"/>
-                    <GridViewColumn Header="Distance" DisplayMemberBinding="{Binding Distance, Mode=OneTime}"/>
+                    <GridViewColumn Header="{loc:Resx GroupName}" DisplayMemberBinding="{Binding Name, Mode=OneTime}"/>
+                    <GridViewColumn Header="{loc:Resx GroupDistance}" DisplayMemberBinding="{Binding Distance, Mode=OneTime}"/>
                   </GridView>
                 </ListView.View>
               </ListView>
@@ -159,70 +160,70 @@
       </TabItem>
       
       <!-- Tab: Objects -->
-      <TabItem Header="Objects">
+      <TabItem Header="{loc:Resx TabObjects}">
         <Grid>
           <TabControl>
-            <TabItem Header="Game Objects">
+            <TabItem Header="{loc:Resx GroupGameObjects}">
               <Grid>
                 <ListView x:Name="lvGameObjectsDump" Margin="0" AlternationCount="1"
                           ButtonBase.Click="WoWObjectListViewColumn_OnClick">
                   <ListView.ContextMenu>
                     <ContextMenu>
-                      <MenuItem x:Name="miCopyGameObjectInfo" Header="Copy Info" Click="CopyGameObjectInfo_OnClick"/>
+                      <MenuItem x:Name="miCopyGameObjectInfo" Header="{loc:Resx GroupCopyInfo}" Click="CopyGameObjectInfo_OnClick"/>
                     </ContextMenu>
                   </ListView.ContextMenu>
                   <ListView.View>
                     <GridView>
-                      <GridViewColumn Header="Entry" Width="50" DisplayMemberBinding="{Binding Entry, Mode=OneTime}"/>
-                      <GridViewColumn Header="Name" Width="150" DisplayMemberBinding="{Binding Name, Mode=OneTime}"/>
-                      <GridViewColumn Header="GUID" Width="150" DisplayMemberBinding="{Binding Guid, Mode=OneTime}"/>
-                      <GridViewColumn Header="Position" Width="120" DisplayMemberBinding="{Binding Location, Mode=OneTime}"/>
-                      <GridViewColumn Header="Distance" Width="75" DisplayMemberBinding="{Binding Distance, Mode=OneTime}"/>
-                      <GridViewColumn Header="Type" Width="75" DisplayMemberBinding="{Binding Type, Mode=OneTime}"/>
-                      <GridViewColumn Header="SpellFocus" Width="90" DisplayMemberBinding="{Binding SpellFocus, Mode=OneTime}"/>
-                      <GridViewColumn Header="LockType" Width="90" DisplayMemberBinding="{Binding LockType, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupEntry}" Width="50" DisplayMemberBinding="{Binding Entry, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupName}" Width="150" DisplayMemberBinding="{Binding Name, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupGUID}" Width="150" DisplayMemberBinding="{Binding Guid, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupPosition}" Width="120" DisplayMemberBinding="{Binding Location, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupDistance}" Width="75" DisplayMemberBinding="{Binding Distance, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupType}" Width="75" DisplayMemberBinding="{Binding Type, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupSpellFocus}" Width="90" DisplayMemberBinding="{Binding SpellFocus, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupLockType}" Width="90" DisplayMemberBinding="{Binding LockType, Mode=OneTime}"/>
                     </GridView>
                   </ListView.View>
                 </ListView>
               </Grid>
             </TabItem>
-            <TabItem Header="Units">
+            <TabItem Header="{loc:Resx TabUnits}">
               <Grid>
                 <ListView x:Name="lvUnitsDump" Margin="0" AlternationCount="1"
                           ButtonBase.Click="WoWObjectListViewColumn_OnClick">
                   <ListView.ContextMenu>
                     <ContextMenu>
-                      <MenuItem x:Name="miCopyUnitInfo" Header="Copy Info" Click="CopyUnitInfo_OnClick"/>
-                      <MenuItem x:Name="miViewAurasOnUnit" Header="View Auras" Click="ViewAurasOnUnit_OnClick"/>
+                      <MenuItem x:Name="miCopyUnitInfo" Header="{loc:Resx GroupCopyInfo}" Click="CopyUnitInfo_OnClick"/>
+                      <MenuItem x:Name="miViewAurasOnUnit" Header="{loc:Resx GroupViewAuras}" Click="ViewAurasOnUnit_OnClick"/>
                     </ContextMenu>
                   </ListView.ContextMenu>
                   <ListView.View>
                     <GridView>
-                      <GridViewColumn Header="Entry" Width="50" DisplayMemberBinding="{Binding Entry, Mode=OneTime}"/>
-                      <GridViewColumn Header="Name" Width="150" DisplayMemberBinding="{Binding Name, Mode=OneTime}"/>
-                      <GridViewColumn Header="GUID" Width="150" DisplayMemberBinding="{Binding Guid, Mode=OneTime}"/>
-                      <GridViewColumn Header="Position" Width="120" DisplayMemberBinding="{Binding Location, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupEntry}" Width="50" DisplayMemberBinding="{Binding Entry, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupName}" Width="150" DisplayMemberBinding="{Binding Name, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupGUID}" Width="150" DisplayMemberBinding="{Binding Guid, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupPosition}" Width="120" DisplayMemberBinding="{Binding Location, Mode=OneTime}"/>
                       <GridViewColumn Header="Faction ID" Width="75" DisplayMemberBinding="{Binding FactionId, Mode=OneTime}"/>
-                      <GridViewColumn Header="Distance" Width="75" DisplayMemberBinding="{Binding Distance, Mode=OneTime}"/>
-                      <GridViewColumn Header="Type" Width="75" DisplayMemberBinding="{Binding Type, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupDistance}" Width="75" DisplayMemberBinding="{Binding Distance, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupType}" Width="75" DisplayMemberBinding="{Binding Type, Mode=OneTime}"/>
                     </GridView>
                   </ListView.View>
                 </ListView>
               </Grid>
             </TabItem>
-            <TabItem Header="Bag Items">
+            <TabItem Header="{loc:Resx TabBagItems}">
               <Grid>
                 <ListView x:Name="lvItemsDump" Margin="0" AlternationCount="1"
                           ButtonBase.Click="WoWObjectListViewColumn_OnClick">
                   <ListView.ContextMenu>
                     <ContextMenu>
-                      <MenuItem x:Name="miCopyItemInfo" Header="Copy Info" Click="CopyItemInfo_OnClick"/>
+                      <MenuItem x:Name="miCopyItemInfo" Header="{loc:Resx GroupCopyInfo}" Click="CopyItemInfo_OnClick"/>
                     </ContextMenu>
                   </ListView.ContextMenu>
                   <ListView.View>
                     <GridView>
-                      <GridViewColumn Header="Entry" Width="50" DisplayMemberBinding="{Binding Entry, Mode=OneTime}"/>
-                      <GridViewColumn Header="Name" Width="200" DisplayMemberBinding="{Binding Name, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupEntry}" Width="50" DisplayMemberBinding="{Binding Entry, Mode=OneTime}"/>
+                      <GridViewColumn Header="{loc:Resx GroupName}" Width="200" DisplayMemberBinding="{Binding Name, Mode=OneTime}"/>
                       <GridViewColumn Header="StackCount" Width="90" DisplayMemberBinding="{Binding StackCount, Mode=OneTime}"/>
                       <GridViewColumn Header="Type" Width="90" DisplayMemberBinding="{Binding Type, Mode=OneTime}"/>
                     </GridView>

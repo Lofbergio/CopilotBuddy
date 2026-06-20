@@ -1,0 +1,594 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <data name="AppTitle" xml:space="preserve">
+    <value>CopilotBuddy</value>
+  </data>
+  <data name="SettingsTitle" xml:space="preserve">
+    <value>Settings &amp; Tools</value>
+  </data>
+  <data name="PluginsTitle" xml:space="preserve">
+    <value>Plugins</value>
+  </data>
+  <data name="DeveloperToolsTitle" xml:space="preserve">
+    <value>Developer Tools</value>
+  </data>
+  <data name="SelectWoWTitle" xml:space="preserve">
+    <value>Select a WoW</value>
+  </data>
+  <data name="SelectWoWDescription" xml:space="preserve">
+    <value>Select the WoW process to attach to:</value>
+  </data>
+  <data name="LblAuthor" xml:space="preserve">
+    <value>Author:</value>
+  </data>
+  <data name="LblVersion" xml:space="preserve">
+    <value>Version:</value>
+  </data>
+  <data name="RecompileAll" xml:space="preserve">
+    <value>Recompile All</value>
+  </data>
+  <data name="LblFactionName" xml:space="preserve">
+    <value>Faction Name:</value>
+  </data>
+  <data name="LblGroupID" xml:space="preserve">
+    <value>Group ID:</value>
+  </data>
+  <data name="LblGroupID2" xml:space="preserve">
+    <value>Group ID 2:</value>
+  </data>
+  <data name="LblVendorType" xml:space="preserve">
+    <value>Vendor Type:</value>
+  </data>
+  <data name="LblRefresh" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="LblLoadProfileButtonText" xml:space="preserve">
+    <value>Load Profile</value>
+  </data>
+  <data name="LblPauseButtonText" xml:space="preserve">
+    <value>Pause</value>
+  </data>
+  <data name="LblEnhancedMode" xml:space="preserve">
+    <value>Enhanced Mode</value>
+  </data>
+  <data name="LblFromFileSystem" xml:space="preserve">
+    <value>From File System</value>
+  </data>
+  <data name="LblFromBuddyStore" xml:space="preserve">
+    <value>From Buddy Store</value>
+  </data>
+  <data name="LblFromWebSource" xml:space="preserve">
+    <value>From Web Source</value>
+  </data>
+  <data name="LblRecent" xml:space="preserve">
+    <value>Recent</value>
+  </data>
+  <data name="LblShowPath" xml:space="preserve">
+    <value>Show Path</value>
+  </data>
+  <data name="LblTargetInfo" xml:space="preserve">
+    <value>Target Info</value>
+  </data>
+  <data name="LblNavigation" xml:space="preserve">
+    <value>Navigation</value>
+  </data>
+  <data name="ReportBug" xml:space="preserve">
+    <value>Report a Bug</value>
+  </data>
+  <data name="LblDungeonQueueType" xml:space="preserve">
+    <value>You need to change Queue Type to Specific before editing the dungeon list</value>
+  </data>
+  <data name="TabBagItems" xml:space="preserve">
+    <value>Bag Items</value>
+  </data>
+  <data name="LogNoneDesc" xml:space="preserve">
+    <value>None: No logs</value>
+  </data>
+  <data name="LogQuietDesc" xml:space="preserve">
+    <value>Quiet: Minimal logs</value>
+  </data>
+  <data name="LogNormalDesc" xml:space="preserve">
+    <value>Normal: Standard logs</value>
+  </data>
+  <data name="LogVerboseDesc" xml:space="preserve">
+    <value>Verbose: Detailed logs</value>
+  </data>
+  <data name="LogDiagnosticDesc" xml:space="preserve">
+    <value>Diagnostic: All logs</value>
+  </data>
+  <data name="GroupLanguage" xml:space="preserve">
+    <value>Language</value>
+  </data>
+  <data name="LblLanguage" xml:space="preserve">
+    <value>Language:</value>
+  </data>
+  <data name="LangAuto" xml:space="preserve">
+    <value>Auto (system default)</value>
+  </data>
+  <data name="LblLanguageRestart" xml:space="preserve">
+    <value>Restart Honorbuddy for changes to take effect.</value>
+  </data>
+  <data name="BGBuddyConfigTitle" xml:space="preserve">
+    <value>BGBuddy Config</value>
+  </data>
+  <data name="DungeonBuddyConfigTitle" xml:space="preserve">
+    <value>DungeonBuddy Config</value>
+  </data>
+  <data name="GatherBuddySettingsTitle" xml:space="preserve">
+    <value>GatherBuddy Settings</value>
+  </data>
+  <data name="TabLog" xml:space="preserve">
+    <value>Log</value>
+  </data>
+  <data name="TabInfo" xml:space="preserve">
+    <value>Info</value>
+  </data>
+  <data name="TabProfiles" xml:space="preserve">
+    <value>Profiles</value>
+  </data>
+  <data name="TabQuests" xml:space="preserve">
+    <value>Quests</value>
+  </data>
+  <data name="TabObjects" xml:space="preserve">
+    <value>Objects</value>
+  </data>
+  <data name="TabUnits" xml:space="preserve">
+    <value>Units</value>
+  </data>
+  <data name="Pause" xml:space="preserve">
+    <value>Pause</value>
+  </data>
+  <data name="Ready" xml:space="preserve">
+    <value>Ready</value>
+  </data>
+  <data name="EnhancedMode" xml:space="preserve">
+    <value>Enhanced Mode</value>
+  </data>
+  <data name="LoadProfile" xml:space="preserve">
+    <value>Load Profile</value>
+  </data>
+  <data name="Settings" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="BotConfig" xml:space="preserve">
+    <value>Bot Config</value>
+  </data>
+  <data name="ClassConfig" xml:space="preserve">
+    <value>Class Config</value>
+  </data>
+  <data name="Plugins" xml:space="preserve">
+    <value>Plugins</value>
+  </data>
+  <data name="DeveloperTools" xml:space="preserve">
+    <value>Developer Tools</value>
+  </data>
+  <data name="Start" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="Stop" xml:space="preserve">
+    <value>Stop</value>
+  </data>
+  <data name="Navigation" xml:space="preserve">
+    <value>Navigation</value>
+  </data>
+  <data name="ShowPath" xml:space="preserve">
+    <value>Show Path</value>
+  </data>
+  <data name="TargetInfo" xml:space="preserve">
+    <value>Target Info</value>
+  </data>
+  <data name="ReloadScripts" xml:space="preserve">
+    <value>Reload Scripts</value>
+  </data>
+  <data name="DisableMovement" xml:space="preserve">
+    <value>Disable Movement</value>
+  </data>
+  <data name="EnableMovement" xml:space="preserve">
+    <value>Enable Movement</value>
+  </data>
+  <data name="CopyXML" xml:space="preserve">
+    <value>Copy XML</value>
+  </data>
+  <data name="Refresh" xml:space="preserve">
+    <value>Refresh</value>
+  </data>
+  <data name="SaveAndClose" xml:space="preserve">
+    <value>Save &amp; Close</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="Select" xml:space="preserve">
+    <value>Select</value>
+  </data>
+  <data name="SelectAll" xml:space="preserve">
+    <value>Select All</value>
+  </data>
+  <data name="UnselectAll" xml:space="preserve">
+    <value>Unselect All</value>
+  </data>
+  <data name="GenerateBlackspot" xml:space="preserve">
+    <value>Generate Blackspot</value>
+  </data>
+  <data name="GenerateHotspot" xml:space="preserve">
+    <value>Generate Hotspot</value>
+  </data>
+  <data name="GroupGeneral" xml:space="preserve">
+    <value>General</value>
+  </data>
+  <data name="GroupLogging" xml:space="preserve">
+    <value>Logging</value>
+  </data>
+  <data name="GroupMount" xml:space="preserve">
+    <value>Mount</value>
+  </data>
+  <data name="GroupVendorsFlightPaths" xml:space="preserve">
+    <value>Vendors &amp; Flight Paths</value>
+  </data>
+  <data name="GroupMailRefreshments" xml:space="preserve">
+    <value>Mail and Refreshments</value>
+  </data>
+  <data name="GroupCombatLoot" xml:space="preserve">
+    <value>Combat / Loot</value>
+  </data>
+  <data name="GroupDeathSafety" xml:space="preserve">
+    <value>Death / Safety</value>
+  </data>
+  <data name="GroupGathering" xml:space="preserve">
+    <value>Gathering</value>
+  </data>
+  <data name="GroupAntiNinja" xml:space="preserve">
+    <value>Anti-Ninja</value>
+  </data>
+  <data name="GroupHerbs" xml:space="preserve">
+    <value>Herbs</value>
+  </data>
+  <data name="GroupMinerals" xml:space="preserve">
+    <value>Minerals</value>
+  </data>
+  <data name="GroupBagItems" xml:space="preserve">
+    <value>Bag Items</value>
+  </data>
+  <data name="GroupBossList" xml:space="preserve">
+    <value>Boss List</value>
+  </data>
+  <data name="GroupCommon" xml:space="preserve">
+    <value>Common</value>
+  </data>
+  <data name="GroupCopyInfo" xml:space="preserve">
+    <value>Copy Info</value>
+  </data>
+  <data name="GroupCopyXML" xml:space="preserve">
+    <value>Copy XML</value>
+  </data>
+  <data name="GroupCurrentTargetInfo" xml:space="preserve">
+    <value>Current Target Info</value>
+  </data>
+  <data name="GroupDistance" xml:space="preserve">
+    <value>Distance</value>
+  </data>
+  <data name="GroupDungeonList" xml:space="preserve">
+    <value>Dungeon List</value>
+  </data>
+  <data name="GroupDungeonSelection" xml:space="preserve">
+    <value>Dungeon Selection</value>
+  </data>
+  <data name="GroupEntry" xml:space="preserve">
+    <value>Entry</value>
+  </data>
+  <data name="GroupFactionID" xml:space="preserve">
+    <value>Faction ID</value>
+  </data>
+  <data name="GroupGUID" xml:space="preserve">
+    <value>GUID</value>
+  </data>
+  <data name="GroupGameObjects" xml:space="preserve">
+    <value>Game Objects</value>
+  </data>
+  <data name="GroupLocalPlayerInfo" xml:space="preserve">
+    <value>Local Player Info</value>
+  </data>
+  <data name="GroupLockType" xml:space="preserve">
+    <value>LockType</value>
+  </data>
+  <data name="GroupLootList" xml:space="preserve">
+    <value>Loot List</value>
+  </data>
+  <data name="GroupLooting" xml:space="preserve">
+    <value>Looting</value>
+  </data>
+  <data name="GroupMail" xml:space="preserve">
+    <value>Mail</value>
+  </data>
+  <data name="GroupName" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="GroupNavigation" xml:space="preserve">
+    <value>Navigation</value>
+  </data>
+  <data name="GroupNodeSelection" xml:space="preserve">
+    <value>Node Selection</value>
+  </data>
+  <data name="GroupPosition" xml:space="preserve">
+    <value>Position</value>
+  </data>
+  <data name="GroupQueue" xml:space="preserve">
+    <value>Queue</value>
+  </data>
+  <data name="GroupSecret" xml:space="preserve">
+    <value>Secret</value>
+  </data>
+  <data name="GroupSellQualityFilters" xml:space="preserve">
+    <value>Sell Quality Filters</value>
+  </data>
+  <data name="GroupSessionTimer" xml:space="preserve">
+    <value>Session Timer</value>
+  </data>
+  <data name="GroupSettings" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="GroupSpellFocus" xml:space="preserve">
+    <value>SpellFocus</value>
+  </data>
+  <data name="GroupStackCount" xml:space="preserve">
+    <value>StackCount</value>
+  </data>
+  <data name="GroupTargetList" xml:space="preserve">
+    <value>Target List</value>
+  </data>
+  <data name="GroupType" xml:space="preserve">
+    <value>Type</value>
+  </data>
+  <data name="GroupVendorRepair" xml:space="preserve">
+    <value>Vendor / Repair</value>
+  </data>
+  <data name="GroupViewAuras" xml:space="preserve">
+    <value>View Auras</value>
+  </data>
+  <data name="ChkUseMount" xml:space="preserve">
+    <value>Use Mount</value>
+  </data>
+  <data name="ChkRandomMount" xml:space="preserve">
+    <value>Random Mount</value>
+  </data>
+  <data name="ChkAutomatic" xml:space="preserve">
+    <value>Automatic</value>
+  </data>
+  <data name="ChkLearnFlightPaths" xml:space="preserve">
+    <value>Learn Flight Paths</value>
+  </data>
+  <data name="ChkUseFlightPaths" xml:space="preserve">
+    <value>Use Flight Paths</value>
+  </data>
+  <data name="ChkFindVendorsAuto" xml:space="preserve">
+    <value>Find Vendors Automatically</value>
+  </data>
+  <data name="ChkTrainNewSkills" xml:space="preserve">
+    <value>Train New Skills</value>
+  </data>
+  <data name="ChkLogoutForInactivity" xml:space="preserve">
+    <value>Logout For Inactivity</value>
+  </data>
+  <data name="ChkUseFrameLock" xml:space="preserve">
+    <value>Use Frame Lock</value>
+  </data>
+  <data name="ChkKillBetweenHotspots" xml:space="preserve">
+    <value>Kill Between Hotspots</value>
+  </data>
+  <data name="ChkHearthExitTimer" xml:space="preserve">
+    <value>Hearthstone &amp; Exit on Timer</value>
+  </data>
+  <data name="ChkWaitRezSickness" xml:space="preserve">
+    <value>Wait Out Rez Sickness</value>
+  </data>
+  <data name="ChkUseSpiritHealer" xml:space="preserve">
+    <value>Use Spirit Healer (skip corpse run)</value>
+  </data>
+  <data name="ChkVendorWhenFull" xml:space="preserve">
+    <value>Go To Vendor When Bags Full</value>
+  </data>
+  <data name="ChkRepairAtVendor" xml:space="preserve">
+    <value>Repair At Vendor</value>
+  </data>
+  <data name="ChkSkinMobs" xml:space="preserve">
+    <value>Skin Mobs</value>
+  </data>
+  <data name="ChkNinjaSkin" xml:space="preserve">
+    <value>Ninja Skin</value>
+  </data>
+  <data name="ChkLootMobs" xml:space="preserve">
+    <value>Loot Mobs</value>
+  </data>
+  <data name="ChkLootChests" xml:space="preserve">
+    <value>Loot Chests</value>
+  </data>
+  <data name="ChkLootCorpses" xml:space="preserve">
+    <value>Loot Corpses</value>
+  </data>
+  <data name="ChkMailToAlt" xml:space="preserve">
+    <value>Mail Items To Alt</value>
+  </data>
+  <data name="ChkNoNinja" xml:space="preserve">
+    <value>Don't Steal Nodes From Other Players</value>
+  </data>
+  <data name="ChkFaceNodes" xml:space="preserve">
+    <value>Face Nodes Before Gathering</value>
+  </data>
+  <data name="ChkGatherHerbs" xml:space="preserve">
+    <value>Gather Herbs</value>
+  </data>
+  <data name="ChkGatherMinerals" xml:space="preserve">
+    <value>Gather Minerals</value>
+  </data>
+  <data name="ChkGatherChests" xml:space="preserve">
+    <value>Gather Chests (Treasure)</value>
+  </data>
+  <data name="ChkHarvestHerbs" xml:space="preserve">
+    <value>Harvest Herbs</value>
+  </data>
+  <data name="ChkHarvestMinerals" xml:space="preserve">
+    <value>Harvest Mines</value>
+  </data>
+  <data name="ChkRandomizeHotspots" xml:space="preserve">
+    <value>Randomize Hotspot Order</value>
+  </data>
+  <data name="ChkIgnoreElites" xml:space="preserve">
+    <value>Ignore Elite Mobs</value>
+  </data>
+  <data name="ChkShowAllDungeons" xml:space="preserve">
+    <value>Show All Dungeons</value>
+  </data>
+  <data name="LblMountName" xml:space="preserve">
+    <value>Mount Name:</value>
+  </data>
+  <data name="LblFlyingMount" xml:space="preserve">
+    <value>Flying Mount:</value>
+  </data>
+  <data name="LblMountDistance" xml:space="preserve">
+    <value>Mount Distance:</value>
+  </data>
+  <data name="LblDrinkAmount" xml:space="preserve">
+    <value>Drink Amount:</value>
+  </data>
+  <data name="LblFoodAmount" xml:space="preserve">
+    <value>Food Amount:</value>
+  </data>
+  <data name="LblMailRecipient" xml:space="preserve">
+    <value>Mail Recipient:</value>
+  </data>
+  <data name="LblFoodName" xml:space="preserve">
+    <value>Food Name or ID:</value>
+  </data>
+  <data name="LblDrinkName" xml:space="preserve">
+    <value>Drink Name or ID:</value>
+  </data>
+  <data name="LblBlacklistTimer" xml:space="preserve">
+    <value>Blacklist Timer:</value>
+  </data>
+  <data name="LblBottingHours" xml:space="preserve">
+    <value>Botting Hours:</value>
+  </data>
+  <data name="LblDetectionRange" xml:space="preserve">
+    <value>Detection Range:</value>
+  </data>
+  <data name="LblHeightModifier" xml:space="preserve">
+    <value>Height Modifier:</value>
+  </data>
+  <data name="LblLogLevel" xml:space="preserve">
+    <value>Log Level:</value>
+  </data>
+  <data name="LblLootRadius" xml:space="preserve">
+    <value>Loot Radius:</value>
+  </data>
+  <data name="LblMinFreeSlots" xml:space="preserve">
+    <value>Min Free Slots:</value>
+  </data>
+  <data name="LblMountUpDistance" xml:space="preserve">
+    <value>Mount Up Distance:</value>
+  </data>
+  <data name="LblPathType" xml:space="preserve">
+    <value>Path Type:</value>
+  </data>
+  <data name="LblPullDistance" xml:space="preserve">
+    <value>Pull Distance:</value>
+  </data>
+  <data name="LblQueue1" xml:space="preserve">
+    <value>Queue #1:</value>
+  </data>
+  <data name="LblQueue2" xml:space="preserve">
+    <value>Queue #2:</value>
+  </data>
+  <data name="LblRecipient" xml:space="preserve">
+    <value>Recipient:</value>
+  </data>
+  <data name="LblRepairBelow" xml:space="preserve">
+    <value>Repair Below:</value>
+  </data>
+  <data name="LblTicksPerSecond" xml:space="preserve">
+    <value>Ticks Per Second:</value>
+  </data>
+  <data name="LblMailQualities" xml:space="preserve">
+    <value>Mail items of these qualities:</value>
+  </data>
+  <data name="LblSellQualities" xml:space="preserve">
+    <value>Sell items of these qualities at vendor:</value>
+  </data>
+  <data name="LblBottingHoursLimit" xml:space="preserve">
+    <value>Botting Hours (0 = no limit)</value>
+  </data>
+  <data name="LblMailMax" xml:space="preserve">
+    <value>Content (0 = no limit)</value>
+  </data>
+  <data name="LblContent" xml:space="preserve">
+    <value>Content</value>
+  </data>
+  <data name="LogNone" xml:space="preserve">
+    <value>None</value>
+  </data>
+  <data name="LogQuiet" xml:space="preserve">
+    <value>Quiet</value>
+  </data>
+  <data name="LogNormal" xml:space="preserve">
+    <value>Normal</value>
+  </data>
+  <data name="LogDiagnostic" xml:space="preserve">
+    <value>Diagnostic</value>
+  </data>
+  <data name="LogVerbose" xml:space="preserve">
+    <value>Verbose</value>
+  </data>
+  <data name="PathBounce" xml:space="preserve">
+    <value>Bounce</value>
+  </data>
+  <data name="PathCircle" xml:space="preserve">
+    <value>Circle</value>
+  </data>
+  <data name="ColorBlue" xml:space="preserve">
+    <value>Blue</value>
+  </data>
+  <data name="ColorGreen" xml:space="preserve">
+    <value>Green</value>
+  </data>
+  <data name="ColorGrey" xml:space="preserve">
+    <value>Grey</value>
+  </data>
+  <data name="ColorPurple" xml:space="preserve">
+    <value>Purple</value>
+  </data>
+  <data name="ColorWhite" xml:space="preserve">
+    <value>White</value>
+  </data>
+</root>

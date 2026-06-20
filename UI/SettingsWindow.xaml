@@ -2,8 +2,9 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:mah="http://metro.mahapps.com/winfx/xaml/controls"
+        xmlns:loc="clr-namespace:Styx.Localization"
         x:Name="Window"
-        Title="Settings &amp; Tools" Width="976" Height="630"
+        Title="{loc:Resx SettingsTitle}" Width="976" Height="630"
         Background="{DynamicResource WindowBackgroundBrush}"
         GlowBrush="{DynamicResource MahApps.Brushes.Accent}"
         TitleCharacterCasing="Normal"
@@ -19,7 +20,7 @@
             HorizontalAlignment="Left" Width="112"
             Click="btnDevTools_Click">
       <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-        <TextBlock Text="Developer Tools"/>
+        <TextBlock Text="{loc:Resx DeveloperTools}"/>
       </Viewbox>
     </Button>
     <Button x:Name="btnPlugins"
@@ -27,7 +28,7 @@
             HorizontalAlignment="Left" Width="112"
             Click="btnPlugins_Click">
       <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-        <TextBlock Text="Plugins"/>
+        <TextBlock Text="{loc:Resx Plugins}"/>
       </Viewbox>
     </Button>
     <Button x:Name="btnReportBug"
@@ -35,7 +36,7 @@
             HorizontalAlignment="Left" Width="112"
             Click="btnReportBug_Click">
       <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-        <TextBlock Text="Report a Bug"/>
+        <TextBlock Text="{loc:Resx ReportBug}"/>
       </Viewbox>
     </Button>
     <!-- Bottom buttons row 1 (lower) -->
@@ -44,7 +45,7 @@
             HorizontalAlignment="Left" Width="112"
             Click="btnClassConfig_Click">
       <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-        <TextBlock Text="Class Config"/>
+        <TextBlock Text="{loc:Resx ClassConfig}"/>
       </Viewbox>
     </Button>
     <Button x:Name="btnBotConfig"
@@ -52,44 +53,44 @@
             HorizontalAlignment="Left" Width="112"
             Click="btnBotConfig_Click">
       <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-        <TextBlock Text="Bot Config"/>
+        <TextBlock Text="{loc:Resx BotConfig}"/>
       </Viewbox>
     </Button>
     <Button Click="btnSaveAndClose_Click" x:Name="btnSaveAndClose"
             Margin="240,0,0,8" VerticalAlignment="Bottom" Height="25.96"
             HorizontalAlignment="Left" Width="112">
       <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-        <TextBlock Text="Save and Close"/>
+        <TextBlock Text="{loc:Resx SaveAndClose}"/>
       </Viewbox>
     </Button>
     <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="8,8,8,75">
       <WrapPanel>
         <!-- Mount GroupBox -->
-        <GroupBox x:Name="gbMount" Header="Mount"
+        <GroupBox x:Name="gbMount" Header="{loc:Resx GroupMount}"
                   Foreground="White" Height="199" Width="224" Margin="4">
           <Grid>
-            <CheckBox x:Name="chkUseMount" Content="Use Mount"
+            <CheckBox x:Name="chkUseMount" Content="{loc:Resx ChkUseMount}"
                       HorizontalAlignment="Left" Margin="8,8,0,0" VerticalAlignment="Top"
                       IsChecked="{Binding Path=CharSettings.UseMount, Mode=TwoWay}"/>
-            <Label x:Name="lblMountName" Content="Mount Name:" Foreground="White"
+            <Label x:Name="lblMountName" Content="{loc:Resx LblMountName}" Foreground="White"
                    Margin="8,34,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"/>
             <TextBox x:Name="txtMountName" HorizontalAlignment="Left" Margin="54,31,0,0" TextWrapping="NoWrap"
                      VerticalAlignment="Top" Width="150" IsEnabled="{Binding IsChecked, ElementName=chkUseMount}"
                      Text="{Binding Path=CharSettings.MountName, Mode=TwoWay}"/>
-            <Label x:Name="lblFlyingMountName" Content="Flying Mount:" Foreground="White"
+            <Label x:Name="lblFlyingMountName" Content="{loc:Resx LblFlyingMount}" Foreground="White"
                    Margin="8,70,0,0" VerticalAlignment="Top" HorizontalAlignment="Left" Height="25.96"/>
             <TextBox x:Name="txtFlyingMountName" HorizontalAlignment="Left" Margin="54,67,0,0" TextWrapping="NoWrap"
                      VerticalAlignment="Top" Width="150" IsEnabled="{Binding IsChecked, ElementName=chkUseMount}"
                      Text="{Binding Path=CharSettings.FlyingMountName, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkRandomMount" Content="Random Mount" Foreground="White"
+            <CheckBox x:Name="chkRandomMount" Content="{loc:Resx ChkRandomMount}" Foreground="White"
                       HorizontalAlignment="Left" Margin="8,104,0,0" VerticalAlignment="Top"
                       IsEnabled="{Binding IsChecked, ElementName=chkUseMount}"
                       IsChecked="{Binding Path=CharSettings.UseRandomMount, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkAutomaticMount" Content="Automatic" Foreground="White"
+            <CheckBox x:Name="chkAutomaticMount" Content="{loc:Resx ChkAutomatic}" Foreground="White"
                       HorizontalAlignment="Left" Margin="110,104,0,0" VerticalAlignment="Top"
                       IsEnabled="{Binding IsChecked, ElementName=chkUseMount}"
                       IsChecked="{Binding Path=CharSettings.FindMountAutomatically, Mode=TwoWay}"/>
-            <Label x:Name="lblMountDistance" Content="Mount Distance:" Foreground="White"
+            <Label x:Name="lblMountDistance" Content="{loc:Resx LblMountDistance}" Foreground="White"
                    Margin="8,126,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"/>
             <Slider x:Name="sldMountDistance" Margin="8,148,28,0" Maximum="100" TickPlacement="BottomRight"
                     TickFrequency="5" AutoToolTipPlacement="TopLeft" SmallChange="1" VerticalAlignment="Top"
@@ -103,22 +104,22 @@
         
 
         <!-- Vendors GroupBox -->
-        <GroupBox x:Name="gbVendors" Header="Vendors &amp; Flight Paths"
+        <GroupBox x:Name="gbVendors" Header="{loc:Resx GroupVendorsFlightPaths}"
                   Foreground="White" Height="199" Width="224" Margin="4">
           <Grid>
-            <CheckBox x:Name="chkLearnFlightPaths" Content="Learn Flight Paths" Foreground="White"
+            <CheckBox x:Name="chkLearnFlightPaths" Content="{loc:Resx ChkLearnFlightPaths}" Foreground="White"
                       HorizontalAlignment="Left" Margin="8,8,0,0" VerticalAlignment="Top"
                       IsChecked="{Binding Path=CharSettings.LearnFlightPaths, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkUseFlightPaths" Content="Use Flight Paths" Foreground="White"
+            <CheckBox x:Name="chkUseFlightPaths" Content="{loc:Resx ChkUseFlightPaths}" Foreground="White"
                       HorizontalAlignment="Left" Margin="8,28,0,0" VerticalAlignment="Top"
                       IsChecked="{Binding Path=CharSettings.UseFlightPaths, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkFindVendorsAutomatically" Content="Find Vendors Automatically" Foreground="White"
+            <CheckBox x:Name="chkFindVendorsAutomatically" Content="{loc:Resx ChkFindVendorsAuto}" Foreground="White"
                       HorizontalAlignment="Left" Margin="8,48,0,0" VerticalAlignment="Top"
                       IsChecked="{Binding Path=CharSettings.FindVendorsAutomatically, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkTrainNewSkills" Content="Train New Skills" Foreground="White"
+            <CheckBox x:Name="chkTrainNewSkills" Content="{loc:Resx ChkTrainNewSkills}" Foreground="White"
                       HorizontalAlignment="Left" Margin="8,68,0,0" Height="14" VerticalAlignment="Top"
                       IsChecked="{Binding Path=CharSettings.TrainNewSkills, Mode=TwoWay}"/>
-            <Label x:Name="lblDrinkAmount" Content="Drink Amount:" Foreground="White"
+            <Label x:Name="lblDrinkAmount" Content="{loc:Resx LblDrinkAmount}" Foreground="White"
                    Margin="8,88,0,0" HorizontalAlignment="Left" Height="25.96" VerticalAlignment="Top"/>
             <Slider x:Name="sldDrinkAmount" Margin="8,110,28,0" VerticalAlignment="Top" Maximum="200"
                     TickPlacement="BottomRight" TickFrequency="5" AutoToolTipPlacement="TopLeft" SmallChange="1"
@@ -126,7 +127,7 @@
             <Label x:Name="lblDrinkAmountValue" HorizontalAlignment="Right" Margin="0,108,8,0" Foreground="White"
                    Height="25.96" VerticalAlignment="Top" ContentStringFormat="N0"
                    Content="{Binding ElementName=sldDrinkAmount, Path=Value}"/>
-            <Label x:Name="lblFoodAmount" Content="Food Amount:" Foreground="White"
+            <Label x:Name="lblFoodAmount" Content="{loc:Resx LblFoodAmount}" Foreground="White"
                    Margin="8,130,0,0" HorizontalAlignment="Left" Height="25.96" VerticalAlignment="Top"/>
             <Slider x:Name="sldFoodAmount" Margin="8,150,28,0" VerticalAlignment="Top" Maximum="200"
                     TickPlacement="BottomRight" TickFrequency="5" AutoToolTipPlacement="TopLeft" SmallChange="1"
@@ -138,18 +139,18 @@
         </GroupBox>
 
         <!-- Mail and Refreshments GroupBox -->
-        <GroupBox x:Name="gbNames" Header="Mail and Refreshments"
+        <GroupBox x:Name="gbNames" Header="{loc:Resx GroupMailRefreshments}"
                   Foreground="White" Height="199" Width="224" Margin="4">
           <Grid>
-            <Label x:Name="lblMailRecipient" Content="Mail Recipient:" Foreground="White"
+            <Label x:Name="lblMailRecipient" Content="{loc:Resx LblMailRecipient}" Foreground="White"
                    HorizontalAlignment="Left" Margin="8,8,0,0" VerticalAlignment="Top"/>
             <TextBox x:Name="txtMailRecipient" Margin="8,27.96,8,0" TextWrapping="NoWrap" VerticalAlignment="Top"
                      Text="{Binding Path=CharSettings.MailRecipient, Mode=TwoWay}"/>
-            <Label x:Name="lblFoodName" Content="Food Name or ID:" Foreground="White"
+            <Label x:Name="lblFoodName" Content="{loc:Resx LblFoodName}" Foreground="White"
                    HorizontalAlignment="Left" Margin="8,53.92,0,0" VerticalAlignment="Top"/>
             <TextBox x:Name="txtFoodName" Margin="8,73.88,8,0" TextWrapping="NoWrap" VerticalAlignment="Top"
                      Text="{Binding Path=CharSettings.FoodName, Mode=TwoWay}"/>
-            <Label x:Name="lblDrinkName" Content="Drink Name or ID:" Foreground="White"
+            <Label x:Name="lblDrinkName" Content="{loc:Resx LblDrinkName}" Foreground="White"
                    HorizontalAlignment="Left" Margin="8,0,0,33.96" VerticalAlignment="Bottom"/>
             <TextBox x:Name="txtWaterName" Margin="8,0,8,8" TextWrapping="NoWrap" VerticalAlignment="Bottom"
                      Text="{Binding Path=CharSettings.DrinkName, Mode=TwoWay}"/>
@@ -157,28 +158,28 @@
         </GroupBox>
 
         <!-- Looting GroupBox -->
-        <GroupBox x:Name="gbLooting" Header="Looting"
+        <GroupBox x:Name="gbLooting" Header="{loc:Resx GroupLooting}"
                   Foreground="White" Height="199" Width="224" Margin="4">
           <Grid>
-            <CheckBox x:Name="chkLootMobs" Content="Loot Mobs" Foreground="White"
+            <CheckBox x:Name="chkLootMobs" Content="{loc:Resx ChkLootMobs}" Foreground="White"
                       Margin="8,8,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"
                       IsChecked="{Binding Path=CharSettings.LootMobs, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkSkinMobs" Content="Skin Mobs" Foreground="White"
+            <CheckBox x:Name="chkSkinMobs" Content="{loc:Resx ChkSkinMobs}" Foreground="White"
                       Margin="8,48,0,0" HorizontalAlignment="Left" VerticalAlignment="Top" 
                       IsChecked="{Binding Path=CharSettings.SkinMobs, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkLootChests" Content="Loot Chests" Foreground="White"
+            <CheckBox x:Name="chkLootChests" Content="{loc:Resx ChkLootChests}" Foreground="White"
                       Margin="8,28,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"
                       IsChecked="{Binding Path=CharSettings.LootChests, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkNinjaSkinMobs" Content="Ninja Skin" Foreground="White"
+            <CheckBox x:Name="chkNinjaSkinMobs" Content="{loc:Resx ChkNinjaSkin}" Foreground="White"
                       Margin="88,48,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"
                       IsChecked="{Binding Path=CharSettings.NinjaSkin, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkHarvestMinerals" Content="Harvest Mines" Foreground="White"
+            <CheckBox x:Name="chkHarvestMinerals" Content="{loc:Resx ChkHarvestMinerals}" Foreground="White"
                       HorizontalAlignment="Left" Margin="8,68,0,0" Height="18" VerticalAlignment="Top"
                       IsChecked="{Binding Path=CharSettings.HarvestMinerals, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkHarvestHerbs" Content="Harvest Herbs" Foreground="White"
+            <CheckBox x:Name="chkHarvestHerbs" Content="{loc:Resx ChkHarvestHerbs}" Foreground="White"
                       Margin="8,90,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"
                       IsChecked="{Binding Path=CharSettings.HarvestHerbs, Mode=TwoWay}"/>
-            <Label x:Name="lblLootRadius" Content="Loot Radius:" Foreground="White"
+            <Label x:Name="lblLootRadius" Content="{loc:Resx LblLootRadius}" Foreground="White"
                    Margin="8,112,0,0" HorizontalAlignment="Left" Height="25.96" VerticalAlignment="Top"/>
             <Slider x:Name="sldLootDistance" Margin="8,134,28,0" Maximum="100" TickPlacement="BottomRight"
                     TickFrequency="5" AutoToolTipPlacement="TopLeft" SmallChange="1" VerticalAlignment="Top"
@@ -190,19 +191,19 @@
         </GroupBox>
 
         <!-- General GroupBox -->
-        <GroupBox x:Name="gbGeneral" Header="General"
+        <GroupBox x:Name="gbGeneral" Header="{loc:Resx GroupGeneral}"
                   Foreground="White" Height="199" Width="224" Margin="4">
           <StackPanel Margin="8,6,8,0">
-            <CheckBox x:Name="chkKillBetweenHotspots" Content="Kill Between Hotspots" Foreground="White"
+            <CheckBox x:Name="chkKillBetweenHotspots" Content="{loc:Resx ChkKillBetweenHotspots}" Foreground="White"
                       Margin="0,0,0,4"
                       IsChecked="{Binding Path=StyxSettings.KillBetweenHotspots, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkUseFrameLock" Content="Use Frame Lock" Foreground="White"
+            <CheckBox x:Name="chkUseFrameLock" Content="{loc:Resx ChkUseFrameLock}" Foreground="White"
                       Margin="0,0,0,4"
                       IsChecked="{Binding Path=StyxSettings.UseFrameLock, Mode=TwoWay}"/>
-            <CheckBox x:Name="chkLogoutForInactivity" Content="Logout For Inactivity" Foreground="White"
+            <CheckBox x:Name="chkLogoutForInactivity" Content="{loc:Resx ChkLogoutForInactivity}" Foreground="White"
                       Margin="0,0,0,6"
                       IsChecked="{Binding Path=StyxSettings.LogoutForInactivity, Mode=TwoWay}"/>
-            <Label Content="Pull Distance:" Foreground="White"
+            <Label Content="{loc:Resx LblPullDistance}" Foreground="White"
                    Margin="-4,0,0,0" Padding="0" Height="16"/>
             <Grid Margin="0,2,0,4">
               <Slider x:Name="sldPullDistance" Margin="0,0,24,0" Maximum="100"
@@ -212,7 +213,7 @@
                      Height="25.96" VerticalAlignment="Top" ContentStringFormat="N0"
                      Content="{Binding ElementName=sldPullDistance, Path=Value}"/>
             </Grid>
-            <Label Content="Ticks Per Second:" Foreground="White"
+            <Label Content="{loc:Resx LblTicksPerSecond}" Foreground="White"
                    Margin="-4,0,0,0" Padding="0" Height="16"/>
             <Grid Margin="0,2,0,0">
               <Slider x:Name="sldTps" Margin="0,0,24,0" Maximum="100" Minimum="5"
@@ -227,26 +228,55 @@
         </GroupBox>
 
         <!-- Logging GroupBox -->
-        <GroupBox x:Name="gbLogging" Header="Logging"
+        <GroupBox x:Name="gbLogging" Header="{loc:Resx GroupLogging}"
                   Foreground="White" Height="199" Width="224" Margin="4">
           <Grid>
-            <Label x:Name="lblLogLevel" Content="Log Level:" Foreground="White"
+            <Label x:Name="lblLogLevel" Content="{loc:Resx LblLogLevel}" Foreground="White"
                    HorizontalAlignment="Left" Margin="8,8,0,0" VerticalAlignment="Top"/>
             <ComboBox x:Name="cmbLogLevel" Margin="8,32,8,0" VerticalAlignment="Top"
                       SelectionChanged="cmbLogLevel_SelectionChanged">
-              <ComboBoxItem Content="None" Tag="0"/>
-              <ComboBoxItem Content="Quiet" Tag="1"/>
-              <ComboBoxItem Content="Normal" Tag="2"/>
-              <ComboBoxItem Content="Verbose" Tag="3"/>
-              <ComboBoxItem Content="Diagnostic" Tag="4"/>
+              <ComboBoxItem Content="{loc:Resx LogNone}" Tag="0"/>
+              <ComboBoxItem Content="{loc:Resx LogQuiet}" Tag="1"/>
+              <ComboBoxItem Content="{loc:Resx LogNormal}" Tag="2"/>
+              <ComboBoxItem Content="{loc:Resx LogVerbose}" Tag="3"/>
+              <ComboBoxItem Content="{loc:Resx LogDiagnostic}" Tag="4"/>
             </ComboBox>
             <TextBlock Foreground="LightGray" Margin="8,64,8,8" TextWrapping="Wrap" VerticalAlignment="Top">
-              <Run Text="None: No logs"/><LineBreak/>
-              <Run Text="Quiet: Minimal logs"/><LineBreak/>
-              <Run Text="Normal: Standard logs"/><LineBreak/>
-              <Run Text="Verbose: Detailed logs"/><LineBreak/>
-              <Run Text="Diagnostic: All logs"/>
+              <Run Text="{loc:Resx LogNoneDesc}"/><LineBreak/>
+              <Run Text="{loc:Resx LogQuietDesc}"/><LineBreak/>
+              <Run Text="{loc:Resx LogNormalDesc}"/><LineBreak/>
+              <Run Text="{loc:Resx LogVerboseDesc}"/><LineBreak/>
+              <Run Text="{loc:Resx LogDiagnosticDesc}"/>
             </TextBlock>
+          </Grid>
+        </GroupBox>
+      <!-- Language GroupBox (HB 6.2.3 pattern: CultureSelectWindow) -->
+        <GroupBox x:Name="gbLanguage" Header="{loc:Resx GroupLanguage}"
+                  Foreground="White" Height="199" Width="224" Margin="4">
+          <Grid>
+            <Label x:Name="lblLanguage" Content="{loc:Resx LblLanguage}" Foreground="White"
+                   HorizontalAlignment="Left" Margin="8,8,0,0" VerticalAlignment="Top"/>
+            <ComboBox x:Name="cmbLanguage" Margin="8,32,8,0" VerticalAlignment="Top"
+                      SelectionChanged="cmbLanguage_SelectionChanged">
+              <ComboBoxItem Content="{loc:Resx LangAuto}" Tag=""/>
+              <ComboBoxItem Content="English" Tag="en"/>
+              <ComboBoxItem Content="Français" Tag="fr-FR"/>
+              <ComboBoxItem Content="Deutsch" Tag="de-DE"/>
+              <ComboBoxItem Content="Español" Tag="es-ES"/>
+              <ComboBoxItem Content="Italiano" Tag="it-IT"/>
+              <ComboBoxItem Content="Português" Tag="pt-PT"/>
+              <ComboBoxItem Content="Polski" Tag="pl-PL"/>
+              <ComboBoxItem Content="Türkçe" Tag="tr-TR"/>
+              <ComboBoxItem Content="Nederlands" Tag="nl-NL"/>
+              <ComboBoxItem Content="Čeština" Tag="cs-CZ"/>
+              <ComboBoxItem Content="Русский" Tag="ru-RU"/>
+              <ComboBoxItem Content="简体中文" Tag="zh-Hans"/>
+              <ComboBoxItem Content="繁體中文" Tag="zh-Hant"/>
+              <ComboBoxItem Content="日本語" Tag="ja-JP"/>
+              <ComboBoxItem Content="한국어" Tag="ko-KR"/>
+            </ComboBox>
+            <TextBlock Foreground="LightGray" Margin="8,64,8,8" TextWrapping="Wrap" VerticalAlignment="Top"
+                       Text="{loc:Resx LblLanguageRestart}"/>
           </Grid>
         </GroupBox>
       </WrapPanel>

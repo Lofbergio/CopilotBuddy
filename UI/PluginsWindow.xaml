@@ -4,9 +4,10 @@
         xmlns:mah="http://metro.mahapps.com/winfx/xaml/controls"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="clr-namespace:Styx.Localization"
         mc:Ignorable="d"
         x:Name="Window"
-        Title="Plugins"
+        Title="{loc:Resx PluginsTitle}"
         Width="301"
         Height="324"
         Background="{DynamicResource WindowBackgroundBrush}"
@@ -40,7 +41,7 @@
                VerticalAlignment="Bottom"
                Width="59">
             <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="Author:"/>
+                <TextBlock Text="{loc:Resx LblAuthor}"/>
             </Viewbox>
         </Label>
         <Label x:Name="lblVersionLabel"
@@ -50,7 +51,7 @@
                VerticalAlignment="Bottom"
                Width="59">
             <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="Version:"/>
+                <TextBlock Text="{loc:Resx LblVersion}"/>
             </Viewbox>
         </Label>
         <Label x:Name="lblAuthor"
@@ -69,7 +70,7 @@
                 Width="90"
                 Click="BtnSettings_Click">
             <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock x:Name="tbSettingsButtonText" Text="Settings"/>
+                <TextBlock x:Name="tbSettingsButtonText" Text="{loc:Resx Settings}"/>
             </Viewbox>
         </Button>
         <Button x:Name="btnRecompile"
@@ -80,7 +81,7 @@
                 VerticalAlignment="Bottom"
                 Click="BtnRefresh_Click">
             <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock x:Name="tbRecompileButtonText" Text="Recompile All"/>
+                <TextBlock x:Name="tbRecompileButtonText" Text="{loc:Resx RecompileAll}"/>
             </Viewbox>
         </Button>
     </Grid>

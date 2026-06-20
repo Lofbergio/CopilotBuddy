@@ -5,8 +5,9 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:wf="clr-namespace:System.Windows.Forms;assembly=System.Windows.Forms"
         xmlns:wi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration"
+        xmlns:loc="clr-namespace:Styx.Localization"
         mc:Ignorable="d"
-        Title="DungeonBuddy Config"
+        Title="{loc:Resx DungeonBuddyConfigTitle}"
         Height="560"
         Width="360"
         Loaded="FormConfig_Load"
@@ -21,13 +22,13 @@
         </Grid.RowDefinitions>
 
         <TabControl x:Name="tabControlMain" Grid.Row="0" Background="#252526" Foreground="#CCCCCC" SelectionChanged="tabControlMain_SelectedIndexChanged">
-            <TabItem x:Name="tabPageCommon" Header="Common">
+            <TabItem x:Name="tabPageCommon" Header="{loc:Resx GroupCommon}">
                 <!-- property grid hosted in WinForms host -->
                 <wi:WindowsFormsHost x:Name="winFormsHost" Margin="4">
                     <wf:PropertyGrid x:Name="propertyGridMain"/>
                 </wi:WindowsFormsHost>
             </TabItem>
-            <TabItem x:Name="tabPageDungeons" Header="Dungeon Selection">
+            <TabItem x:Name="tabPageDungeons" Header="{loc:Resx GroupDungeonSelection}">
                 <Grid Margin="4">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*"/>
@@ -39,16 +40,16 @@
                         <wf:TreeView x:Name="twDungeonSelection" BeforeCheck="twDungeonSelection_BeforeCheck" AfterCheck="twDungeonSelection_AfterCheck" CheckBoxes="True"/>
                     </wi:WindowsFormsHost>
                     <Label x:Name="lblWarningText" Grid.Row="1" Foreground="Orange" Visibility="Collapsed" HorizontalAlignment="Center">
-                        <TextBlock Text="You need to change Queue Type to Specific before editing the dungeon list" TextWrapping="Wrap" TextAlignment="Center"/>
+                        <TextBlock Text="{loc:Resx LblDungeonQueueType}" TextWrapping="Wrap" TextAlignment="Center"/>
                     </Label>
                     <StackPanel x:Name="dungeonSelectionButtons" Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
-                        <CheckBox x:Name="cbShowAll" Content="Show All Dungeons" Margin="0,0,8,0" Checked="cbShowAll_CheckedChanged" Unchecked="cbShowAll_CheckedChanged"/>
-                        <Button x:Name="btnSelectAll" Content="Select All" Click="btnSelectAll_Click" Margin="0,0,5,0"/>
-                        <Button x:Name="btnUnselectAll" Content="Unselect All" Click="btnUnselectAll_Click"/>
+                        <CheckBox x:Name="cbShowAll" Content="{loc:Resx ChkShowAllDungeons}" Margin="0,0,8,0" Checked="cbShowAll_CheckedChanged" Unchecked="cbShowAll_CheckedChanged"/>
+                        <Button x:Name="btnSelectAll" Content="{loc:Resx SelectAll}" Click="btnSelectAll_Click" Margin="0,0,5,0"/>
+                        <Button x:Name="btnUnselectAll" Content="{loc:Resx UnselectAll}" Click="btnUnselectAll_Click"/>
                     </StackPanel>
                 </Grid>
             </TabItem>
-            <TabItem x:Name="tabPageSecret" Header="Secret">
+            <TabItem x:Name="tabPageSecret" Header="{loc:Resx GroupSecret}">
                 <Grid Margin="4">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -56,20 +57,20 @@
                     </Grid.RowDefinitions>
                     <!-- Buttons wrap to a second row automatically when the window is narrow -->
                     <WrapPanel Grid.Row="0" Margin="0,0,0,4" Orientation="Horizontal">
-                        <Button x:Name="btnToggleMovement" Content="Disable Movement" Click="btnToggleMovement_Click" Margin="0,0,4,4"/>
-                        <Button x:Name="loadProfileButton" Content="Load Profile" Click="loadProfile_click" Margin="0,0,4,4"/>
-                        <Button x:Name="button1" Content="Target Info" Click="button1_Click" Margin="0,0,4,4"/>
-                        <Button x:Name="dbgButton2" Content="Navigation" Click="dbgButton2_Click" Margin="0,0,4,4"/>
-                        <Button x:Name="debugBtn3" Content="Show Path" Click="debugBtn3_Click" Margin="0,0,4,4"/>
-                        <Button x:Name="RecompileScriptsButton" Content="Reload Scripts" Click="RecompileScriptsButton_Click" Margin="0,0,4,4"/>
+                        <Button x:Name="btnToggleMovement" Content="{loc:Resx DisableMovement}" Click="btnToggleMovement_Click" Margin="0,0,4,4"/>
+                        <Button x:Name="loadProfileButton" Content="{loc:Resx LoadProfile}" Click="loadProfile_click" Margin="0,0,4,4"/>
+                        <Button x:Name="button1" Content="{loc:Resx TargetInfo}" Click="button1_Click" Margin="0,0,4,4"/>
+                        <Button x:Name="dbgButton2" Content="{loc:Resx Navigation}" Click="dbgButton2_Click" Margin="0,0,4,4"/>
+                        <Button x:Name="debugBtn3" Content="{loc:Resx ShowPath}" Click="debugBtn3_Click" Margin="0,0,4,4"/>
+                        <Button x:Name="RecompileScriptsButton" Content="{loc:Resx ReloadScripts}" Click="RecompileScriptsButton_Click" Margin="0,0,4,4"/>
                     </WrapPanel>
                     <TabControl x:Name="tabControl1" Grid.Row="1">
-                        <TabItem x:Name="tabPage1" Header="Dungeon List">
+                        <TabItem x:Name="tabPage1" Header="{loc:Resx GroupDungeonList}">
                             <wi:WindowsFormsHost>
                                 <wf:TreeView x:Name="twDebug"/>
                             </wi:WindowsFormsHost>
                         </TabItem>
-                        <TabItem x:Name="tabPage2" Header="Boss List">
+                        <TabItem x:Name="tabPage2" Header="{loc:Resx GroupBossList}">
                             <wi:WindowsFormsHost>
                                 <wf:TreeView x:Name="twBossTree" CheckBoxes="True" AfterCheck="twBossTree_AfterCheck"/>
                             </wi:WindowsFormsHost>
@@ -79,6 +80,6 @@
             </TabItem>
         </TabControl>
 
-        <Label x:Name="label1" Grid.Row="1" Content="DungeonBuddy" FontFamily="Impact" FontSize="17" Foreground="#CCCCCC" HorizontalAlignment="Left"/>
+        <Label x:Name="label1" Grid.Row="1" Content="{loc:Resx DungeonBuddy}" FontFamily="Impact" FontSize="17" Foreground="#CCCCCC" HorizontalAlignment="Left"/>
     </Grid>
 </Window>

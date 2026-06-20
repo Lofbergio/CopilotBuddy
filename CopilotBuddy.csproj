@@ -52,6 +52,20 @@
     <ApplicationDefinition Include="UI\App.xaml" />
   </ItemGroup>
 
+  <!-- PostBuild: move satellite culture folders into Languages/ subdir (HB pattern) -->
+  <Target Name="MoveSatelliteAssemblies" AfterTargets="Build">
+    <Exec Command="if exist &quot;$(OutputPath)Languages\&quot; rmdir /S /Q &quot;$(OutputPath)Languages&quot;
+for /D %%c in (&quot;$(OutputPath)*&quot;) do (
+  if exist &quot;%%c\CopilotBuddy.resources.dll&quot; (
+    if not exist &quot;$(OutputPath)Languages\%%~nc&quot; mkdir &quot;$(OutputPath)Languages\%%~nc&quot;
+    move /Y &quot;%%c\CopilotBuddy.resources.dll&quot; &quot;$(OutputPath)Languages\%%~nc\&quot;
+    rmdir /S /Q &quot;%%c&quot;
+    echo [Localization] Moved %%~nc satellite to Languages\
+  )
+)
+exit /b 0"/>
+  </Target>
+
   <!-- Resources (icons) -->
   <ItemGroup>
     <Resource Include="Resources\bender.ico" />

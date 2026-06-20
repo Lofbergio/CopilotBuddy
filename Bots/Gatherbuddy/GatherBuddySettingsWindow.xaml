@@ -1,7 +1,8 @@
 <Window x:Class="Bots.Gatherbuddy.GatherBuddySettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="GatherBuddy Settings" Width="520" Height="580"
+        xmlns:loc="clr-namespace:Styx.Localization"
+        Title="{loc:Resx GatherBuddySettingsTitle}" Width="520" Height="580"
         Background="#FF2D2D30"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize">
@@ -162,37 +163,37 @@
             <!-- ══════════════════════════════════════════════════════ -->
             <!-- TAB 1: GENERAL SETTINGS                               -->
             <!-- ══════════════════════════════════════════════════════ -->
-            <TabItem Header="General">
+            <TabItem Header="{loc:Resx GroupGeneral}">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Background="#FF2D2D30">
                     <StackPanel>
                         <!-- ═══ GATHERING ═══ -->
-                        <GroupBox Header="Gathering">
+                        <GroupBox Header="{loc:Resx GroupGathering}">
                             <StackPanel Margin="4">
-                                <CheckBox x:Name="chkGatherHerbs" Content="Gather Herbs"
+                                <CheckBox x:Name="chkGatherHerbs" Content="{loc:Resx ChkGatherHerbs}"
                                           Margin="0,4" IsChecked="{Binding GatherHerbs, Mode=TwoWay}"/>
-                                <CheckBox x:Name="chkGatherMinerals" Content="Gather Minerals"
+                                <CheckBox x:Name="chkGatherMinerals" Content="{loc:Resx ChkGatherMinerals}"
                                           Margin="0,4" IsChecked="{Binding GatherMinerals, Mode=TwoWay}"/>
-                                <CheckBox x:Name="chkGatherChests" Content="Gather Chests (Treasure)"
+                                <CheckBox x:Name="chkGatherChests" Content="{loc:Resx ChkGatherChests}"
                                           Margin="0,4" IsChecked="{Binding GatherChests, Mode=TwoWay}"/>
-                                <CheckBox x:Name="chkFaceNodes" Content="Face Nodes Before Gathering"
+                                <CheckBox x:Name="chkFaceNodes" Content="{loc:Resx ChkFaceNodes}"
                                           Margin="0,4" IsChecked="{Binding FaceNodes, Mode=TwoWay}"/>
                             </StackPanel>
                         </GroupBox>
 
                         <!-- ═══ NAVIGATION ═══ -->
-                        <GroupBox Header="Navigation">
+                        <GroupBox Header="{loc:Resx GroupNavigation}">
                             <StackPanel Margin="4">
                                 <DockPanel Margin="0,4">
-                                    <Label Content="Path Type:" Width="120"/>
+                                    <Label Content="{loc:Resx LblPathType}" Width="120"/>
                                     <ComboBox x:Name="cmbPathType"
                                               SelectedIndex="{Binding PathingTypeIndex, Mode=TwoWay}">
-                                        <ComboBoxItem Content="Circle"/>
-                                        <ComboBoxItem Content="Bounce"/>
+                                        <ComboBoxItem Content="{loc:Resx PathCircle}"/>
+                                        <ComboBoxItem Content="{loc:Resx PathBounce}"/>
                                     </ComboBox>
                                 </DockPanel>
 
                                 <DockPanel Margin="0,4">
-                                    <Label Content="Detection Range:" Width="120"/>
+                                    <Label Content="{loc:Resx LblDetectionRange}" Width="120"/>
                                     <Label Content="{Binding ElementName=sldDetectionRange, Path=Value}"
                                            ContentStringFormat="{}{0:F0} yds" Width="55" HorizontalContentAlignment="Right"/>
                                     <Slider x:Name="sldDetectionRange" Minimum="20" Maximum="150"
@@ -202,7 +203,7 @@
                                 </DockPanel>
 
                                 <DockPanel Margin="0,4">
-                                    <Label Content="Height Modifier:" Width="120"/>
+                                    <Label Content="{loc:Resx LblHeightModifier}" Width="120"/>
                                     <Label Content="{Binding ElementName=sldHeightModifier, Path=Value}"
                                            ContentStringFormat="{}{0:F0} yds" Width="55" HorizontalContentAlignment="Right"/>
                                     <Slider x:Name="sldHeightModifier" Minimum="-300" Maximum="300"
@@ -211,23 +212,23 @@
                                             Value="{Binding HeightModifier, Mode=TwoWay}"/>
                                 </DockPanel>
 
-                                <CheckBox x:Name="chkRandomizeHotspots" Content="Randomize Hotspot Order"
+                                <CheckBox x:Name="chkRandomizeHotspots" Content="{loc:Resx ChkRandomizeHotspots}"
                                           Margin="0,4" IsChecked="{Binding RandomizeHotspots, Mode=TwoWay}"/>
                             </StackPanel>
                         </GroupBox>
 
                         <!-- ═══ COMBAT ═══ -->
-                        <GroupBox Header="Combat / Loot">
+                        <GroupBox Header="{loc:Resx GroupCombatLoot}">
                             <StackPanel Margin="4">
-                                <CheckBox x:Name="chkLootMobs" Content="Loot Killed Mobs"
+                                <CheckBox x:Name="chkLootMobs" Content="{loc:Resx SkillMining}"
                                           Margin="0,4" IsChecked="{Binding LootMobs, Mode=TwoWay}"/>
-                                <CheckBox x:Name="chkIgnoreElites" Content="Ignore Elite Mobs"
+                                <CheckBox x:Name="chkIgnoreElites" Content="{loc:Resx ChkIgnoreElites}"
                                           Margin="0,4" IsChecked="{Binding IgnoreElites, Mode=TwoWay}"/>
-                                <CheckBox x:Name="chkSkinMobs" Content="Skin Killed Mobs (Skinning)"
+                                <CheckBox x:Name="chkSkinMobs" Content="{loc:Resx SkillSkinning}"
                                           Margin="0,4" IsChecked="{Binding SkinMobs, Mode=TwoWay}"/>
 
                                 <DockPanel Margin="0,4">
-                                    <Label Content="Loot Radius:" Width="120"/>
+                                    <Label Content="{loc:Resx LblLootRadius}" Width="120"/>
                                     <Label Content="{Binding ElementName=sldLootRadius, Path=Value}"
                                            ContentStringFormat="{}{0:F0} yds" Width="55" HorizontalContentAlignment="Right"/>
                                     <Slider x:Name="sldLootRadius" Minimum="5" Maximum="60"
@@ -239,13 +240,13 @@
                         </GroupBox>
 
                         <!-- ═══ ANTI-NINJA ═══ -->
-                        <GroupBox Header="Anti-Ninja">
+                        <GroupBox Header="{loc:Resx GroupAntiNinja}">
                             <StackPanel Margin="4">
-                                <CheckBox x:Name="chkNoNinja" Content="Don't Steal Nodes From Other Players"
+                                <CheckBox x:Name="chkNoNinja" Content="{loc:Resx ChkNoNinja}"
                                           Margin="0,4" IsChecked="{Binding NoNinja, Mode=TwoWay}"/>
 
                                 <DockPanel Margin="0,4">
-                                    <Label Content="Blacklist Timer:" Width="120"/>
+                                    <Label Content="{loc:Resx LblBlacklistTimer}" Width="120"/>
                                     <Label Content="{Binding ElementName=sldBlacklistTimer, Path=Value}"
                                            ContentStringFormat="{}{0:F0} sec" Width="55" HorizontalContentAlignment="Right"/>
                                     <Slider x:Name="sldBlacklistTimer" Minimum="5" Maximum="120"
@@ -257,13 +258,13 @@
                         </GroupBox>
 
                         <!-- ═══ VENDOR/REPAIR ═══ -->
-                        <GroupBox Header="Vendor / Repair">
+                        <GroupBox Header="{loc:Resx GroupVendorRepair}">
                             <StackPanel Margin="4">
-                                <CheckBox x:Name="chkVendorWhenFull" Content="Go To Vendor When Bags Full"
+                                <CheckBox x:Name="chkVendorWhenFull" Content="{loc:Resx ChkVendorWhenFull}"
                                           Margin="0,4" IsChecked="{Binding VendorWhenFull, Mode=TwoWay}"/>
 
                                 <DockPanel Margin="0,4" IsEnabled="{Binding IsChecked, ElementName=chkVendorWhenFull}">
-                                    <Label Content="Min Free Slots:" Width="120"/>
+                                    <Label Content="{loc:Resx LblMinFreeSlots}" Width="120"/>
                                     <Label Content="{Binding ElementName=sldMinFreeSlots, Path=Value}"
                                            ContentStringFormat="{}{0:F0}" Width="55" HorizontalContentAlignment="Right"/>
                                     <Slider x:Name="sldMinFreeSlots" Minimum="1" Maximum="10"
@@ -272,14 +273,14 @@
                                             Value="{Binding MinFreeBagSlotsValue, Mode=TwoWay}"/>
                                 </DockPanel>
 
-                                <CheckBox x:Name="chkFindVendorsAuto" Content="Find Vendors Automatically"
+                                <CheckBox x:Name="chkFindVendorsAuto" Content="{loc:Resx ChkFindVendorsAuto}"
                                           Margin="0,4" IsChecked="{Binding FindVendorsAutomatically, Mode=TwoWay}"/>
 
-                                <CheckBox x:Name="chkRepairAtVendor" Content="Repair At Vendor"
+                                <CheckBox x:Name="chkRepairAtVendor" Content="{loc:Resx ChkRepairAtVendor}"
                                           Margin="0,4" IsChecked="{Binding RepairAtVendor, Mode=TwoWay}"/>
 
                                 <DockPanel Margin="0,4" IsEnabled="{Binding IsChecked, ElementName=chkRepairAtVendor}">
-                                    <Label Content="Repair Below:" Width="120"/>
+                                    <Label Content="{loc:Resx LblRepairBelow}" Width="120"/>
                                     <Label Content="{Binding ElementName=sldRepairPct, Path=Value}"
                                            ContentStringFormat="{}{0:F0}%" Width="55" HorizontalContentAlignment="Right"/>
                                     <Slider x:Name="sldRepairPct" Minimum="5" Maximum="50"
@@ -291,66 +292,66 @@
                         </GroupBox>
 
                         <!-- ═══ SELL QUALITY ═══ -->
-                        <GroupBox Header="Sell Quality Filters">
+                        <GroupBox Header="{loc:Resx GroupSellQualityFilters}">
                             <StackPanel Margin="4">
-                                <Label Content="Sell items of these qualities at vendor:" FontSize="11" Foreground="#FF888888"/>
+                                <Label Content="{loc:Resx LblSellQualities}" FontSize="11" Foreground="#FF888888"/>
                                 <WrapPanel Margin="0,4">
-                                    <CheckBox Content="Grey" Margin="0,0,12,0"
+                                    <CheckBox Content="{loc:Resx ColorGrey}" Margin="0,0,12,0"
                                               IsChecked="{Binding SellGrey, Mode=TwoWay}"/>
-                                    <CheckBox Content="White" Margin="0,0,12,0"
+                                    <CheckBox Content="{loc:Resx ColorWhite}" Margin="0,0,12,0"
                                               IsChecked="{Binding SellWhite, Mode=TwoWay}"/>
-                                    <CheckBox Content="Green" Margin="0,0,12,0"
+                                    <CheckBox Content="{loc:Resx ColorGreen}" Margin="0,0,12,0"
                                               IsChecked="{Binding SellGreen, Mode=TwoWay}"/>
-                                    <CheckBox Content="Blue" Margin="0,0,12,0"
+                                    <CheckBox Content="{loc:Resx ColorBlue}" Margin="0,0,12,0"
                                               IsChecked="{Binding SellBlue, Mode=TwoWay}"/>
-                                    <CheckBox Content="Purple" Margin="0,0,12,0"
+                                    <CheckBox Content="{loc:Resx ColorPurple}" Margin="0,0,12,0"
                                               IsChecked="{Binding SellPurple, Mode=TwoWay}"/>
                                 </WrapPanel>
                             </StackPanel>
                         </GroupBox>
 
                         <!-- ═══ MAIL ═══ -->
-                        <GroupBox Header="Mail">
+                        <GroupBox Header="{loc:Resx GroupMail}">
                             <StackPanel Margin="4">
-                                <CheckBox x:Name="chkMailToAlt" Content="Mail Items To Alt"
+                                <CheckBox x:Name="chkMailToAlt" Content="{loc:Resx ChkMailToAlt}"
                                           Margin="0,4" IsChecked="{Binding MailToAlt, Mode=TwoWay}"/>
                                 <DockPanel Margin="0,4" IsEnabled="{Binding IsChecked, ElementName=chkMailToAlt}">
-                                    <Label Content="Recipient:" Width="120"/>
+                                    <Label Content="{loc:Resx LblRecipient}" Width="120"/>
                                     <TextBox Text="{Binding MailRecipient, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
                                 </DockPanel>
-                                <Label Content="Mail items of these qualities:" FontSize="11"
+                                <Label Content="{loc:Resx LblMailQualities}" FontSize="11"
                                        Foreground="#FF888888" Margin="0,4,0,0"
                                        IsEnabled="{Binding IsChecked, ElementName=chkMailToAlt}"/>
                                 <WrapPanel Margin="0,4" IsEnabled="{Binding IsChecked, ElementName=chkMailToAlt}">
-                                    <CheckBox Content="Grey" Margin="0,0,12,0"
+                                    <CheckBox Content="{loc:Resx ColorGrey}" Margin="0,0,12,0"
                                               IsChecked="{Binding MailGrey, Mode=TwoWay}"/>
-                                    <CheckBox Content="White" Margin="0,0,12,0"
+                                    <CheckBox Content="{loc:Resx ColorWhite}" Margin="0,0,12,0"
                                               IsChecked="{Binding MailWhite, Mode=TwoWay}"/>
-                                    <CheckBox Content="Green" Margin="0,0,12,0"
+                                    <CheckBox Content="{loc:Resx ColorGreen}" Margin="0,0,12,0"
                                               IsChecked="{Binding MailGreen, Mode=TwoWay}"/>
-                                    <CheckBox Content="Blue" Margin="0,0,12,0"
+                                    <CheckBox Content="{loc:Resx ColorBlue}" Margin="0,0,12,0"
                                               IsChecked="{Binding MailBlue, Mode=TwoWay}"/>
-                                    <CheckBox Content="Purple" Margin="0,0,12,0"
+                                    <CheckBox Content="{loc:Resx ColorPurple}" Margin="0,0,12,0"
                                               IsChecked="{Binding MailPurple, Mode=TwoWay}"/>
                                 </WrapPanel>
                             </StackPanel>
                         </GroupBox>
 
                         <!-- ═══ DEATH / SAFETY ═══ -->
-                        <GroupBox Header="Death / Safety">
+                        <GroupBox Header="{loc:Resx GroupDeathSafety}">
                             <StackPanel Margin="4">
-                                <CheckBox x:Name="chkUseSpiritHealer" Content="Use Spirit Healer (skip corpse run)"
+                                <CheckBox x:Name="chkUseSpiritHealer" Content="{loc:Resx ChkUseSpiritHealer}"
                                           Margin="0,4" IsChecked="{Binding UseSpiritHealer, Mode=TwoWay}"/>
-                                <CheckBox x:Name="chkWaitRezSickness" Content="Wait Out Rez Sickness"
+                                <CheckBox x:Name="chkWaitRezSickness" Content="{loc:Resx ChkWaitRezSickness}"
                                           Margin="0,4" IsChecked="{Binding WaitRezSickness, Mode=TwoWay}"/>
                             </StackPanel>
                         </GroupBox>
 
                         <!-- ═══ SESSION TIMER ═══ -->
-                        <GroupBox Header="Session Timer">
+                        <GroupBox Header="{loc:Resx GroupSessionTimer}">
                             <StackPanel Margin="4">
                                 <DockPanel Margin="0,4">
-                                    <Label Content="Botting Hours:" Width="120"/>
+                                    <Label Content="{loc:Resx LblBottingHours}" Width="120"/>
                                     <Label Content="{Binding ElementName=sldBottingHours, Path=Value}"
                                            ContentStringFormat="{}{0:F1} hrs" Width="55" HorizontalContentAlignment="Right"/>
                                     <Slider x:Name="sldBottingHours" Minimum="0" Maximum="24"
@@ -359,7 +360,7 @@
                                             Value="{Binding BottingHours, Mode=TwoWay}"/>
                                 </DockPanel>
                                 <Label Content="(0 = no limit)" FontSize="10" Foreground="#FF888888" Margin="120,0,0,0"/>
-                                <CheckBox x:Name="chkHearthAndExit" Content="Hearthstone &amp; Exit on Timer"
+                                <CheckBox x:Name="chkHearthAndExit" Content="{loc:Resx ChkHearthExitTimer}"
                                           Margin="0,4" IsChecked="{Binding HearthAndExit, Mode=TwoWay}"/>
                             </StackPanel>
                         </GroupBox>
@@ -370,7 +371,7 @@
             <!-- ══════════════════════════════════════════════════════ -->
             <!-- TAB 2: NODE SELECTION                                 -->
             <!-- ══════════════════════════════════════════════════════ -->
-            <TabItem Header="Node Selection">
+            <TabItem Header="{loc:Resx GroupNodeSelection}">
                 <Grid Background="#FF2D2D30">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*"/>
@@ -378,18 +379,18 @@
                     </Grid.RowDefinitions>
 
                     <!-- ── HERBS ── -->
-                    <GroupBox Header="Herbs" Grid.Row="0" Margin="4">
+                    <GroupBox Header="{loc:Resx GroupHerbs}" Grid.Row="0" Margin="4">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
                             <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="4,2">
-                                <Button Content="Select All" Width="75" Height="22" Margin="0,0,4,0"
+                                <Button Content="{loc:Resx SelectAll}" Width="75" Height="22" Margin="0,0,4,0"
                                         Click="btnSelectAllHerbs_Click"/>
-                                <Button Content="Unselect All" Width="80" Height="22"
+                                <Button Content="{loc:Resx UnselectAll}" Width="80" Height="22"
                                         Click="btnUnselectAllHerbs_Click"/>
-                                <Label Content="Herbs" Foreground="#FF888888" FontSize="11" Margin="8,0,0,0"
+                                <Label Content="{loc:Resx GroupHerbs}" Foreground="#FF888888" FontSize="11" Margin="8,0,0,0"
                                        VerticalAlignment="Center"/>
                             </StackPanel>
                             <ListBox Grid.Row="1"
@@ -416,18 +417,18 @@
                     </GroupBox>
 
                     <!-- ── MINERALS ── -->
-                    <GroupBox Header="Minerals" Grid.Row="1" Margin="4">
+                    <GroupBox Header="{loc:Resx GroupMinerals}" Grid.Row="1" Margin="4">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
                             <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="4,2">
-                                <Button Content="Select All" Width="75" Height="22" Margin="0,0,4,0"
+                                <Button Content="{loc:Resx SelectAll}" Width="75" Height="22" Margin="0,0,4,0"
                                         Click="btnSelectAllMinerals_Click"/>
-                                <Button Content="Unselect All" Width="80" Height="22"
+                                <Button Content="{loc:Resx UnselectAll}" Width="80" Height="22"
                                         Click="btnUnselectAllMinerals_Click"/>
-                                <Label Content="Minerals" Foreground="#FF888888" FontSize="11" Margin="8,0,0,0"
+                                <Label Content="{loc:Resx GroupMinerals}" Foreground="#FF888888" FontSize="11" Margin="8,0,0,0"
                                        VerticalAlignment="Center"/>
                             </StackPanel>
                             <ListBox Grid.Row="1"
@@ -458,9 +459,9 @@
 
         <!-- ═══ BUTTONS ═══ -->
         <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-            <Button Content="Save &amp; Close" Width="100" Height="26" Margin="0,0,8,0"
+            <Button Content="{loc:Resx SaveAndClose}" Width="100" Height="26" Margin="0,0,8,0"
                     Click="btnSaveAndClose_Click"/>
-            <Button Content="Cancel" Width="80" Height="26"
+            <Button Content="{loc:Resx Cancel}" Width="80" Height="26"
                     Click="btnCancel_Click"/>
         </StackPanel>
     </Grid>

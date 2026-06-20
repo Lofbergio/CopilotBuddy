@@ -1,0 +1,594 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <data name="AppTitle" xml:space="preserve">
+    <value>CopilotBuddy</value>
+  </data>
+  <data name="SettingsTitle" xml:space="preserve">
+    <value>Настройки и инструменты</value>
+  </data>
+  <data name="PluginsTitle" xml:space="preserve">
+    <value>Плагины</value>
+  </data>
+  <data name="DeveloperToolsTitle" xml:space="preserve">
+    <value>Инструменты разработчика</value>
+  </data>
+  <data name="SelectWoWTitle" xml:space="preserve">
+    <value>Выбрать WoW</value>
+  </data>
+  <data name="SelectWoWDescription" xml:space="preserve">
+    <value>Выберите процесс WoW для подключения:</value>
+  </data>
+  <data name="LblAuthor" xml:space="preserve">
+    <value>Автор:</value>
+  </data>
+  <data name="LblVersion" xml:space="preserve">
+    <value>Версия:</value>
+  </data>
+  <data name="RecompileAll" xml:space="preserve">
+    <value>Перекомпилировать всё</value>
+  </data>
+  <data name="LblFactionName" xml:space="preserve">
+    <value>Имя фракции:</value>
+  </data>
+  <data name="LblGroupID" xml:space="preserve">
+    <value>ID группы:</value>
+  </data>
+  <data name="LblGroupID2" xml:space="preserve">
+    <value>ID группы 2:</value>
+  </data>
+  <data name="LblVendorType" xml:space="preserve">
+    <value>Тип вендора:</value>
+  </data>
+  <data name="LblRefresh" xml:space="preserve">
+    <value>Обновить</value>
+  </data>
+  <data name="LblLoadProfileButtonText" xml:space="preserve">
+    <value>Загрузить профиль</value>
+  </data>
+  <data name="LblPauseButtonText" xml:space="preserve">
+    <value>Пауза</value>
+  </data>
+  <data name="LblEnhancedMode" xml:space="preserve">
+    <value>Расширенный режим</value>
+  </data>
+  <data name="LblFromFileSystem" xml:space="preserve">
+    <value>Из файловой системы</value>
+  </data>
+  <data name="LblFromBuddyStore" xml:space="preserve">
+    <value>Из Buddy Store</value>
+  </data>
+  <data name="LblFromWebSource" xml:space="preserve">
+    <value>Из веб</value>
+  </data>
+  <data name="LblRecent" xml:space="preserve">
+    <value>Недавние</value>
+  </data>
+  <data name="LblShowPath" xml:space="preserve">
+    <value>Показать путь</value>
+  </data>
+  <data name="LblTargetInfo" xml:space="preserve">
+    <value>Инфо цели</value>
+  </data>
+  <data name="LblNavigation" xml:space="preserve">
+    <value>Навигация</value>
+  </data>
+  <data name="ReportBug" xml:space="preserve">
+    <value>Сообщить об ошибке</value>
+  </data>
+  <data name="LblDungeonQueueType" xml:space="preserve">
+    <value>Сначала измените тип очереди на &quot;Определённая&quot; перед редактированием списка подземелий</value>
+  </data>
+  <data name="TabBagItems" xml:space="preserve">
+    <value>Предметы в сумке</value>
+  </data>
+  <data name="LogNoneDesc" xml:space="preserve">
+    <value>Нет: без логов</value>
+  </data>
+  <data name="LogQuietDesc" xml:space="preserve">
+    <value>Тихо: минимум логов</value>
+  </data>
+  <data name="LogNormalDesc" xml:space="preserve">
+    <value>Нормально: стандартные логи</value>
+  </data>
+  <data name="LogVerboseDesc" xml:space="preserve">
+    <value>Подробно: детальные логи</value>
+  </data>
+  <data name="LogDiagnosticDesc" xml:space="preserve">
+    <value>Диагностика: все логи</value>
+  </data>
+  <data name="GroupLanguage" xml:space="preserve">
+    <value>Язык</value>
+  </data>
+  <data name="LblLanguage" xml:space="preserve">
+    <value>Язык:</value>
+  </data>
+  <data name="LangAuto" xml:space="preserve">
+    <value>Авто (язык системы)</value>
+  </data>
+  <data name="LblLanguageRestart" xml:space="preserve">
+    <value>Перезапустите Honorbuddy для применения изменений.</value>
+  </data>
+  <data name="BGBuddyConfigTitle" xml:space="preserve">
+    <value>Настройки BGBuddy</value>
+  </data>
+  <data name="DungeonBuddyConfigTitle" xml:space="preserve">
+    <value>Настройки DungeonBuddy</value>
+  </data>
+  <data name="GatherBuddySettingsTitle" xml:space="preserve">
+    <value>Настройки GatherBuddy</value>
+  </data>
+  <data name="TabLog" xml:space="preserve">
+    <value>Журнал</value>
+  </data>
+  <data name="TabInfo" xml:space="preserve">
+    <value>Инфо</value>
+  </data>
+  <data name="TabProfiles" xml:space="preserve">
+    <value>Профили</value>
+  </data>
+  <data name="TabQuests" xml:space="preserve">
+    <value>Задания</value>
+  </data>
+  <data name="TabObjects" xml:space="preserve">
+    <value>Объекты</value>
+  </data>
+  <data name="TabUnits" xml:space="preserve">
+    <value>Существа</value>
+  </data>
+  <data name="Pause" xml:space="preserve">
+    <value>Пауза</value>
+  </data>
+  <data name="Ready" xml:space="preserve">
+    <value>Готов</value>
+  </data>
+  <data name="EnhancedMode" xml:space="preserve">
+    <value>Расширенный режим</value>
+  </data>
+  <data name="LoadProfile" xml:space="preserve">
+    <value>Загрузить профиль</value>
+  </data>
+  <data name="Settings" xml:space="preserve">
+    <value>Настройки</value>
+  </data>
+  <data name="BotConfig" xml:space="preserve">
+    <value>Конфиг бота</value>
+  </data>
+  <data name="ClassConfig" xml:space="preserve">
+    <value>Конфиг класса</value>
+  </data>
+  <data name="Plugins" xml:space="preserve">
+    <value>Плагины</value>
+  </data>
+  <data name="DeveloperTools" xml:space="preserve">
+    <value>Инструменты</value>
+  </data>
+  <data name="Start" xml:space="preserve">
+    <value>Запуск</value>
+  </data>
+  <data name="Stop" xml:space="preserve">
+    <value>Стоп</value>
+  </data>
+  <data name="Navigation" xml:space="preserve">
+    <value>Навигация</value>
+  </data>
+  <data name="ShowPath" xml:space="preserve">
+    <value>Показать путь</value>
+  </data>
+  <data name="TargetInfo" xml:space="preserve">
+    <value>Инфо цели</value>
+  </data>
+  <data name="ReloadScripts" xml:space="preserve">
+    <value>Перезагрузить скрипты</value>
+  </data>
+  <data name="DisableMovement" xml:space="preserve">
+    <value>Отключить движение</value>
+  </data>
+  <data name="EnableMovement" xml:space="preserve">
+    <value>Включить движение</value>
+  </data>
+  <data name="CopyXML" xml:space="preserve">
+    <value>Копировать XML</value>
+  </data>
+  <data name="Refresh" xml:space="preserve">
+    <value>Обновить</value>
+  </data>
+  <data name="SaveAndClose" xml:space="preserve">
+    <value>Сохранить и закрыть</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>Отмена</value>
+  </data>
+  <data name="Select" xml:space="preserve">
+    <value>Выбрать</value>
+  </data>
+  <data name="SelectAll" xml:space="preserve">
+    <value>Выбрать все</value>
+  </data>
+  <data name="UnselectAll" xml:space="preserve">
+    <value>Снять выбор</value>
+  </data>
+  <data name="GenerateBlackspot" xml:space="preserve">
+    <value>Создать чёрный список</value>
+  </data>
+  <data name="GenerateHotspot" xml:space="preserve">
+    <value>Создать горячую точку</value>
+  </data>
+  <data name="GroupGeneral" xml:space="preserve">
+    <value>Основные</value>
+  </data>
+  <data name="GroupLogging" xml:space="preserve">
+    <value>Логирование</value>
+  </data>
+  <data name="GroupMount" xml:space="preserve">
+    <value>Маунт</value>
+  </data>
+  <data name="GroupVendorsFlightPaths" xml:space="preserve">
+    <value>Вендоры и маршруты</value>
+  </data>
+  <data name="GroupMailRefreshments" xml:space="preserve">
+    <value>Почта и Закуски</value>
+  </data>
+  <data name="GroupCombatLoot" xml:space="preserve">
+    <value>Бой / Лут</value>
+  </data>
+  <data name="GroupDeathSafety" xml:space="preserve">
+    <value>Смерть / Безопасность</value>
+  </data>
+  <data name="GroupGathering" xml:space="preserve">
+    <value>Сбор</value>
+  </data>
+  <data name="GroupAntiNinja" xml:space="preserve">
+    <value>Анти-нуб</value>
+  </data>
+  <data name="GroupHerbs" xml:space="preserve">
+    <value>Травы</value>
+  </data>
+  <data name="GroupMinerals" xml:space="preserve">
+    <value>Руды</value>
+  </data>
+  <data name="GroupBagItems" xml:space="preserve">
+    <value>Предметы в сумке</value>
+  </data>
+  <data name="GroupBossList" xml:space="preserve">
+    <value>Список боссов</value>
+  </data>
+  <data name="GroupCommon" xml:space="preserve">
+    <value>Общее</value>
+  </data>
+  <data name="GroupCopyInfo" xml:space="preserve">
+    <value>Копировать инфо</value>
+  </data>
+  <data name="GroupCopyXML" xml:space="preserve">
+    <value>Копировать XML</value>
+  </data>
+  <data name="GroupCurrentTargetInfo" xml:space="preserve">
+    <value>Инфо текущей цели</value>
+  </data>
+  <data name="GroupDistance" xml:space="preserve">
+    <value>Расстояние</value>
+  </data>
+  <data name="GroupDungeonList" xml:space="preserve">
+    <value>Список подземелий</value>
+  </data>
+  <data name="GroupDungeonSelection" xml:space="preserve">
+    <value>Выбор подземелья</value>
+  </data>
+  <data name="GroupEntry" xml:space="preserve">
+    <value>Вход</value>
+  </data>
+  <data name="GroupFactionID" xml:space="preserve">
+    <value>ID фракции</value>
+  </data>
+  <data name="GroupGUID" xml:space="preserve">
+    <value>GUID</value>
+  </data>
+  <data name="GroupGameObjects" xml:space="preserve">
+    <value>Игровые объекты</value>
+  </data>
+  <data name="GroupLocalPlayerInfo" xml:space="preserve">
+    <value>Инфо игрока</value>
+  </data>
+  <data name="GroupLockType" xml:space="preserve">
+    <value>Тип замка</value>
+  </data>
+  <data name="GroupLootList" xml:space="preserve">
+    <value>Список лута</value>
+  </data>
+  <data name="GroupLooting" xml:space="preserve">
+    <value>Лут</value>
+  </data>
+  <data name="GroupMail" xml:space="preserve">
+    <value>Почта</value>
+  </data>
+  <data name="GroupName" xml:space="preserve">
+    <value>Имя</value>
+  </data>
+  <data name="GroupNavigation" xml:space="preserve">
+    <value>Навигация</value>
+  </data>
+  <data name="GroupNodeSelection" xml:space="preserve">
+    <value>Выбор узла</value>
+  </data>
+  <data name="GroupPosition" xml:space="preserve">
+    <value>Позиция</value>
+  </data>
+  <data name="GroupQueue" xml:space="preserve">
+    <value>Очередь</value>
+  </data>
+  <data name="GroupSecret" xml:space="preserve">
+    <value>Секрет</value>
+  </data>
+  <data name="GroupSellQualityFilters" xml:space="preserve">
+    <value>Фильтры качества продажи</value>
+  </data>
+  <data name="GroupSessionTimer" xml:space="preserve">
+    <value>Таймер сессии</value>
+  </data>
+  <data name="GroupSettings" xml:space="preserve">
+    <value>Настройки</value>
+  </data>
+  <data name="GroupSpellFocus" xml:space="preserve">
+    <value>Фокус заклинания</value>
+  </data>
+  <data name="GroupStackCount" xml:space="preserve">
+    <value>Количество</value>
+  </data>
+  <data name="GroupTargetList" xml:space="preserve">
+    <value>Список целей</value>
+  </data>
+  <data name="GroupType" xml:space="preserve">
+    <value>Тип</value>
+  </data>
+  <data name="GroupVendorRepair" xml:space="preserve">
+    <value>Вендор / Ремонт</value>
+  </data>
+  <data name="GroupViewAuras" xml:space="preserve">
+    <value>Просмотр аур</value>
+  </data>
+  <data name="ChkUseMount" xml:space="preserve">
+    <value>Использовать маунт</value>
+  </data>
+  <data name="ChkRandomMount" xml:space="preserve">
+    <value>Случайный маунт</value>
+  </data>
+  <data name="ChkAutomatic" xml:space="preserve">
+    <value>Автоматически</value>
+  </data>
+  <data name="ChkLearnFlightPaths" xml:space="preserve">
+    <value>Изучать маршруты</value>
+  </data>
+  <data name="ChkUseFlightPaths" xml:space="preserve">
+    <value>Использовать маршруты</value>
+  </data>
+  <data name="ChkFindVendorsAuto" xml:space="preserve">
+    <value>Найти вендоров автоматически</value>
+  </data>
+  <data name="ChkTrainNewSkills" xml:space="preserve">
+    <value>Изучать новые навыки</value>
+  </data>
+  <data name="ChkLogoutForInactivity" xml:space="preserve">
+    <value>Выйти при бездействии</value>
+  </data>
+  <data name="ChkUseFrameLock" xml:space="preserve">
+    <value>Использовать блокировку кадра</value>
+  </data>
+  <data name="ChkKillBetweenHotspots" xml:space="preserve">
+    <value>Убивать между точками</value>
+  </data>
+  <data name="ChkHearthExitTimer" xml:space="preserve">
+    <value>Камень дома и выход по таймеру</value>
+  </data>
+  <data name="ChkWaitRezSickness" xml:space="preserve">
+    <value>Ждать окончание болезни</value>
+  </data>
+  <data name="ChkUseSpiritHealer" xml:space="preserve">
+    <value>Использовать целителя душ</value>
+  </data>
+  <data name="ChkVendorWhenFull" xml:space="preserve">
+    <value>К вендору при полных сумках</value>
+  </data>
+  <data name="ChkRepairAtVendor" xml:space="preserve">
+    <value>Ремонтировать у вендора</value>
+  </data>
+  <data name="ChkSkinMobs" xml:space="preserve">
+    <value>Снимать шкуры</value>
+  </data>
+  <data name="ChkNinjaSkin" xml:space="preserve">
+    <value>Воровать шкуры</value>
+  </data>
+  <data name="ChkLootMobs" xml:space="preserve">
+    <value>Лутать мобов</value>
+  </data>
+  <data name="ChkLootChests" xml:space="preserve">
+    <value>Лутать сундуки</value>
+  </data>
+  <data name="ChkLootCorpses" xml:space="preserve">
+    <value>Лутать трупы</value>
+  </data>
+  <data name="ChkMailToAlt" xml:space="preserve">
+    <value>Отправить предметы альту</value>
+  </data>
+  <data name="ChkNoNinja" xml:space="preserve">
+    <value>Не воровать узлы у других</value>
+  </data>
+  <data name="ChkFaceNodes" xml:space="preserve">
+    <value>Смотреть на узел перед сбором</value>
+  </data>
+  <data name="ChkGatherHerbs" xml:space="preserve">
+    <value>Собирать травы</value>
+  </data>
+  <data name="ChkGatherMinerals" xml:space="preserve">
+    <value>Собирать руду</value>
+  </data>
+  <data name="ChkGatherChests" xml:space="preserve">
+    <value>Собирать сундуки (сокровища)</value>
+  </data>
+  <data name="ChkHarvestHerbs" xml:space="preserve">
+    <value>Собирать травы</value>
+  </data>
+  <data name="ChkHarvestMinerals" xml:space="preserve">
+    <value>Добывать руду</value>
+  </data>
+  <data name="ChkRandomizeHotspots" xml:space="preserve">
+    <value>Случайный порядок точек</value>
+  </data>
+  <data name="ChkIgnoreElites" xml:space="preserve">
+    <value>Игнорировать элитных мобов</value>
+  </data>
+  <data name="ChkShowAllDungeons" xml:space="preserve">
+    <value>Показать все подземелья</value>
+  </data>
+  <data name="LblMountName" xml:space="preserve">
+    <value>Имя маунта:</value>
+  </data>
+  <data name="LblFlyingMount" xml:space="preserve">
+    <value>Летающий маунт:</value>
+  </data>
+  <data name="LblMountDistance" xml:space="preserve">
+    <value>Дистанция маунта:</value>
+  </data>
+  <data name="LblDrinkAmount" xml:space="preserve">
+    <value>Кол-во напитка:</value>
+  </data>
+  <data name="LblFoodAmount" xml:space="preserve">
+    <value>Кол-во еды:</value>
+  </data>
+  <data name="LblMailRecipient" xml:space="preserve">
+    <value>Получатель почты:</value>
+  </data>
+  <data name="LblFoodName" xml:space="preserve">
+    <value>Имя еды или ID:</value>
+  </data>
+  <data name="LblDrinkName" xml:space="preserve">
+    <value>Имя напитка или ID:</value>
+  </data>
+  <data name="LblBlacklistTimer" xml:space="preserve">
+    <value>Таймер ЧС:</value>
+  </data>
+  <data name="LblBottingHours" xml:space="preserve">
+    <value>Часы бота:</value>
+  </data>
+  <data name="LblDetectionRange" xml:space="preserve">
+    <value>Дальность обнаружения:</value>
+  </data>
+  <data name="LblHeightModifier" xml:space="preserve">
+    <value>Модификатор высоты:</value>
+  </data>
+  <data name="LblLogLevel" xml:space="preserve">
+    <value>Уровень лога:</value>
+  </data>
+  <data name="LblLootRadius" xml:space="preserve">
+    <value>Радиус лута:</value>
+  </data>
+  <data name="LblMinFreeSlots" xml:space="preserve">
+    <value>Мин. свободных слотов:</value>
+  </data>
+  <data name="LblMountUpDistance" xml:space="preserve">
+    <value>Дистанция для маунта:</value>
+  </data>
+  <data name="LblPathType" xml:space="preserve">
+    <value>Тип пути:</value>
+  </data>
+  <data name="LblPullDistance" xml:space="preserve">
+    <value>Дистанция подтягивания:</value>
+  </data>
+  <data name="LblQueue1" xml:space="preserve">
+    <value>Очередь #1:</value>
+  </data>
+  <data name="LblQueue2" xml:space="preserve">
+    <value>Очередь #2:</value>
+  </data>
+  <data name="LblRecipient" xml:space="preserve">
+    <value>Получатель:</value>
+  </data>
+  <data name="LblRepairBelow" xml:space="preserve">
+    <value>Ремонтировать ниже:</value>
+  </data>
+  <data name="LblTicksPerSecond" xml:space="preserve">
+    <value>Тиков в секунду:</value>
+  </data>
+  <data name="LblMailQualities" xml:space="preserve">
+    <value>Отправлять предметы этого качества:</value>
+  </data>
+  <data name="LblSellQualities" xml:space="preserve">
+    <value>Продавать предметы этого качества:</value>
+  </data>
+  <data name="LblBottingHoursLimit" xml:space="preserve">
+    <value>Часы бота (0 = без лимита)</value>
+  </data>
+  <data name="LblMailMax" xml:space="preserve">
+    <value>Содержимое (0 = без лимита)</value>
+  </data>
+  <data name="LblContent" xml:space="preserve">
+    <value>Содержимое</value>
+  </data>
+  <data name="LogNone" xml:space="preserve">
+    <value>Нет</value>
+  </data>
+  <data name="LogQuiet" xml:space="preserve">
+    <value>Тихо</value>
+  </data>
+  <data name="LogNormal" xml:space="preserve">
+    <value>Нормально</value>
+  </data>
+  <data name="LogDiagnostic" xml:space="preserve">
+    <value>Диагностика</value>
+  </data>
+  <data name="LogVerbose" xml:space="preserve">
+    <value>Подробно</value>
+  </data>
+  <data name="PathBounce" xml:space="preserve">
+    <value>Отскок</value>
+  </data>
+  <data name="PathCircle" xml:space="preserve">
+    <value>Круг</value>
+  </data>
+  <data name="ColorBlue" xml:space="preserve">
+    <value>Синий</value>
+  </data>
+  <data name="ColorGreen" xml:space="preserve">
+    <value>Зелёный</value>
+  </data>
+  <data name="ColorGrey" xml:space="preserve">
+    <value>Серый</value>
+  </data>
+  <data name="ColorPurple" xml:space="preserve">
+    <value>Фиолетовый</value>
+  </data>
+  <data name="ColorWhite" xml:space="preserve">
+    <value>Белый</value>
+  </data>
+</root>

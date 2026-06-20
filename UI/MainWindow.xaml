@@ -4,9 +4,10 @@
         xmlns:mah="http://metro.mahapps.com/winfx/xaml/controls"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:loc="clr-namespace:Styx.Localization"
         mc:Ignorable="d"
         x:Name="Window"
-        Title="CopilotBuddy"
+        Title="{loc:Resx AppTitle}"
         Icon="pack://application:,,,/Resources/bender.ico"
         Width="531"
         Height="350"
@@ -37,7 +38,7 @@
                 Width="120"
                 Click="btnLoadProfile_Click">
             <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="Load Profile"/>
+                <TextBlock Text="{loc:Resx LoadProfile}"/>
             </Viewbox>
         </Button>
 
@@ -50,7 +51,7 @@
                 Width="120"
                 Click="btnSettings_Click">
             <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="Settings &amp; Tools"/>
+                <TextBlock Text="{loc:Resx Settings}"/>
             </Viewbox>
         </Button>
 
@@ -61,7 +62,7 @@
                   VerticalAlignment="Top"
                   Width="120"
                   ToolTip="Makes all buttons visible in the main window"
-                  Content="Enhanced Mode"
+                  Content="{loc:Resx EnhancedMode}"
                   Unchecked="EnhancedMode_Unchecked"
                   Checked="EnhancedMode_Checked"/>
 
@@ -75,7 +76,7 @@
                 Width="120"
                 Click="btnBotConfig_Click">
             <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="Bot Config"/>
+                <TextBlock Text="{loc:Resx BotConfig}"/>
             </Viewbox>
         </Button>
 
@@ -89,7 +90,7 @@
                 Width="120"
                 Click="btnClassConfig_Click">
             <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="Class Config"/>
+                <TextBlock Text="{loc:Resx ClassConfig}"/>
             </Viewbox>
         </Button>
 
@@ -103,7 +104,7 @@
                 Width="120"
                 Click="btnPlugins_Click">
             <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="Plugins"/>
+                <TextBlock Text="{loc:Resx Plugins}"/>
             </Viewbox>
         </Button>
 
@@ -117,7 +118,7 @@
                 Width="120"
                 Click="btnDevTools_Click">
             <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="Developer Tools"/>
+                <TextBlock Text="{loc:Resx DeveloperTools}"/>
             </Viewbox>
         </Button>
 
@@ -130,7 +131,7 @@
                 Height="25"
                 Click="btnStart_Click">
             <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <TextBlock Text="Start"/>
+                <TextBlock Text="{loc:Resx Start}"/>
             </Viewbox>
         </Button>
 
@@ -151,7 +152,7 @@
                     Grid.Column="0"
                     Click="btnStop_Click">
                 <Viewbox Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10,2,0,2">
-                    <TextBlock Text="Stop"/>
+                    <TextBlock Text="{loc:Resx Stop}"/>
                 </Viewbox>
             </Button>
             <Button x:Name="btnStopArrow"
@@ -161,7 +162,7 @@
                     Click="btnStopArrow_Click">
                 <Button.ContextMenu>
                     <ContextMenu>
-                        <MenuItem Header="Pause" Click="btnPause_Click"/>
+                        <MenuItem Header="{loc:Resx Pause}" Click="btnPause_Click"/>
                     </ContextMenu>
                 </Button.ContextMenu>
                 <TextBlock Text="&#x25BC;" FontSize="9" VerticalAlignment="Center" HorizontalAlignment="Center"/>
@@ -172,7 +173,7 @@
         <TabControl x:Name="tabControl"
                     Margin="8,8,132,25.96"
                     TabStripPlacement="Bottom">
-            <TabItem Header="Log">
+            <TabItem Header="{loc:Resx TabLog}">
                 <Grid>
                     <ScrollViewer x:Name="scrollLog" VerticalScrollBarVisibility="Auto">
                         <RichTextBox x:Name="rtbLog"
@@ -190,7 +191,7 @@
                     </ScrollViewer>
                 </Grid>
             </TabItem>
-            <TabItem Header="Info">
+            <TabItem Header="{loc:Resx TabInfo}">
                 <Grid>
                     <ScrollViewer x:Name="scrollInfo" VerticalScrollBarVisibility="Auto">
                         <TextBox x:Name="tbInfoBlock"
@@ -212,7 +213,7 @@
                    Panel.ZIndex="1">
             <StatusBarItem x:Name="lblActivityText"
                            Foreground="#FFFFFFFF"
-                           Content="Ready"/>
+                           Content="{loc:Resx Ready}"/>
         </StatusBar>
     </Grid>
 </mah:MetroWindow>

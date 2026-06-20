@@ -1,0 +1,594 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <data name="AppTitle" xml:space="preserve">
+    <value>飞行员助手</value>
+  </data>
+  <data name="SettingsTitle" xml:space="preserve">
+    <value>设置与工具</value>
+  </data>
+  <data name="PluginsTitle" xml:space="preserve">
+    <value>插件</value>
+  </data>
+  <data name="DeveloperToolsTitle" xml:space="preserve">
+    <value>开发者工具</value>
+  </data>
+  <data name="SelectWoWTitle" xml:space="preserve">
+    <value>选择 WoW</value>
+  </data>
+  <data name="SelectWoWDescription" xml:space="preserve">
+    <value>选择要附加的 WoW 进程：</value>
+  </data>
+  <data name="LblAuthor" xml:space="preserve">
+    <value>作者：</value>
+  </data>
+  <data name="LblVersion" xml:space="preserve">
+    <value>版本：</value>
+  </data>
+  <data name="RecompileAll" xml:space="preserve">
+    <value>全部重新编译</value>
+  </data>
+  <data name="LblFactionName" xml:space="preserve">
+    <value>阵营名称：</value>
+  </data>
+  <data name="LblGroupID" xml:space="preserve">
+    <value>团队 ID：</value>
+  </data>
+  <data name="LblGroupID2" xml:space="preserve">
+    <value>团队 ID 2：</value>
+  </data>
+  <data name="LblVendorType" xml:space="preserve">
+    <value>商人类型：</value>
+  </data>
+  <data name="LblRefresh" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="LblLoadProfileButtonText" xml:space="preserve">
+    <value>加载配置</value>
+  </data>
+  <data name="LblPauseButtonText" xml:space="preserve">
+    <value>暂停</value>
+  </data>
+  <data name="LblEnhancedMode" xml:space="preserve">
+    <value>增强模式</value>
+  </data>
+  <data name="LblFromFileSystem" xml:space="preserve">
+    <value>从文件系统</value>
+  </data>
+  <data name="LblFromBuddyStore" xml:space="preserve">
+    <value>从 Buddy 商店</value>
+  </data>
+  <data name="LblFromWebSource" xml:space="preserve">
+    <value>从网络</value>
+  </data>
+  <data name="LblRecent" xml:space="preserve">
+    <value>最近</value>
+  </data>
+  <data name="LblShowPath" xml:space="preserve">
+    <value>显示路径</value>
+  </data>
+  <data name="LblTargetInfo" xml:space="preserve">
+    <value>目标信息</value>
+  </data>
+  <data name="LblNavigation" xml:space="preserve">
+    <value>导航</value>
+  </data>
+  <data name="ReportBug" xml:space="preserve">
+    <value>报告错误</value>
+  </data>
+  <data name="LblDungeonQueueType" xml:space="preserve">
+    <value>在编辑副本列表前，您需要将队列类型更改为指定</value>
+  </data>
+  <data name="TabBagItems" xml:space="preserve">
+    <value>背包物品</value>
+  </data>
+  <data name="LogNoneDesc" xml:space="preserve">
+    <value>无：无日志</value>
+  </data>
+  <data name="LogQuietDesc" xml:space="preserve">
+    <value>安静：最少日志</value>
+  </data>
+  <data name="LogNormalDesc" xml:space="preserve">
+    <value>正常：标准日志</value>
+  </data>
+  <data name="LogVerboseDesc" xml:space="preserve">
+    <value>详细：详细日志</value>
+  </data>
+  <data name="LogDiagnosticDesc" xml:space="preserve">
+    <value>诊断：所有日志</value>
+  </data>
+  <data name="GroupLanguage" xml:space="preserve">
+    <value>语言</value>
+  </data>
+  <data name="LblLanguage" xml:space="preserve">
+    <value>语言：</value>
+  </data>
+  <data name="LangAuto" xml:space="preserve">
+    <value>自动（系统默认）</value>
+  </data>
+  <data name="LblLanguageRestart" xml:space="preserve">
+    <value>重启 Honorbuddy 以使更改生效。</value>
+  </data>
+  <data name="BGBuddyConfigTitle" xml:space="preserve">
+    <value>战场机器人设置</value>
+  </data>
+  <data name="DungeonBuddyConfigTitle" xml:space="preserve">
+    <value>副本机器人设置</value>
+  </data>
+  <data name="GatherBuddySettingsTitle" xml:space="preserve">
+    <value>采集机器人设置</value>
+  </data>
+  <data name="TabLog" xml:space="preserve">
+    <value>日志</value>
+  </data>
+  <data name="TabInfo" xml:space="preserve">
+    <value>信息</value>
+  </data>
+  <data name="TabProfiles" xml:space="preserve">
+    <value>配置文件</value>
+  </data>
+  <data name="TabQuests" xml:space="preserve">
+    <value>任务</value>
+  </data>
+  <data name="TabObjects" xml:space="preserve">
+    <value>物体</value>
+  </data>
+  <data name="TabUnits" xml:space="preserve">
+    <value>单位</value>
+  </data>
+  <data name="Pause" xml:space="preserve">
+    <value>暂停</value>
+  </data>
+  <data name="Ready" xml:space="preserve">
+    <value>就绪</value>
+  </data>
+  <data name="EnhancedMode" xml:space="preserve">
+    <value>增强模式</value>
+  </data>
+  <data name="LoadProfile" xml:space="preserve">
+    <value>加载配置</value>
+  </data>
+  <data name="Settings" xml:space="preserve">
+    <value>设置</value>
+  </data>
+  <data name="BotConfig" xml:space="preserve">
+    <value>机器人设置</value>
+  </data>
+  <data name="ClassConfig" xml:space="preserve">
+    <value>职业设置</value>
+  </data>
+  <data name="Plugins" xml:space="preserve">
+    <value>插件</value>
+  </data>
+  <data name="DeveloperTools" xml:space="preserve">
+    <value>开发者工具</value>
+  </data>
+  <data name="Start" xml:space="preserve">
+    <value>启动</value>
+  </data>
+  <data name="Stop" xml:space="preserve">
+    <value>停止</value>
+  </data>
+  <data name="Navigation" xml:space="preserve">
+    <value>导航</value>
+  </data>
+  <data name="ShowPath" xml:space="preserve">
+    <value>显示路径</value>
+  </data>
+  <data name="TargetInfo" xml:space="preserve">
+    <value>目标信息</value>
+  </data>
+  <data name="ReloadScripts" xml:space="preserve">
+    <value>重新加载脚本</value>
+  </data>
+  <data name="DisableMovement" xml:space="preserve">
+    <value>禁用移动</value>
+  </data>
+  <data name="EnableMovement" xml:space="preserve">
+    <value>启用移动</value>
+  </data>
+  <data name="CopyXML" xml:space="preserve">
+    <value>复制 XML</value>
+  </data>
+  <data name="Refresh" xml:space="preserve">
+    <value>刷新</value>
+  </data>
+  <data name="SaveAndClose" xml:space="preserve">
+    <value>保存并关闭</value>
+  </data>
+  <data name="Cancel" xml:space="preserve">
+    <value>取消</value>
+  </data>
+  <data name="Select" xml:space="preserve">
+    <value>选择</value>
+  </data>
+  <data name="SelectAll" xml:space="preserve">
+    <value>全选</value>
+  </data>
+  <data name="UnselectAll" xml:space="preserve">
+    <value>全不选</value>
+  </data>
+  <data name="GenerateBlackspot" xml:space="preserve">
+    <value>生成黑名单</value>
+  </data>
+  <data name="GenerateHotspot" xml:space="preserve">
+    <value>生成热点</value>
+  </data>
+  <data name="GroupGeneral" xml:space="preserve">
+    <value>常规</value>
+  </data>
+  <data name="GroupLogging" xml:space="preserve">
+    <value>日志</value>
+  </data>
+  <data name="GroupMount" xml:space="preserve">
+    <value>坐骑</value>
+  </data>
+  <data name="GroupVendorsFlightPaths" xml:space="preserve">
+    <value>商人与飞行路线</value>
+  </data>
+  <data name="GroupMailRefreshments" xml:space="preserve">
+    <value>邮件与补给</value>
+  </data>
+  <data name="GroupCombatLoot" xml:space="preserve">
+    <value>战斗 / 拾取</value>
+  </data>
+  <data name="GroupDeathSafety" xml:space="preserve">
+    <value>死亡 / 安全</value>
+  </data>
+  <data name="GroupGathering" xml:space="preserve">
+    <value>采集</value>
+  </data>
+  <data name="GroupAntiNinja" xml:space="preserve">
+    <value>防抢怪</value>
+  </data>
+  <data name="GroupHerbs" xml:space="preserve">
+    <value>草药</value>
+  </data>
+  <data name="GroupMinerals" xml:space="preserve">
+    <value>矿物</value>
+  </data>
+  <data name="GroupBagItems" xml:space="preserve">
+    <value>背包物品</value>
+  </data>
+  <data name="GroupBossList" xml:space="preserve">
+    <value>首领列表</value>
+  </data>
+  <data name="GroupCommon" xml:space="preserve">
+    <value>通用</value>
+  </data>
+  <data name="GroupCopyInfo" xml:space="preserve">
+    <value>复制信息</value>
+  </data>
+  <data name="GroupCopyXML" xml:space="preserve">
+    <value>复制 XML</value>
+  </data>
+  <data name="GroupCurrentTargetInfo" xml:space="preserve">
+    <value>当前目标信息</value>
+  </data>
+  <data name="GroupDistance" xml:space="preserve">
+    <value>距离</value>
+  </data>
+  <data name="GroupDungeonList" xml:space="preserve">
+    <value>副本列表</value>
+  </data>
+  <data name="GroupDungeonSelection" xml:space="preserve">
+    <value>副本选择</value>
+  </data>
+  <data name="GroupEntry" xml:space="preserve">
+    <value>入口</value>
+  </data>
+  <data name="GroupFactionID" xml:space="preserve">
+    <value>阵营 ID</value>
+  </data>
+  <data name="GroupGUID" xml:space="preserve">
+    <value>GUID</value>
+  </data>
+  <data name="GroupGameObjects" xml:space="preserve">
+    <value>游戏物体</value>
+  </data>
+  <data name="GroupLocalPlayerInfo" xml:space="preserve">
+    <value>本地玩家信息</value>
+  </data>
+  <data name="GroupLockType" xml:space="preserve">
+    <value>锁定类型</value>
+  </data>
+  <data name="GroupLootList" xml:space="preserve">
+    <value>拾取列表</value>
+  </data>
+  <data name="GroupLooting" xml:space="preserve">
+    <value>拾取</value>
+  </data>
+  <data name="GroupMail" xml:space="preserve">
+    <value>邮件</value>
+  </data>
+  <data name="GroupName" xml:space="preserve">
+    <value>名称</value>
+  </data>
+  <data name="GroupNavigation" xml:space="preserve">
+    <value>导航</value>
+  </data>
+  <data name="GroupNodeSelection" xml:space="preserve">
+    <value>节点选择</value>
+  </data>
+  <data name="GroupPosition" xml:space="preserve">
+    <value>位置</value>
+  </data>
+  <data name="GroupQueue" xml:space="preserve">
+    <value>队列</value>
+  </data>
+  <data name="GroupSecret" xml:space="preserve">
+    <value>密码</value>
+  </data>
+  <data name="GroupSellQualityFilters" xml:space="preserve">
+    <value>出售品质过滤</value>
+  </data>
+  <data name="GroupSessionTimer" xml:space="preserve">
+    <value>会话计时器</value>
+  </data>
+  <data name="GroupSettings" xml:space="preserve">
+    <value>设置</value>
+  </data>
+  <data name="GroupSpellFocus" xml:space="preserve">
+    <value>法术焦点</value>
+  </data>
+  <data name="GroupStackCount" xml:space="preserve">
+    <value>堆叠数量</value>
+  </data>
+  <data name="GroupTargetList" xml:space="preserve">
+    <value>目标列表</value>
+  </data>
+  <data name="GroupType" xml:space="preserve">
+    <value>类型</value>
+  </data>
+  <data name="GroupVendorRepair" xml:space="preserve">
+    <value>商人 / 修理</value>
+  </data>
+  <data name="GroupViewAuras" xml:space="preserve">
+    <value>查看光环</value>
+  </data>
+  <data name="ChkUseMount" xml:space="preserve">
+    <value>使用坐骑</value>
+  </data>
+  <data name="ChkRandomMount" xml:space="preserve">
+    <value>随机坐骑</value>
+  </data>
+  <data name="ChkAutomatic" xml:space="preserve">
+    <value>自动</value>
+  </data>
+  <data name="ChkLearnFlightPaths" xml:space="preserve">
+    <value>学习飞行路线</value>
+  </data>
+  <data name="ChkUseFlightPaths" xml:space="preserve">
+    <value>使用飞行路线</value>
+  </data>
+  <data name="ChkFindVendorsAuto" xml:space="preserve">
+    <value>自动寻找商人</value>
+  </data>
+  <data name="ChkTrainNewSkills" xml:space="preserve">
+    <value>训练新技能</value>
+  </data>
+  <data name="ChkLogoutForInactivity" xml:space="preserve">
+    <value>闲置自动登出</value>
+  </data>
+  <data name="ChkUseFrameLock" xml:space="preserve">
+    <value>使用帧锁定</value>
+  </data>
+  <data name="ChkKillBetweenHotspots" xml:space="preserve">
+    <value>在热点击杀</value>
+  </data>
+  <data name="ChkHearthExitTimer" xml:space="preserve">
+    <value>炉石 &amp; 定时退出</value>
+  </data>
+  <data name="ChkWaitRezSickness" xml:space="preserve">
+    <value>等待复活虚弱结束</value>
+  </data>
+  <data name="ChkUseSpiritHealer" xml:space="preserve">
+    <value>使用灵魂医者（跳过跑尸体）</value>
+  </data>
+  <data name="ChkVendorWhenFull" xml:space="preserve">
+    <value>背包满时去商人</value>
+  </data>
+  <data name="ChkRepairAtVendor" xml:space="preserve">
+    <value>在商人处修理</value>
+  </data>
+  <data name="ChkSkinMobs" xml:space="preserve">
+    <value>剥皮怪物</value>
+  </data>
+  <data name="ChkNinjaSkin" xml:space="preserve">
+    <value>抢皮</value>
+  </data>
+  <data name="ChkLootMobs" xml:space="preserve">
+    <value>拾取怪物</value>
+  </data>
+  <data name="ChkLootChests" xml:space="preserve">
+    <value>拾取宝箱</value>
+  </data>
+  <data name="ChkLootCorpses" xml:space="preserve">
+    <value>拾取尸体</value>
+  </data>
+  <data name="ChkMailToAlt" xml:space="preserve">
+    <value>邮寄物品给小号</value>
+  </data>
+  <data name="ChkNoNinja" xml:space="preserve">
+    <value>不要抢其他玩家的节点</value>
+  </data>
+  <data name="ChkFaceNodes" xml:space="preserve">
+    <value>采集前面向节点</value>
+  </data>
+  <data name="ChkGatherHerbs" xml:space="preserve">
+    <value>采集草药</value>
+  </data>
+  <data name="ChkGatherMinerals" xml:space="preserve">
+    <value>采集矿石</value>
+  </data>
+  <data name="ChkGatherChests" xml:space="preserve">
+    <value>采集宝箱（宝藏）</value>
+  </data>
+  <data name="ChkHarvestHerbs" xml:space="preserve">
+    <value>收割草药</value>
+  </data>
+  <data name="ChkHarvestMinerals" xml:space="preserve">
+    <value>开采矿脉</value>
+  </data>
+  <data name="ChkRandomizeHotspots" xml:space="preserve">
+    <value>随机化热点顺序</value>
+  </data>
+  <data name="ChkIgnoreElites" xml:space="preserve">
+    <value>忽略精英怪</value>
+  </data>
+  <data name="ChkShowAllDungeons" xml:space="preserve">
+    <value>显示所有副本</value>
+  </data>
+  <data name="LblMountName" xml:space="preserve">
+    <value>坐骑名称：</value>
+  </data>
+  <data name="LblFlyingMount" xml:space="preserve">
+    <value>飞行坐骑：</value>
+  </data>
+  <data name="LblMountDistance" xml:space="preserve">
+    <value>坐骑距离：</value>
+  </data>
+  <data name="LblDrinkAmount" xml:space="preserve">
+    <value>饮水数量：</value>
+  </data>
+  <data name="LblFoodAmount" xml:space="preserve">
+    <value>食物数量：</value>
+  </data>
+  <data name="LblMailRecipient" xml:space="preserve">
+    <value>邮件收件人：</value>
+  </data>
+  <data name="LblFoodName" xml:space="preserve">
+    <value>食物名称或 ID：</value>
+  </data>
+  <data name="LblDrinkName" xml:space="preserve">
+    <value>饮水名称或 ID：</value>
+  </data>
+  <data name="LblBlacklistTimer" xml:space="preserve">
+    <value>黑名单计时：</value>
+  </data>
+  <data name="LblBottingHours" xml:space="preserve">
+    <value>挂机时间：</value>
+  </data>
+  <data name="LblDetectionRange" xml:space="preserve">
+    <value>探测范围：</value>
+  </data>
+  <data name="LblHeightModifier" xml:space="preserve">
+    <value>高度修正：</value>
+  </data>
+  <data name="LblLogLevel" xml:space="preserve">
+    <value>日志级别：</value>
+  </data>
+  <data name="LblLootRadius" xml:space="preserve">
+    <value>拾取半径：</value>
+  </data>
+  <data name="LblMinFreeSlots" xml:space="preserve">
+    <value>最少空位：</value>
+  </data>
+  <data name="LblMountUpDistance" xml:space="preserve">
+    <value>上坐骑距离：</value>
+  </data>
+  <data name="LblPathType" xml:space="preserve">
+    <value>路径类型：</value>
+  </data>
+  <data name="LblPullDistance" xml:space="preserve">
+    <value>拉怪距离：</value>
+  </data>
+  <data name="LblQueue1" xml:space="preserve">
+    <value>队列 #1：</value>
+  </data>
+  <data name="LblQueue2" xml:space="preserve">
+    <value>队列 #2：</value>
+  </data>
+  <data name="LblRecipient" xml:space="preserve">
+    <value>收件人：</value>
+  </data>
+  <data name="LblRepairBelow" xml:space="preserve">
+    <value>修理阈值：</value>
+  </data>
+  <data name="LblTicksPerSecond" xml:space="preserve">
+    <value>每秒 tick 数：</value>
+  </data>
+  <data name="LblMailQualities" xml:space="preserve">
+    <value>邮寄以下品质的物品：</value>
+  </data>
+  <data name="LblSellQualities" xml:space="preserve">
+    <value>出售以下品质的物品：</value>
+  </data>
+  <data name="LblBottingHoursLimit" xml:space="preserve">
+    <value>挂机时间（0 = 无限制）</value>
+  </data>
+  <data name="LblMailMax" xml:space="preserve">
+    <value>容量（0 = 无限制）</value>
+  </data>
+  <data name="LblContent" xml:space="preserve">
+    <value>内容</value>
+  </data>
+  <data name="LogNone" xml:space="preserve">
+    <value>无</value>
+  </data>
+  <data name="LogQuiet" xml:space="preserve">
+    <value>安静</value>
+  </data>
+  <data name="LogNormal" xml:space="preserve">
+    <value>正常</value>
+  </data>
+  <data name="LogDiagnostic" xml:space="preserve">
+    <value>诊断</value>
+  </data>
+  <data name="LogVerbose" xml:space="preserve">
+    <value>详细</value>
+  </data>
+  <data name="PathBounce" xml:space="preserve">
+    <value>弹跳</value>
+  </data>
+  <data name="PathCircle" xml:space="preserve">
+    <value>圆形</value>
+  </data>
+  <data name="ColorBlue" xml:space="preserve">
+    <value>蓝色</value>
+  </data>
+  <data name="ColorGreen" xml:space="preserve">
+    <value>绿色</value>
+  </data>
+  <data name="ColorGrey" xml:space="preserve">
+    <value>灰色</value>
+  </data>
+  <data name="ColorPurple" xml:space="preserve">
+    <value>紫色</value>
+  </data>
+  <data name="ColorWhite" xml:space="preserve">
+    <value>白色</value>
+  </data>
+</root>

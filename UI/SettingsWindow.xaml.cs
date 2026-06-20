@@ -53,6 +53,17 @@ namespace CopilotBuddy.UI
             }
         }
 
+        private void cmbLanguage_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!IsLoaded) return;
+            if (cmbLanguage.SelectedItem is ComboBoxItem item && item.Tag is string lang)
+            {
+                StyxSettings.Instance.Language = lang;
+                StyxSettings.Instance.Save();
+                Styx.Localization.Globalization.ApplyLanguage(lang);
+            }
+        }
+
         private void cmbLogLevel_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (cmbLogLevel.SelectedItem is ComboBoxItem selectedItem)
