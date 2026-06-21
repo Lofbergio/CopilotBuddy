@@ -49,8 +49,8 @@ A sincere thank you to the community around this bot. The bug reports, the test 
 
 Two mmap variants are kept side-by-side. Pick the one that matches the mmaps your server ships.
 
-- **`sub-tile-4x4-v2`** *(default branch on GitHub)* — 4x4 sub-tile navigation (Trinity / MMAP v5). Each ADT is split into 16 Detour sub-tiles of 133 yards, converted through `Tripper.Navigation.MeshMapCalculator`. This is where active development happens.
-- **`master`** — 1x1 navigation (MaNGOS / MMAP v4). One ADT = one Detour tile of 533 yards. Ships `Lib/Navigation 1x1.dll` (prebuilt MaNGOS runtime) and stays on the conservative 1x1 mmap path.
+- **`master`** *(default branch on GitHub)* — 4x4 sub-tile navigation (Trinity / MMAP v5). Each ADT is split into 16 Detour sub-tiles of 133 yards, converted through `Tripper.Navigation.MeshMapCalculator`. This is where active development happens.
+- **`1x1`** — 1x1 navigation (MaNGOS / MMAP v4). One ADT = one Detour tile of 533 yards. Ships `Lib/Navigation 1x1.dll` (prebuilt MaNGOS runtime) and stays on the conservative 1x1 mmap path.
 
 Both branches share the same bot UI, behaviors, profiles and plugins. The only differences are the navigation stack (Detour tile geometry) and the runtime `Navigation*.dll` shipped under `Lib/`.
 
