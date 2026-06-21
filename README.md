@@ -2,6 +2,19 @@
 
 Public World of Warcraft 3.3.5a (Wrath of the Lich King, build 12340) bot written in C# (.NET 10, WPF, x86). The API surface and behavior are ported from Honorbuddy. 
 
+## Ecosystem
+
+CopilotBuddy is split across a few sibling repositories. Each one covers one slice of the stack; together they make a complete, build-it-yourself bot:
+
+| Component | Repo | Role |
+| --- | --- | --- |
+| **Navigation** (C++ Detour runtime) | [Navigation-C-](https://github.com/Likon69/Navigation-C-) | The C++/Detour wrapper that performs pathfinding. Ships `Lib/Navigation.dll` (4x4, Trinity / MMAP v5) and `Lib/Navigation 1x1.dll` (1x1, MaNGOS / MMAP v4). |
+| **Extractor (4x4)** — C#, native | [extractor-csharp](https://github.com/Likon69/extractor-csharp) | The MaNGOS-style extractor rewritten in C# / WPF. Produces 4x4 sub-tile `.mmtile` files in HonorBuddy format (PAMM, `mmapVer = 5`). |
+| **Extractor (1x1)** — MaNGOS C++ | [Extractor_projects](https://github.com/Likon69/Extractor_projects) | The original MaNGOS extractor. Produces 1x1 `.mmap` / `.mmtile` files for the MaNGOS / MMAP v4 path. |
+| **MeshViewer 3D** | [MeshViewer3D](https://github.com/Likon69/MeshViewer3D) | Standalone 3D viewer for the produced navmesh tiles — useful for debugging pathing without launching the bot. |
+
+Use the 4x4 extractor + `Navigation.dll` for Trinity mmaps; use the MaNGOS extractor + `Navigation 1x1.dll` for the older 1x1 layout. The bot auto-detects which one to load from the file header.
+
 ## Why this project
 
 CopilotBuddy is a public port of the Honorbuddy API adapted for the WotLK 3.3.5a client and for custom servers. The goal is a bot that anyone can read, modify and contribut.
