@@ -25,6 +25,9 @@ namespace Styx.Plugins
         /// </summary>
         public static bool IsBuildingPlugins { get; private set; }
 
+        /// <summary>Set during teardown so cleanup-disables don't rewrite the saved EnabledPlugins list.</summary>
+        public static bool IsTearingDown { get; set; }
+
         /// <summary>
         /// Gets all loaded plugins.
         /// </summary>
@@ -82,6 +85,10 @@ namespace Styx.Plugins
         /// </summary>
         public static void UpdateEnabledPlugins()
         {
+            // don't rewrite the saved list during build or teardown — both would persist an empty set
+            if (IsBuildingPlugins || IsTearingDown)
+                return;
+
             try
             {
                 var enabledPluginNames = Plugins
