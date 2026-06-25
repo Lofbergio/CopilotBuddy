@@ -507,6 +507,8 @@ namespace CopilotBuddy.UI
             }
 
             // Disable all plugins so overlay/hotkeys and plugin-owned resources are released.
+            // IsTearingDown keeps these cleanup-disables from wiping the saved EnabledPlugins list.
+            Styx.Plugins.PluginManager.IsTearingDown = true;
             foreach (var pluginContainer in Styx.Plugins.PluginManager.Plugins)
             {
                 pluginContainer.Enabled = false;
