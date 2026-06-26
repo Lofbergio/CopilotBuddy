@@ -31,6 +31,8 @@ namespace Bots.VibeGrinder
         private GrindSupervisor _supervisor;
         private PrioritySelector _root;
         private BotEvents.Player.MobKilledDelegate _onKill;
+        private bool _spotInstalled;
+        private readonly System.Diagnostics.Stopwatch _navWait = new System.Diagnostics.Stopwatch();
 
         public override string Name => "VibeGrinder";
 
@@ -51,6 +53,10 @@ namespace Bots.VibeGrinder
                 if (_root == null)
                 {
                     _root = new PrioritySelector(
+                        // Defer spot selection to the first tick: the navmesh isn't loaded until
+                        // RaiseBotStart fires (after BotBase.Start). Holds the tree until a spot
+                        // is installed; once installed this gate falls through.
+                        new Decorator(ctx => !_spotInstalled, new Action(ctx => EnsureSpotSelected())),
                         LevelBot.CreateDeathBehavior(),
                         LevelBot.CreateCombatBehavior(),
                         LevelBot.CreateLootBehavior(),
@@ -66,15 +72,50 @@ namespace Bots.VibeGrinder
 
         public override void Start()
         {
-            // --- Start contract: clean slate, recompute everything from live state ---
+            // --- Start contract: clean slate. Spot selection is deferred to the first tick
+            // (EnsureSpotSelected) because the navmesh isn't loaded yet during Start(). ---
             LevelBot.ResetState();
             BotPoi.Clear("VibeGrinder start");
             _root = null;
+            _spotInstalled = false;
+            _navWait.Reset();
 
             _factions = new FactionResolver();
             _synth = new GrindAreaSynthesizer();
             _selector = new SpotSelector(_factions);
             _supervisor = new GrindSupervisor(_selector, _synth, _factions);
+
+            // Reuse LevelBot's target/loot filters (faction + blackspot + loot rules).
+            Targeting.Instance.IncludeTargetsFilter += LevelBot.LevelBotIncludeTargetsFilter;
+            LootTargeting.Instance.IncludeTargetsFilter += LevelBot.LevelbotIncludeLootsFilter;
+
+            _onKill = args => _supervisor.RecordKill();
+            BotEvents.Player.OnMobKilled += _onKill;
+
+            Bots.DungeonBuddy.Avoidance.WorldObstacleManager.Initialize();
+        }
+
+        /// <summary>
+        /// First-tick spot selection. Waits for the navmesh to load (it isn't ready during Start),
+        /// then selects + installs a spot once. Stops cleanly if no spot is found or the mesh never
+        /// loads. Returns Success so nothing else in the tree runs until a spot is installed.
+        /// </summary>
+        private RunStatus EnsureSpotSelected()
+        {
+            if (!Navigator.IsNavigatorLoaded)
+            {
+                if (!_navWait.IsRunning) _navWait.Restart();
+                if (_navWait.Elapsed.TotalSeconds > 30)
+                {
+                    Logging.Write(System.Drawing.Color.Orange,
+                        "[VibeGrinder] Navmesh did not load within 30s — cannot path. Stopping.");
+                    TreeRoot.Stop();
+                    return RunStatus.Success;
+                }
+                TreeRoot.StatusText = "VibeGrinder: waiting for navmesh to load...";
+                return RunStatus.Success;
+            }
+            _navWait.Reset();
 
             var me = StyxWoW.Me;
             uint map = me.MapId;
@@ -88,20 +129,13 @@ namespace Bots.VibeGrinder
                     "Move closer to appropriate mobs, raise the level band, or increase MaxTravelDistance.",
                     VibeGrinderSettings.Instance.MaxTravelDistance);
                 TreeRoot.Stop();
-                return;
+                return RunStatus.Success;
             }
 
             _synth.Install(spot, me.Level);
             _supervisor.OnInstalled(spot);
-
-            // Reuse LevelBot's target/loot filters (faction + blackspot + loot rules).
-            Targeting.Instance.IncludeTargetsFilter += LevelBot.LevelBotIncludeTargetsFilter;
-            LootTargeting.Instance.IncludeTargetsFilter += LevelBot.LevelbotIncludeLootsFilter;
-
-            _onKill = args => _supervisor.RecordKill();
-            BotEvents.Player.OnMobKilled += _onKill;
-
-            Bots.DungeonBuddy.Avoidance.WorldObstacleManager.Initialize();
+            _spotInstalled = true;
+            return RunStatus.Success;
         }
 
         public override void Stop()
