@@ -64,9 +64,12 @@ namespace Bots.VibeGrinder.Synthesis
             var s = VibeGrinderSettings.Instance;
             _area.TargetMinLevel = playerLevel - s.LevelBandBelow;
             _area.TargetMaxLevel = playerLevel + s.LevelBandAbove;
-            _area.MaxDistance = s.MaxTravelDistance;
+            // Do NOT set MaxDistance: it doubles as Targeting.CollectionRange (the mounted kill
+            // radius), which should stay at its 100yd default. Our travel cap (MaxTravelDistance)
+            // is a selection-time concern, not an in-spot kill radius.
 
             StyxWoW.AreaManager.SetArea(_area);
+            _area.CycleToNearest();   // begin the circuit at the nearest hotspot
             _installedMap = spot.Map;
 
             Logging.Write("[VibeGrinder] Installed spot: {0}", spot);
