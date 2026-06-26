@@ -89,6 +89,19 @@ namespace Styx.Logic.Profiles
 			}
 		}
 
+		/// <summary>
+		/// VibeGrinder: install a runtime-synthesized profile (no file on disk). Sets both the
+		/// current and outer profile so level-up reselection keeps returning it, and clears the
+		/// profileless flag. The synthetic profile carries an empty VendorManager — vendors resolve
+		/// from data.bin via CharacterSettings.FindVendorsAutomatically.
+		/// </summary>
+		internal static void UseSyntheticProfile(Profile profile)
+		{
+			_currentOuterProfile = profile;
+			_currentProfile = profile;
+			_profileless = false;
+		}
+
 		private static void OnLevelUp(BotEvents.Player.LevelUpEventArgs args)
 		{
 			if (Battlegrounds.IsInsideBattleground)

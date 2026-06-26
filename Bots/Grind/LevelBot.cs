@@ -1448,6 +1448,28 @@ namespace Bots.Grind
         }
 
         /// <summary>
+        /// VibeGrinder: clean slate for Stop→Start within one app session. Resets the static
+        /// loot/death/corpse/repair state these reused subtrees carry, so a restart behaves like
+        /// a cold boot. Loot events stay attached (guarded by _lootEventsAttached) to avoid
+        /// double-subscribing.
+        /// </summary>
+        internal static void ResetState()
+        {
+            _lastLootPoiType = default;
+            _lastLootGuid = 0;
+            _lootAttemptCount = 0;
+            _lootFailCount = 0;
+            _deathCount = 0;
+            _deathTimer.Reset();
+            _corpseWaitStopwatch.Reset();
+            _diedIndoors = false;
+            _releaseTimer.Reset();
+            _repairCostTimer.Reset();
+            _lastRepairCost = 0;
+            ShouldUseSpiritHealer = false;
+        }
+
+        /// <summary>
         /// HB 4.3.4 SetDefaultQueryFilter — Resets the mesh navigator query filter.
         /// Called when navigation parameters need to be restored to defaults.
         /// </summary>
