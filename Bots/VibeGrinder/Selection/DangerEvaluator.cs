@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Bots.VibeGrinder.Data;
 using Styx.Logic.Pathing;
 
@@ -65,12 +66,25 @@ namespace Bots.VibeGrinder.Selection
             if (hazards.Count == 0)
                 return 0f;
 
-            if (HasGuardPack(hazards))
-                return float.PositiveInfinity;
+            // Gauntlet test is ELITES ONLY and scoped to the actual path: a route is impassable only
+            // if it runs within CorridorRadius of an elite pack — not because over-level normals exist
+            // somewhere in the (necessarily large) search circle.
+            var elites = hazards.Where(h => h.Rank >= 1).ToList();
+            float corridorSq = S.CorridorRadius * S.CorridorRadius;
 
             float worst = 0f;
             foreach (WoWPoint sample in Densify(path, 20f))
             {
+                if (S.ElitePackCount > 0 && elites.Count >= S.ElitePackCount)
+                {
+                    int near = 0;
+                    foreach (MobSpawn e in elites)
+                        if (sample.DistanceSqr(e.Point) <= corridorSq)
+                            near++;
+                    if (near >= S.ElitePackCount)
+                        return float.PositiveInfinity;   // path threads through an elite pack
+                }
+
                 float local = AccumulateThreat(sample, hazards, S.CorridorRadius);
                 if (local > worst)
                     worst = local;
@@ -105,15 +119,20 @@ namespace Bots.VibeGrinder.Selection
 
         private static bool HasGuardPack(List<MobSpawn> hazards)
         {
+            // A guard pack = a cluster of ELITES (escort/patrol). Over-level normals don't count,
+            // or a busy low-level zone would look like wall-to-wall guard packs.
+            var elites = hazards.Where(h => h.Rank >= 1).ToList();
             int need = S.ElitePackCount;
+            if (elites.Count < need)
+                return false;
             float r2 = S.ElitePackRadius * S.ElitePackRadius;
-            for (int i = 0; i < hazards.Count; i++)
+            for (int i = 0; i < elites.Count; i++)
             {
                 int near = 1; // self
-                for (int j = 0; j < hazards.Count; j++)
+                for (int j = 0; j < elites.Count; j++)
                 {
                     if (i == j) continue;
-                    if (hazards[i].Point.DistanceSqr(hazards[j].Point) <= r2)
+                    if (elites[i].Point.DistanceSqr(elites[j].Point) <= r2)
                         near++;
                 }
                 if (near >= need)

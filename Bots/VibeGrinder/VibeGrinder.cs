@@ -32,7 +32,7 @@ namespace Bots.VibeGrinder
         private PrioritySelector _root;
         private BotEvents.Player.MobKilledDelegate _onKill;
         private bool _spotInstalled;
-        private readonly System.Diagnostics.Stopwatch _navWait = new System.Diagnostics.Stopwatch();
+        private readonly System.Diagnostics.Stopwatch _selectRetry = new System.Diagnostics.Stopwatch();
 
         public override string Name => "VibeGrinder";
 
@@ -78,7 +78,7 @@ namespace Bots.VibeGrinder
             BotPoi.Clear("VibeGrinder start");
             _root = null;
             _spotInstalled = false;
-            _navWait.Reset();
+            _selectRetry.Reset();
 
             _factions = new FactionResolver();
             _synth = new GrindAreaSynthesizer();
@@ -97,25 +97,24 @@ namespace Bots.VibeGrinder
 
         /// <summary>
         /// First-tick spot selection. Waits for the navmesh to load (it isn't ready during Start),
-        /// then selects + installs a spot once. Stops cleanly if no spot is found or the mesh never
-        /// loads. Returns Success so nothing else in the tree runs until a spot is installed.
+        /// then selects + installs a spot once. On "no spot" it idles and retries (every 10s) rather
+        /// than calling TreeRoot.Stop() — stopping from the worker thread interrupts it mid-log and
+        /// can crash the app. Returns Success so nothing else runs until a spot is installed.
         /// </summary>
         private RunStatus EnsureSpotSelected()
         {
             if (!Navigator.IsNavigatorLoaded)
             {
-                if (!_navWait.IsRunning) _navWait.Restart();
-                if (_navWait.Elapsed.TotalSeconds > 30)
-                {
-                    Logging.Write(System.Drawing.Color.Orange,
-                        "[VibeGrinder] Navmesh did not load within 30s — cannot path. Stopping.");
-                    TreeRoot.Stop();
-                    return RunStatus.Success;
-                }
                 TreeRoot.StatusText = "VibeGrinder: waiting for navmesh to load...";
                 return RunStatus.Success;
             }
-            _navWait.Reset();
+
+            // Throttle re-selection so a genuine "no spot here" doesn't run a full scan every tick.
+            if (_selectRetry.IsRunning && _selectRetry.Elapsed.TotalSeconds < 10)
+            {
+                TreeRoot.StatusText = "VibeGrinder: no acceptable spot — retrying...";
+                return RunStatus.Success;
+            }
 
             var me = StyxWoW.Me;
             uint map = me.MapId;
@@ -125,16 +124,16 @@ namespace Bots.VibeGrinder
             if (spot == null)
             {
                 Logging.Write(System.Drawing.Color.Orange,
-                    "[VibeGrinder] No grindable mobs within {0} yards of your level on this map. " +
-                    "Move closer to appropriate mobs, raise the level band, or increase MaxTravelDistance.",
-                    VibeGrinderSettings.Instance.MaxTravelDistance);
-                TreeRoot.Stop();
+                    "[VibeGrinder] No acceptable spot near you right now — idling, will retry. " +
+                    "Move closer to mobs, widen the level band, or relax danger settings.");
+                _selectRetry.Restart();
                 return RunStatus.Success;
             }
 
             _synth.Install(spot, me.Level);
             _supervisor.OnInstalled(spot);
             _spotInstalled = true;
+            _selectRetry.Reset();
             return RunStatus.Success;
         }
 
