@@ -512,6 +512,8 @@ namespace Styx.Logic.Profiles
 					return _mailboxManager;
 				return Parent?.MailboxManager;
 			}
+			// Assembly-only: lets ProfileManager attach one to a synthetic (no-XML) profile.
+			internal set => _mailboxManager = value;
 		}
 
 		/// <summary>

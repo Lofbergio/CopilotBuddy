@@ -97,6 +97,10 @@ namespace Styx.Logic.Profiles
 		/// </summary>
 		internal static void UseSyntheticProfile(Profile profile)
 		{
+			// A synthetic profile has no XML, so no MailboxManager — give it one so a profile-free
+			// botbase (VibeGrinder) can populate ForcedMailboxes and have NeedToMail/GetClosestMailbox work.
+			if (profile.MailboxManager == null)
+				profile.MailboxManager = new MailboxManager();
 			_currentOuterProfile = profile;
 			_currentProfile = profile;
 			_profileless = false;
