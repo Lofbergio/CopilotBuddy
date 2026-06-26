@@ -57,10 +57,11 @@ namespace Bots.VibeGrinder.Selection
             int lvlMax = playerLevel + S.LevelBandAbove;
 
             List<MobSpawn> eligible = GrindMobsRepository.QueryEligibleSpawns(
-                mapId, lvlMin, lvlMax, _factions.AttackableFactions, ImmuneUnitFlagMask);
+                mapId, lvlMin, lvlMax, _factions, ImmuneUnitFlagMask);
 
-            Logging.Write("[VibeGrinder] Selecting: L{0} band[{1},{2}] map {3}, {4} attackable factions, {5} eligible spawns.",
-                playerLevel, lvlMin, lvlMax, mapId, _factions.AttackableFactions.Count, eligible.Count);
+            Logging.Write("[VibeGrinder] Selecting: L{0} band[{1},{2}] map {3}, {4} hostile + {5} neutral factions, {6} eligible spawns.",
+                playerLevel, lvlMin, lvlMax, mapId,
+                _factions.HostileFactions.Count, _factions.NeutralFactions.Count, eligible.Count);
 
             if (eligible.Count == 0)
             {
@@ -162,6 +163,7 @@ namespace Bots.VibeGrinder.Selection
                 Map = mapId,
                 Hotspots = OrderRoamCircuit(c.Centroid, c.Members, 12),
                 MobIds = c.Members.Select(m => (int)m.Entry).Distinct().ToList(),
+                Factions = c.Members.Select(m => m.Faction).Distinct().ToList(),
                 DominantMaxLevel = c.Members.Count > 0 ? (int)c.Members.Average(m => m.MaxLevel) : 0,
                 Classification = cls,
             };

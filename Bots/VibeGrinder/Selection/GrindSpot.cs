@@ -18,6 +18,7 @@ namespace Bots.VibeGrinder.Selection
         public uint Map { get; set; }
         public List<WoWPoint> Hotspots { get; set; } = new List<WoWPoint>();
         public List<int> MobIds { get; set; } = new List<int>();
+        public List<int> Factions { get; set; } = new List<int>();
         public int DominantMaxLevel { get; set; }
         public SpotClass Classification { get; set; }
         public float Score { get; set; }

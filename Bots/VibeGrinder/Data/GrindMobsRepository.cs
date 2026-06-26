@@ -60,15 +60,15 @@ namespace Bots.VibeGrinder.Data
         /// in-memory against the attackable set (computed live by FactionResolver).
         /// </summary>
         public static List<MobSpawn> QueryEligibleSpawns(
-            uint mapId, int lvlMin, int lvlMax, HashSet<int> attackableFactions, long immuneUnitFlagMask)
+            uint mapId, int lvlMin, int lvlMax, FactionResolver factions, long immuneUnitFlagMask)
         {
             EnsureInitialized();
             var result = new List<MobSpawn>();
-            if (!_isAvailable) return result;
+            if (!_isAvailable || factions == null) return result;
 
             // Band overlap: mob[min,max] intersects [lvlMin,lvlMax]  ==  min<=lvlMax AND max>=lvlMin.
             const string sql = @"
-SELECT s.x, s.y, s.z, m.entry, m.max_level, m.rank, m.faction
+SELECT s.x, s.y, s.z, m.entry, m.max_level, m.rank, m.faction, m.type
 FROM spawns s JOIN mobs m ON m.entry = s.entry
 WHERE s.map_id = @map
   AND m.rank = 0
@@ -91,7 +91,9 @@ WHERE s.map_id = @map
                 while (reader.Read())
                 {
                     int faction = reader.GetInt32(6);
-                    if (attackableFactions != null && !attackableFactions.Contains(faction))
+                    int type = reader.GetInt32(7);
+                    // Two-tier safety lives in FactionResolver (hostile any type; neutral non-humanoid only).
+                    if (!factions.IsAttackable(faction, type))
                         continue;
 
                     result.Add(new MobSpawn(

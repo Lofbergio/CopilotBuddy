@@ -36,7 +36,7 @@ namespace Bots.VibeGrinder.Synthesis
         }
 
         /// <summary>Refill the persistent GrindArea with a spot's hotspots/factions/band and activate it.</summary>
-        public void Install(GrindSpot spot, IEnumerable<int> attackableFactions, int playerLevel)
+        public void Install(GrindSpot spot, int playerLevel)
         {
             EnsureProfile();
 
@@ -51,8 +51,10 @@ namespace Bots.VibeGrinder.Synthesis
                 _area.CircledHotspots.Enqueue(h);
             }
 
+            // Scope engagement to exactly the spot's own mob factions, so a stray neutral
+            // (e.g. a passing humanoid) won't be proactively pulled.
             _area.Factions.Clear();
-            foreach (int f in attackableFactions)
+            foreach (int f in spot.Factions)
                 _area.Factions.Add(f);
 
             _area.MobIDs.Clear();

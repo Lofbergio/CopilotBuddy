@@ -209,7 +209,7 @@ namespace Bots.VibeGrinder.Supervision
 
             if (_synth.MapChanged(next.Map))
                 _synth.EnsureProfile();
-            _synth.Install(next, _factions.AttackableFactions, me.Level);
+            _synth.Install(next, me.Level);
             OnInstalled(next);
             return true;
         }

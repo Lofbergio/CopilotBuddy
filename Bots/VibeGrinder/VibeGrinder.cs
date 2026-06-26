@@ -91,7 +91,7 @@ namespace Bots.VibeGrinder
                 return;
             }
 
-            _synth.Install(spot, _factions.AttackableFactions, me.Level);
+            _synth.Install(spot, me.Level);
             _supervisor.OnInstalled(spot);
 
             // Reuse LevelBot's target/loot filters (faction + blackspot + loot rules).
