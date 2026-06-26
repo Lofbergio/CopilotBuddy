@@ -53,13 +53,12 @@ namespace Bots.VibeGrinder.Selection
             bool scarce = playerLevel <= S.ScarcityLevelCeiling;
             int minMobs = scarce ? Math.Max(3, S.MinMobsPerSpot / 2) : S.MinMobsPerSpot;
 
-            // Forward-looking band: target mobs AT or just above our level, never well below.
-            // Grinding soon-grey (below-level) mobs makes us commit to spots we outgrow in a level
-            // or two -> relocate-every-ding churn. At/above-level mobs keep a committed spot viable
-            // for several levels. LevelBandBelow is no longer the selection floor; it's the
-            // commitment knob (how grey mobs may get before the supervisor relocates).
-            int lvlMin = playerLevel - 1;
-            int lvlMax = playerLevel + S.LevelBandAbove;
+            // Combat-safe level window: ±2. +3 mobs are brutal for an unattended low-level character
+            // (high miss/crit-against and heavy incoming damage); mobs >2 below grey out fast.
+            // Longevity comes from committing to a spot (the supervisor relocates only when we've
+            // genuinely out-leveled it), not from widening this window.
+            int lvlMin = playerLevel - 2;
+            int lvlMax = playerLevel + 2;
 
             List<MobSpawn> eligible = GrindMobsRepository.QueryEligibleSpawns(
                 mapId, lvlMin, lvlMax, _factions, ImmuneUnitFlagMask);
@@ -95,8 +94,11 @@ namespace Bots.VibeGrinder.Selection
                 if (purity > 1f) purity = 1f;
 
                 float threat = DangerEvaluator.DestinationThreat(c.Centroid, mapId, playerLevel, out bool guardPack);
-                float proximityBonus = 1f - dist / S.MaxTravelDistance;
-                float baseScore = c.Members.Count * purity * purity * (1f + 0.25f * proximityBonus) / (1f + threat);
+                // Dense AND near: strong proximity decay (half-score at ProximityHalfDistance) so it
+                // never crosses the zone for density, but density still decides among nearby spots.
+                float ratio = dist / Math.Max(1f, S.ProximityHalfDistance);
+                float proximityFactor = 1f / (1f + ratio * ratio);
+                float baseScore = c.Members.Count * purity * proximityFactor / (1f + threat);
 
                 candidates.Add(new Scored
                 {
@@ -117,10 +119,9 @@ namespace Bots.VibeGrinder.Selection
             // Scarcity also relaxes contention tolerance (accept Risky-by-contention).
             bool scarcityLenient = scarce || candidates.Count <= S.ScarcityCandidateFloor;
 
-            // Phase 2 — NEAREST-FIRST: grind the closest viable spot, not the globally densest one
-            // across the zone. Density is already gated by minMobs; here we just want the nearest
-            // reachable, non-Dangerous cluster. Bounded budget caps the pathfinds.
-            var ranked = candidates.OrderBy(c => c.Dist).ToList();
+            // Phase 2 — rank by the dense-and-near score (proximity decay keeps it local), then take
+            // the best reachable, non-Dangerous spot. Bounded budget caps the pathfinds.
+            var ranked = candidates.OrderByDescending(c => c.Score).ToList();
             int budget = Math.Min(ranked.Count, Math.Max(S.TopCandidatesForPathCheck, 25));
 
             GrindSpot bestSafe = null;
@@ -160,7 +161,7 @@ namespace Bots.VibeGrinder.Selection
                     bestRisky = spot;
 
                 if (bestSafe != null)
-                    break; // nearest-first — the first Safe is the nearest Safe
+                    break; // ranked by dense-and-near score — first Safe is the best Safe
             }
 
             GrindSpot chosen = bestSafe ?? bestRisky;

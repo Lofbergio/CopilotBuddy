@@ -46,6 +46,10 @@ namespace Bots.VibeGrinder
         [Category("Spot"), Description("Minimum eligible mobs for a cluster to count as a spot.")]
         public int MinMobsPerSpot { get; set; }
 
+        [Setting, Styx.Helpers.DefaultValue(250f)]
+        [Category("Spot"), Description("Distance (yd) at which a spot scores half an identical one at your feet. Lower = prefer closer spots more strongly over denser-but-farther ones.")]
+        public float ProximityHalfDistance { get; set; }
+
         [Setting, Styx.Helpers.DefaultValue(5)]
         [Category("Spot"), Description("How many top candidates get the expensive path-danger check.")]
         public int TopCandidatesForPathCheck { get; set; }
