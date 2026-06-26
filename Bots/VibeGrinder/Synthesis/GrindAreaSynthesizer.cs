@@ -21,6 +21,8 @@ namespace Bots.VibeGrinder.Synthesis
         private readonly GrindArea _area = new GrindArea();
         private Profile _profile;
         private uint _installedMap = uint.MaxValue;
+        // Mailboxes found unsafe at runtime (live hostile nearby) — kept out across reloads.
+        private readonly System.Collections.Generic.HashSet<WoWPoint> _runtimeUnsafeMailboxes = new();
 
         public GrindArea Area => _area;
 
@@ -103,7 +105,8 @@ namespace Bots.VibeGrinder.Synthesis
             int skipped = 0;
             foreach (MailboxRecord mb in MailboxQueries.GetMailboxesWithFactionsOnMap(map))
             {
-                if (myFaction != null && IsEnemyTerritory(myFaction, mb.NearbyFactions))
+                if (_runtimeUnsafeMailboxes.Contains(mb.Location)
+                    || (myFaction != null && IsEnemyTerritory(myFaction, mb.NearbyFactions)))
                 {
                     skipped++;
                     continue;
@@ -113,6 +116,18 @@ namespace Bots.VibeGrinder.Synthesis
 
             Logging.Write("[VibeGrinder] Loaded {0} mailbox location(s) for map {1} ({2} skipped as enemy territory).",
                 mgr.ForcedMailboxes.Count, map, skipped);
+        }
+
+        /// <summary>
+        /// Session-blacklist a mailbox found unsafe at runtime (a live hostile by it that the static
+        /// DB couldn't see — Aldor/Scryer, a griefed town, a roamer). Drops it now and keeps it out
+        /// of future reloads. Idempotent.
+        /// </summary>
+        public void BlacklistMailbox(WoWPoint location)
+        {
+            if (!_runtimeUnsafeMailboxes.Add(location))
+                return;
+            ProfileManager.CurrentProfile?.MailboxManager?.ForcedMailboxes.RemoveAll(m => m.Location == location);
         }
 
         /// <summary>
