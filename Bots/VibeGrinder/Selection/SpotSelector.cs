@@ -53,7 +53,12 @@ namespace Bots.VibeGrinder.Selection
             bool scarce = playerLevel <= S.ScarcityLevelCeiling;
             int minMobs = scarce ? Math.Max(3, S.MinMobsPerSpot / 2) : S.MinMobsPerSpot;
 
-            int lvlMin = playerLevel - S.LevelBandBelow;
+            // Forward-looking band: target mobs AT or just above our level, never well below.
+            // Grinding soon-grey (below-level) mobs makes us commit to spots we outgrow in a level
+            // or two -> relocate-every-ding churn. At/above-level mobs keep a committed spot viable
+            // for several levels. LevelBandBelow is no longer the selection floor; it's the
+            // commitment knob (how grey mobs may get before the supervisor relocates).
+            int lvlMin = playerLevel - 1;
             int lvlMax = playerLevel + S.LevelBandAbove;
 
             List<MobSpawn> eligible = GrindMobsRepository.QueryEligibleSpawns(
