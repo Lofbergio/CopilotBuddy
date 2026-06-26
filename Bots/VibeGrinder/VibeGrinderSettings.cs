@@ -154,6 +154,10 @@ namespace Bots.VibeGrinder
         [Category("Survival"), Description("Allow flight-path travel between continents (off for overnight).")]
         public bool AllowTaxiTravel { get; set; }
 
+        [Setting, Styx.Helpers.DefaultValue(false)]
+        [Category("Mailing"), Description("Mail valuables to a bank alt during vendor runs. Requires MailRecipient set + MailWhite/MailGreen enabled in General settings, and mailbox locations in GrindMobs.db (re-run GrindMobsExtractor). The bot's best food/drink are auto-protected from mailing/selling. Off by default.")]
+        public bool EnableMailing { get; set; }
+
         /// <summary>
         /// Add-avoidance level taper, shared by pull weighting and spot selection so they can't drift:
         /// 1 at/below PullCrowdFullLevel, linear down to 0 at/above PullCrowdLevelCeiling.

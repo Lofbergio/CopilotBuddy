@@ -9,8 +9,10 @@ using Styx.Helpers;
 using Styx.Logic;
 using Styx.Logic.BehaviorTree;
 using Styx.Logic.Combat;
+using Styx.Logic.Inventory;
 using Styx.Logic.Pathing;
 using Styx.Logic.POI;
+using Styx.Logic.Profiles;
 using Styx.WoWInternals.WoWObjects;
 using TreeSharp;
 using Action = TreeSharp.Action;
@@ -34,6 +36,8 @@ namespace Bots.VibeGrinder
         private BotEvents.Player.MobKilledDelegate _onKill;
         private bool _spotInstalled;
         private readonly System.Diagnostics.Stopwatch _selectRetry = new System.Diagnostics.Stopwatch();
+        private uint _protectedFoodId, _protectedDrinkId;
+        private readonly System.Diagnostics.Stopwatch _consumableSync = new System.Diagnostics.Stopwatch();
 
         public override string Name => "VibeGrinder";
 
@@ -198,6 +202,7 @@ namespace Bots.VibeGrinder
                 BotEvents.Player.OnMobKilled -= _onKill;
                 _onKill = null;
             }
+            ClearConsumableProtection();
             Bots.DungeonBuddy.Avoidance.WorldObstacleManager.Shutdown();
         }
 
@@ -206,6 +211,42 @@ namespace Bots.VibeGrinder
             float speed = StyxWoW.Me.MovementInfo.CurrentSpeed;
             Navigator.PathPrecision = System.Math.Clamp(speed * 0.15f, 1.5f, 10f);
             _supervisor?.Pulse();
+            SyncConsumableProtection();
+        }
+
+        /// <summary>
+        /// Keep the bot's current best food/drink in the runtime protected-items list so mailing or
+        /// selling (e.g. MailWhite makes consumables eligible) never strips what it rests with.
+        /// Refreshes as the best tier changes (level-up, restock); cleared on Stop. Only while mailing.
+        /// </summary>
+        private void SyncConsumableProtection()
+        {
+            if (!VibeGrinderSettings.Instance.EnableMailing) return;
+            if (_consumableSync.IsRunning && _consumableSync.Elapsed.TotalSeconds < 10) return;
+            _consumableSync.Restart();
+
+            uint food = Consumable.GetBestFood(false)?.Entry ?? 0;
+            if (food != _protectedFoodId)
+            {
+                if (_protectedFoodId != 0) ProtectedItemsManager.Remove(_protectedFoodId);
+                if (food != 0) ProtectedItemsManager.Add(food);
+                _protectedFoodId = food;
+            }
+
+            uint drink = Consumable.GetBestDrink(false)?.Entry ?? 0;
+            if (drink != _protectedDrinkId)
+            {
+                if (_protectedDrinkId != 0) ProtectedItemsManager.Remove(_protectedDrinkId);
+                if (drink != 0) ProtectedItemsManager.Add(drink);
+                _protectedDrinkId = drink;
+            }
+        }
+
+        private void ClearConsumableProtection()
+        {
+            if (_protectedFoodId != 0) { ProtectedItemsManager.Remove(_protectedFoodId); _protectedFoodId = 0; }
+            if (_protectedDrinkId != 0) { ProtectedItemsManager.Remove(_protectedDrinkId); _protectedDrinkId = 0; }
+            _consumableSync.Reset();
         }
     }
 }

@@ -1,8 +1,10 @@
 using System.Collections.Generic;
 using Bots.VibeGrinder.Selection;
 using Styx;
+using Styx.Database;
 using Styx.Helpers;
 using Styx.Logic.AreaManagement;
+using Styx.Logic.Pathing;
 using Styx.Logic.Profiles;
 
 namespace Bots.VibeGrinder.Synthesis
@@ -40,6 +42,11 @@ namespace Bots.VibeGrinder.Synthesis
         {
             EnsureProfile();
 
+            // Feed the map's mailboxes into the synthetic profile (reload only on map change) so the
+            // reused vendor behaviour can mail to the bank. Off unless mailing is enabled.
+            if (VibeGrinderSettings.Instance.EnableMailing && MapChanged(spot.Map))
+                LoadMailboxesForMap(spot.Map);
+
             _area.Name = "VibeGrinder";
 
             _area.Hotspots.Clear();
@@ -73,6 +80,23 @@ namespace Bots.VibeGrinder.Synthesis
             _installedMap = spot.Map;
 
             Logging.Write("[VibeGrinder] Installed spot: {0}", spot);
+        }
+
+        /// <summary>
+        /// Feed the map's mailbox locations (shared Mailboxes.db, via core MailboxQueries) into the
+        /// synthetic profile's ForcedMailboxes so LevelBot's reused mail behaviour can find one.
+        /// Empty if Mailboxes.db is absent — mailing then just stays idle.
+        /// </summary>
+        private void LoadMailboxesForMap(uint map)
+        {
+            var mgr = ProfileManager.CurrentProfile?.MailboxManager;
+            if (mgr == null) return;
+
+            mgr.ForcedMailboxes.Clear();
+            foreach (WoWPoint pt in MailboxQueries.GetMailboxesOnMap(map))
+                mgr.ForcedMailboxes.Add(new Mailbox(pt));
+
+            Logging.Write("[VibeGrinder] Loaded {0} mailbox location(s) for map {1}.", mgr.ForcedMailboxes.Count, map);
         }
     }
 }
