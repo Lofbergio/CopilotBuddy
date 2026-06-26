@@ -18,12 +18,14 @@ using MySqlConnector;
 class Program
 {
     const string OutPath = "GrindMobs.db";
+    const string OutPathMailboxes = "Mailboxes.db";
 
-    // --- MySQL connection (edit to match your server) ---
-    const string MySqlHost = "127.0.0.1";
-    const int    MySqlPort = 3306;
-    const string MySqlUser = "root";
-    const string MySqlPass = "1onlight";
+    // --- MySQL connection: from env vars, with non-secret AzerothCore defaults. NEVER hardcode real
+    // creds here — set ACORE_DB_HOST/PORT/USER/PASS in your environment to override. ---
+    static readonly string MySqlHost = Environment.GetEnvironmentVariable("ACORE_DB_HOST") ?? "127.0.0.1";
+    static readonly int    MySqlPort = int.TryParse(Environment.GetEnvironmentVariable("ACORE_DB_PORT"), out var p) ? p : 3306;
+    static readonly string MySqlUser = Environment.GetEnvironmentVariable("ACORE_DB_USER") ?? "acore";
+    static readonly string MySqlPass = Environment.GetEnvironmentVariable("ACORE_DB_PASS") ?? "acore";
 
     static void Main()
     {
@@ -41,10 +43,14 @@ class Program
         var spawns = LoadSpawns(worldDb, spawnEntryCol);
         Console.WriteLine($"creature spawn rows: {spawns.Count}\n");
 
-        BuildDatabase(mobs, spawns);
+        var mailboxes = LoadMailboxes(worldDb);
+        Console.WriteLine($"mailbox spawn rows: {mailboxes.Count}\n");
 
-        Console.WriteLine($"\nDone. Wrote {Path.GetFullPath(OutPath)}.");
-        Console.WriteLine("Copy GrindMobs.db into the CopilotBuddy runtime root (next to CreatureSpawns.db).");
+        BuildDatabase(mobs, spawns);
+        BuildMailboxDatabase(mailboxes);
+
+        Console.WriteLine($"\nDone. Wrote {Path.GetFullPath(OutPath)} and {Path.GetFullPath(OutPathMailboxes)}.");
+        Console.WriteLine("Copy GrindMobs.db + Mailboxes.db into the CopilotBuddy runtime root (next to CreatureSpawns.db).");
     }
 
     // -------------------------------------------------------------------------
@@ -154,8 +160,41 @@ FROM creature";
         return rows;
     }
 
+    // gameobject → mailboxes (gameobject_template.type = 19 = GAMEOBJECT_TYPE_MAILBOX)
     // -------------------------------------------------------------------------
-    // Write GrindMobs.db
+    static List<SpawnRow> LoadMailboxes(string worldDb)
+    {
+        Console.WriteLine("Reading mailboxes (gameobject type 19)...");
+        var rows = new List<SpawnRow>();
+
+        using var conn = new MySqlConnection(ConnStr(worldDb));
+        conn.Open();
+
+        // AzerothCore: gameobject.id references gameobject_template.entry. If a fork uses a different
+        // spawn-entry column, adjust g.id here (mirrors the creature id1/id detection).
+        const string sql = @"
+SELECT g.map, g.position_x, g.position_y, g.position_z
+FROM gameobject g JOIN gameobject_template t ON t.entry = g.id
+WHERE t.type = 19";
+
+        using var cmd = new MySqlCommand(sql, conn);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            rows.Add(new SpawnRow
+            {
+                Entry = 0,
+                Map   = r.GetUInt16("map"),
+                X     = r.GetFloat("position_x"),
+                Y     = r.GetFloat("position_y"),
+                Z     = r.GetFloat("position_z"),
+            });
+        }
+        return rows;
+    }
+
+    // -------------------------------------------------------------------------
+    // Write GrindMobs.db (VibeGrinder mob-spot data only)
     // -------------------------------------------------------------------------
     static void BuildDatabase(List<MobRow> mobs, List<SpawnRow> spawns)
     {
@@ -235,6 +274,47 @@ CREATE TABLE spawns(
 CREATE INDEX ix_spawns_entry ON spawns(entry);
 CREATE INDEX ix_spawns_map_entry ON spawns(map_id, entry);
 CREATE INDEX ix_mobs_level ON mobs(min_level, max_level);");
+    }
+
+    // -------------------------------------------------------------------------
+    // Write Mailboxes.db (shared gameobject/mailbox locations — any bot can read it)
+    // -------------------------------------------------------------------------
+    static void BuildMailboxDatabase(List<SpawnRow> mailboxes)
+    {
+        if (File.Exists(OutPathMailboxes))
+            File.Delete(OutPathMailboxes);
+
+        SQLiteConnection.CreateFile(OutPathMailboxes);
+
+        var builder = new SQLiteConnectionStringBuilder { DataSource = OutPathMailboxes };
+        using var conn = new SQLiteConnection(builder.ConnectionString);
+        conn.Open();
+
+        ExecNonQuery(conn, @"
+CREATE TABLE mailboxes(
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  map_id  INTEGER,
+  x REAL, y REAL, z REAL);");
+
+        Console.WriteLine("Inserting mailboxes...");
+        using (var tx = conn.BeginTransaction())
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = @"INSERT INTO mailboxes(map_id,x,y,z) VALUES(@m,@x,@y,@z)";
+            AddP(cmd, "@m", "@x", "@y", "@z");
+            foreach (var mb in mailboxes)
+            {
+                cmd.Parameters["@m"].Value = (int)mb.Map;
+                cmd.Parameters["@x"].Value = mb.X;
+                cmd.Parameters["@y"].Value = mb.Y;
+                cmd.Parameters["@z"].Value = mb.Z;
+                cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+
+        ExecNonQuery(conn, "CREATE INDEX ix_mailboxes_map ON mailboxes(map_id);");
     }
 
     // -------------------------------------------------------------------------
