@@ -168,14 +168,17 @@ namespace Bots.VibeGrinder.Supervision
 
         private bool Depleted()
         {
-            if (_kills.Count < S.MinKillsPerMin)
-                return true; // fewer than min kills in the last minute
-
+            // Depletion = the spot stops offering mobs, NOT a low kill rate. At low level kills/min
+            // is bound by how slowly the toon kills (long casts + loot + drink), not by mob supply,
+            // so a healthy camp reads as "depleted" and the bot thrashes. Drive off a sustained
+            // empty target list; kills/min only confirms (don't flee a camp we were just clearing —
+            // respawns are coming).
             if (Targeting.Instance.TargetList.Count == 0)
             {
                 if (_emptySince == DateTime.MaxValue)
                     _emptySince = DateTime.UtcNow;
-                else if ((DateTime.UtcNow - _emptySince).TotalSeconds >= S.EmptyTargetSeconds)
+                else if ((DateTime.UtcNow - _emptySince).TotalSeconds >= S.EmptyTargetSeconds
+                         && _kills.Count < S.MinKillsPerMin)
                     return true;
             }
             else

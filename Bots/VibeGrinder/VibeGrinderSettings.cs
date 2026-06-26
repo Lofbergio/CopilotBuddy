@@ -102,7 +102,7 @@ namespace Bots.VibeGrinder
         public int IntrusionSeconds { get; set; }
 
         [Setting, Styx.Helpers.DefaultValue(3f)]
-        [Category("Supervisor"), Description("Relocate if kills/min drops below this.")]
+        [Category("Supervisor"), Description("Depletion confirmation: only relocate a target-empty spot if kills in the last minute were below this. Not a standalone trigger (kills/min is combat-bound at low level, not a supply signal).")]
         public float MinKillsPerMin { get; set; }
 
         [Setting, Styx.Helpers.DefaultValue(45)]
