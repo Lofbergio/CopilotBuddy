@@ -161,9 +161,17 @@ namespace Bots.VibeGrinder.Selection
                 bool contested = HostilePlayersNear(sc.Cluster.Centroid, S.GrindRadius) > 0;
                 SpotClass cls = DangerEvaluator.Classify(sc.Threat, sc.GuardPack, pathDanger, contested);
 
+                // Hard body-pull gate: an over-level hostile sitting in aggro range of a kill position
+                // will drag in (from beyond our pull range) every loot walk — and we can't clear it.
+                bool aggroBubble = cls != SpotClass.Dangerous &&
+                    DangerEvaluator.OverlevelHostileInAggro(sc.Cluster.Members, sc.Cluster.Centroid,
+                        mapId, playerLevel, _factions, S.AggroAvoidBuffer);
+                if (aggroBubble)
+                    cls = SpotClass.Dangerous;
+
                 Logging.WriteDebug(
-                    "[VibeGrinder]  cand#{0} score={1:F1} threat={2:F1} guardPack={3} hostilePack={4} pathDanger={5:F1} contested={6} mobs={7} dist={8:F0} -> {9} @ {10}",
-                    i, sc.Score, sc.Threat, sc.GuardPack, sc.HostilePack, pathDanger, contested, sc.Cluster.Members.Count,
+                    "[VibeGrinder]  cand#{0} score={1:F1} threat={2:F1} guardPack={3} hostilePack={4} aggroBubble={5} pathDanger={6:F1} contested={7} mobs={8} dist={9:F0} -> {10} @ {11}",
+                    i, sc.Score, sc.Threat, sc.GuardPack, sc.HostilePack, aggroBubble, pathDanger, contested, sc.Cluster.Members.Count,
                     playerLoc.Distance2D(sc.Cluster.Centroid), cls, sc.Cluster.Centroid);
 
                 if (cls == SpotClass.Dangerous) { dangerousDropped++; continue; }

@@ -92,6 +92,33 @@ namespace Bots.VibeGrinder.Selection
             return worst;
         }
 
+        /// <summary>
+        /// Hard body-pull gate. An over-level *hostile* (proximity-aggro) mob within <paramref name="buffer"/>
+        /// of any kill position aggros from outside our pull range the moment we walk in to fight or loot —
+        /// and it's too strong to clear. Such a spot is Dangerous no matter how low the soft threat sum is.
+        /// Neutral over-level mobs don't count — they won't aggro on a walk-by.
+        /// </summary>
+        public static bool OverlevelHostileInAggro(List<MobSpawn> killPositions, WoWPoint centroid,
+            uint mapId, int playerLevel, FactionResolver factions, float buffer)
+        {
+            if (buffer <= 0f || killPositions == null || killPositions.Count == 0)
+                return false;
+
+            List<MobSpawn> hazards = GrindMobsRepository.QueryHazardsNear(
+                mapId, centroid, S.GrindRadius + buffer, playerLevel, S.DangerLevelMargin);
+
+            float b2 = buffer * buffer;
+            foreach (MobSpawn h in hazards)
+            {
+                if (!factions.HostileFactions.Contains(h.Faction))
+                    continue;
+                foreach (MobSpawn k in killPositions)
+                    if (h.Point.DistanceSqr(k.Point) <= b2)
+                        return true;
+            }
+            return false;
+        }
+
         public static SpotClass Classify(float threat, bool guardPack, float pathDanger, bool liveContested)
         {
             if (guardPack || float.IsInfinity(pathDanger) || pathDanger > S.CorridorDangerCap)

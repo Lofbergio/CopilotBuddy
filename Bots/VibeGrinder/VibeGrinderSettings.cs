@@ -83,6 +83,10 @@ namespace Bots.VibeGrinder
         [Category("Danger"), Description("Destination threat at/below this is considered Safe.")]
         public float SafeThreatThreshold { get; set; }
 
+        [Setting, Styx.Helpers.DefaultValue(35f)]
+        [Category("Danger"), Description("Hard body-pull gate: an over-level HOSTILE mob within this distance (yd) of a kill position makes a spot Dangerous. Such mobs aggro from beyond pull range when you walk in to fight or loot, and are too strong to clear. 0 disables.")]
+        public float AggroAvoidBuffer { get; set; }
+
         // ---- Scarcity (leniency for inconvenience only — never danger) ----
         [Setting, Styx.Helpers.DefaultValue(2)]
         [Category("Scarcity"), Description("At/below this candidate count, relax contention/density.")]
