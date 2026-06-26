@@ -37,6 +37,14 @@ namespace Bots.VibeGrinder.Supervision
         private bool _wasDead;
         private DateTime _emptySince = DateTime.MaxValue;
 
+        // Adaptive add-fear: rises on pack deaths, eased by real progress (level-ups, area switches,
+        // clean kill streaks) — never by idle wall-clock. Multiplies VibeGrinder's pull penalty.
+        private double _crowdCaution = 1.0;
+        private int _attackerPeak;
+        private DateTime _attackerPeakAt = DateTime.MinValue;
+        private int _lastLevel;
+        private int _cleanKills;
+
         public GrindSupervisor(SpotSelector selector, GrindAreaSynthesizer synth, FactionResolver factions)
         {
             _selector = selector;
@@ -45,6 +53,9 @@ namespace Bots.VibeGrinder.Supervision
         }
 
         private static VibeGrinderSettings S => VibeGrinderSettings.Instance;
+
+        /// <summary>Adaptive multiplier (≥1) on the pull add-avoidance penalty. Grows with pack deaths.</summary>
+        public double CrowdCautionFactor => _crowdCaution;
 
         /// <summary>Active (non-expired) blacklisted centroids — passed to SpotSelector at Start.</summary>
         public List<WoWPoint> ActiveBlacklist()
@@ -62,6 +73,11 @@ namespace Bots.VibeGrinder.Supervision
             _blacklist.Clear();
             _wasDead = false;
             _emptySince = DateTime.MaxValue;
+            _crowdCaution = 1.0;
+            _attackerPeak = 0;
+            _attackerPeakAt = DateTime.MinValue;
+            _lastLevel = 0;
+            _cleanKills = 0;
             _throttle.Reset();
             _sinceInstall.Reset();
         }
@@ -76,7 +92,16 @@ namespace Bots.VibeGrinder.Supervision
             _sinceInstall.Restart();
         }
 
-        public void RecordKill() => _kills.Enqueue(DateTime.UtcNow);
+        public void RecordKill()
+        {
+            _kills.Enqueue(DateTime.UtcNow);
+            // A clean streak (no death) is evidence we're handling the area — ease the fear.
+            if (S.CrowdCautionKillStreak > 0 && ++_cleanKills >= S.CrowdCautionKillStreak)
+            {
+                _cleanKills = 0;
+                EaseCaution(S.CrowdCautionEase, "clean kill streak");
+            }
+        }
 
         /// <summary>Called every botbase Pulse: death edge-detection + rolling-window pruning.</summary>
         public void Pulse()
@@ -84,9 +109,35 @@ namespace Bots.VibeGrinder.Supervision
             var me = StyxWoW.Me;
             if (me == null) return;
 
+            // Level-up eases the fear: you got stronger / picked up new tools.
+            if (_lastLevel == 0) _lastLevel = me.Level;
+            else if (me.Level > _lastLevel)
+            {
+                EaseCaution(S.CrowdCautionEase * (me.Level - _lastLevel), "leveled up");
+                _lastLevel = me.Level;
+            }
+
+            // Track the peak attackers-on-us so a death can be classed pack vs honest 1v1 — at the
+            // death tick mobs have already dropped target, so we sample the run-up (last ~5s).
+            if (!me.IsDead)
+            {
+                int attackers = AttackersOnMe(me);
+                if (attackers >= _attackerPeak || (DateTime.UtcNow - _attackerPeakAt).TotalSeconds > 5)
+                {
+                    _attackerPeak = attackers;
+                    _attackerPeakAt = DateTime.UtcNow;
+                }
+            }
+
             bool dead = me.IsDead;
             if (dead && !_wasDead)
+            {
                 _deaths.Enqueue(DateTime.UtcNow);
+                _cleanKills = 0;
+                if (S.CrowdCautionStep > 0f && _attackerPeak >= S.PackDeathAttackers)
+                    Escalate();
+                _attackerPeak = 0;
+            }
             _wasDead = dead;
 
             DateTime now = DateTime.UtcNow;
@@ -94,6 +145,43 @@ namespace Bots.VibeGrinder.Supervision
                 _kills.Dequeue();
             while (_deaths.Count > 0 && (now - _deaths.Peek()).TotalMinutes > S.DeathLoopWindowMin)
                 _deaths.Dequeue();
+        }
+
+        /// <summary>Hostile mobs currently targeting me within engage range — my live add count.</summary>
+        private static int AttackersOnMe(WoWUnit me)
+        {
+            try
+            {
+                int n = 0;
+                foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
+                {
+                    if (u == null || u is WoWPlayer || u.IsDead) continue;
+                    if (!u.IsHostile || u.CurrentTargetGuid != me.Guid) continue;
+                    if (u.Location.Distance(me.Location) > 40f) continue;
+                    n++;
+                }
+                return n;
+            }
+            catch { return 0; }
+        }
+
+        private void Escalate()
+        {
+            double before = _crowdCaution;
+            _crowdCaution = System.Math.Min(_crowdCaution + S.CrowdCautionStep, System.Math.Max(1.0, S.CrowdCautionMax));
+            if (_crowdCaution != before)
+                Logging.Write(System.Drawing.Color.Orange,
+                    "[VibeGrinder] Pack death ({0} attackers) — crowd caution {1:F2} → {2:F2}.",
+                    _attackerPeak, before, _crowdCaution);
+        }
+
+        private void EaseCaution(double amount, string why)
+        {
+            if (_crowdCaution <= 1.0 || amount <= 0) return;
+            double before = _crowdCaution;
+            _crowdCaution = System.Math.Max(1.0, _crowdCaution - amount);
+            if (_crowdCaution != before)
+                Logging.Write("[VibeGrinder] Crowd caution eased ({0}): {1:F2} → {2:F2}.", why, before, _crowdCaution);
         }
 
         public Composite RelocationCheck()
@@ -200,7 +288,7 @@ namespace Bots.VibeGrinder.Supervision
             var exclude = ActiveBlacklist();
             exclude.Add(_current.Centroid);
 
-            GrindSpot next = _selector.SelectBest(me.MapId, me.Location, me.Level, exclude);
+            GrindSpot next = _selector.SelectBest(me.MapId, me.Location, me.Level, exclude, _crowdCaution);
             if (next == null || next.Centroid.DistanceSqr(_current.Centroid) <= S.GrindRadius * S.GrindRadius)
             {
                 Logging.Write("[VibeGrinder] {0}: no better spot available — staying put.", reason);
@@ -214,6 +302,8 @@ namespace Bots.VibeGrinder.Supervision
                 _synth.EnsureProfile();
             _synth.Install(next, me.Level);
             OnInstalled(next);
+            // A new area is a fresh layout — ease the fear earned at the abandoned spot.
+            EaseCaution(S.CrowdCautionEase, "switched areas");
             return true;
         }
     }

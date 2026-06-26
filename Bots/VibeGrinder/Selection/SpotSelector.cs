@@ -35,20 +35,20 @@ namespace Bots.VibeGrinder.Selection
         /// Blacklisted centroids (recently abandoned) are excluded; if that empties the field, the
         /// blacklist is cleared and the search retried once.
         /// </summary>
-        public GrindSpot SelectBest(uint mapId, WoWPoint playerLoc, int playerLevel, IEnumerable<WoWPoint> blacklist)
+        public GrindSpot SelectBest(uint mapId, WoWPoint playerLoc, int playerLevel, IEnumerable<WoWPoint> blacklist, double caution = 1.0)
         {
             var blocked = blacklist != null ? blacklist.ToList() : new List<WoWPoint>();
 
-            GrindSpot best = Search(mapId, playerLoc, playerLevel, blocked);
+            GrindSpot best = Search(mapId, playerLoc, playerLevel, blocked, caution);
             if (best == null && blocked.Count > 0)
             {
                 Styx.Helpers.Logging.Write("[VibeGrinder] No spot outside blacklist; clearing it and retrying once.");
-                best = Search(mapId, playerLoc, playerLevel, new List<WoWPoint>());
+                best = Search(mapId, playerLoc, playerLevel, new List<WoWPoint>(), caution);
             }
             return best;
         }
 
-        private GrindSpot Search(uint mapId, WoWPoint playerLoc, int playerLevel, List<WoWPoint> blocked)
+        private GrindSpot Search(uint mapId, WoWPoint playerLoc, int playerLevel, List<WoWPoint> blocked, double caution)
         {
             bool scarce = playerLevel <= S.ScarcityLevelCeiling;
             int minMobs = scarce ? Math.Max(3, S.MinMobsPerSpot / 2) : S.MinMobsPerSpot;
@@ -77,6 +77,11 @@ namespace Bots.VibeGrinder.Selection
             Logging.WriteDebug("[VibeGrinder] {0} clusters from {1} spawns (minMobs={2}, scarce={3}).",
                 clusters.Count, eligible.Count, minMobs, scarce);
 
+            // Learned-capability weight on hostile crowding: innate squishiness (level taper) ×
+            // how badly we've been dying to packs (caution). 0 above the level ceiling or when the
+            // toon's proven it can cleave. Confidence-ready: once caution dips below 1, this relaxes.
+            float crowdWeight = S.CrowdLevelScale(playerLevel) * (float)caution;
+
             // Phase 1 — cheap rank, no navigation (reachability is gated in phase 2 via GeneratePath,
             // which works at Start; CanNavigateFully needs a provider that isn't wired until ticks).
             var candidates = new List<Scored>();
@@ -98,7 +103,16 @@ namespace Bots.VibeGrinder.Selection
                 // never crosses the zone for density, but density still decides among nearby spots.
                 float ratio = dist / Math.Max(1f, S.ProximityHalfDistance);
                 float proximityFactor = 1f / (1f + ratio * ratio);
-                float baseScore = c.Members.Count * purity * proximityFactor / (1f + threat);
+
+                // Hostile packing the elite-only danger model can't see: worst simultaneous-add knot.
+                // Neutral-heavy camps (the bread-and-butter) score 0 here and keep full density value.
+                int hostilePack = crowdWeight > 0f && S.SpotCrowdPenalty > 0f
+                    ? WorstHostilePack(c.Members, S.PullCrowdRadius) : 0;
+                int packExcess = Math.Max(0, hostilePack - 1);
+                float survFactor = packExcess > 0
+                    ? 1f / (1f + S.SpotCrowdPenalty * packExcess * crowdWeight) : 1f;
+
+                float baseScore = c.Members.Count * purity * proximityFactor / (1f + threat) * survFactor;
 
                 candidates.Add(new Scored
                 {
@@ -107,6 +121,7 @@ namespace Bots.VibeGrinder.Selection
                     Score = baseScore,
                     Threat = threat,
                     GuardPack = guardPack,
+                    HostilePack = hostilePack,
                 });
             }
 
@@ -147,14 +162,14 @@ namespace Bots.VibeGrinder.Selection
                 SpotClass cls = DangerEvaluator.Classify(sc.Threat, sc.GuardPack, pathDanger, contested);
 
                 Logging.WriteDebug(
-                    "[VibeGrinder]  cand#{0} score={1:F1} threat={2:F1} guardPack={3} pathDanger={4:F1} contested={5} mobs={6} dist={7:F0} -> {8} @ {9}",
-                    i, sc.Score, sc.Threat, sc.GuardPack, pathDanger, contested, sc.Cluster.Members.Count,
+                    "[VibeGrinder]  cand#{0} score={1:F1} threat={2:F1} guardPack={3} hostilePack={4} pathDanger={5:F1} contested={6} mobs={7} dist={8:F0} -> {9} @ {10}",
+                    i, sc.Score, sc.Threat, sc.GuardPack, sc.HostilePack, pathDanger, contested, sc.Cluster.Members.Count,
                     playerLoc.Distance2D(sc.Cluster.Centroid), cls, sc.Cluster.Centroid);
 
                 if (cls == SpotClass.Dangerous) { dangerousDropped++; continue; }
                 if (cls == SpotClass.Risky && contested && !scarcityLenient) { contestedSkipped++; continue; }
 
-                GrindSpot spot = BuildSpot(sc.Cluster, mapId, cls);
+                GrindSpot spot = BuildSpot(sc.Cluster, mapId, cls, sc.Score);
                 if (cls == SpotClass.Safe && bestSafe == null)
                     bestSafe = spot;
                 else if (cls == SpotClass.Risky && bestRisky == null)
@@ -175,7 +190,7 @@ namespace Bots.VibeGrinder.Selection
             return chosen;
         }
 
-        private static GrindSpot BuildSpot(Cluster c, uint mapId, SpotClass cls)
+        private static GrindSpot BuildSpot(Cluster c, uint mapId, SpotClass cls, float score)
         {
             return new GrindSpot
             {
@@ -186,6 +201,7 @@ namespace Bots.VibeGrinder.Selection
                 Factions = c.Members.Select(m => m.Faction).Distinct().ToList(),
                 DominantMaxLevel = c.Members.Count > 0 ? (int)c.Members.Average(m => m.MaxLevel) : 0,
                 Classification = cls,
+                Score = score,
             };
         }
 
@@ -204,6 +220,31 @@ namespace Bots.VibeGrinder.Selection
             public float Score;
             public float Threat;
             public bool GuardPack;
+            public int HostilePack;
+        }
+
+        /// <summary>
+        /// Worst simultaneous-add count in a cluster: centred on each hostile (proximity-aggro)
+        /// member, how many hostile members sit within <paramref name="radius"/>. Neutral members
+        /// don't count — they won't pile on when you single-pull. 0 = no hostiles at all.
+        /// </summary>
+        private int WorstHostilePack(List<MobSpawn> members, float radius)
+        {
+            float r2 = radius * radius;
+            int worst = 0;
+            for (int i = 0; i < members.Count; i++)
+            {
+                if (!_factions.HostileFactions.Contains(members[i].Faction)) continue;
+                int n = 1;
+                for (int j = 0; j < members.Count; j++)
+                {
+                    if (j == i) continue;
+                    if (!_factions.HostileFactions.Contains(members[j].Faction)) continue;
+                    if (members[i].Point.DistanceSqr(members[j].Point) <= r2) n++;
+                }
+                if (n > worst) worst = n;
+            }
+            return worst;
         }
 
         /// <summary>Greedy clustering (same approach as CreatureSpawnQueries), keeping member lists.</summary>

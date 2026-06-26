@@ -149,5 +149,59 @@ namespace Bots.VibeGrinder
         [Setting, Styx.Helpers.DefaultValue(false)]
         [Category("Survival"), Description("Allow flight-path travel between continents (off for overnight).")]
         public bool AllowTaxiTravel { get; set; }
+
+        /// <summary>
+        /// Add-avoidance level taper, shared by pull weighting and spot selection so they can't drift:
+        /// 1 at/below PullCrowdFullLevel, linear down to 0 at/above PullCrowdLevelCeiling.
+        /// </summary>
+        public float CrowdLevelScale(int level)
+        {
+            if (PullCrowdLevelCeiling <= 0 || level >= PullCrowdLevelCeiling)
+                return 0f;
+            float span = System.Math.Max(1, PullCrowdLevelCeiling - PullCrowdFullLevel);
+            return System.Math.Clamp((float)(PullCrowdLevelCeiling - level) / span, 0f, 1f);
+        }
+
+        // ---- Pull discipline (add avoidance) ----
+        [Setting, Styx.Helpers.DefaultValue(12f)]
+        [Category("Survival"), Description("Pull bias: a candidate mob with HOSTILE (proximity-aggro) neighbours within this radius (yd) is deprioritised, so the bot opens on isolated mobs and avoids dragging a pack. Neutral wildlife doesn't count (single-pull is safe). 0 disables.")]
+        public float PullCrowdRadius { get; set; }
+
+        [Setting, Styx.Helpers.DefaultValue(60f)]
+        [Category("Survival"), Description("Score penalty per hostile add-risk neighbour when choosing what to pull. Higher = avoid packs harder. Deprioritises only, never blocks a pull. 0 disables.")]
+        public float PullCrowdPenalty { get; set; }
+
+        [Setting, Styx.Helpers.DefaultValue(15)]
+        [Category("Survival"), Description("At/below this level pull add-avoidance runs at full strength — no class can handle hostile packs this early. Above it the penalty tapers linearly toward PullCrowdLevelCeiling (so it's roughly half-strength around 30, 'semi-afraid').")]
+        public int PullCrowdFullLevel { get; set; }
+
+        [Setting, Styx.Helpers.DefaultValue(50)]
+        [Category("Survival"), Description("Level at/above which pull add-avoidance turns off entirely — by now most classes have AoE/cooldowns and density is pure upside. Between PullCrowdFullLevel and here it scales linearly. 0 disables avoidance everywhere.")]
+        public int PullCrowdLevelCeiling { get; set; }
+
+        // ---- Adaptive add-fear (escalate on pack deaths, ease on real progress) ----
+        [Setting, Styx.Helpers.DefaultValue(2)]
+        [Category("Survival"), Description("Attackers on you at the moment of death for it to count as a 'pack death' that raises crowd caution. 2 = an add helped kill you.")]
+        public int PackDeathAttackers { get; set; }
+
+        [Setting, Styx.Helpers.DefaultValue(0.75f)]
+        [Category("Survival"), Description("How much the crowd-caution multiplier rises per pack death (it multiplies the pull penalty). 0 disables adaptive fear.")]
+        public float CrowdCautionStep { get; set; }
+
+        [Setting, Styx.Helpers.DefaultValue(3f)]
+        [Category("Survival"), Description("Ceiling on the crowd-caution multiplier, so a bad night can't make pulling impossible.")]
+        public float CrowdCautionMax { get; set; }
+
+        [Setting, Styx.Helpers.DefaultValue(0.5f)]
+        [Category("Survival"), Description("Amount crowd caution eases per progress event — a level-up, an area switch, or a completed clean kill streak. Event-driven, never idle wall-clock.")]
+        public float CrowdCautionEase { get; set; }
+
+        [Setting, Styx.Helpers.DefaultValue(25)]
+        [Category("Survival"), Description("Kills with no death that complete a 'clean streak' and ease crowd caution one step. 0 disables streak easing.")]
+        public int CrowdCautionKillStreak { get; set; }
+
+        [Setting, Styx.Helpers.DefaultValue(0.15f)]
+        [Category("Survival"), Description("How hard a spot's score is cut for hostile mobs packed within PullCrowdRadius — applied per extra hostile in the worst knot, scaled by the same level taper and crowd-caution as pulls. A factor, not a veto. 0 ignores spot crowding in selection.")]
+        public float SpotCrowdPenalty { get; set; }
     }
 }

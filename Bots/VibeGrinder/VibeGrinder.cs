@@ -11,6 +11,7 @@ using Styx.Logic.BehaviorTree;
 using Styx.Logic.Combat;
 using Styx.Logic.Pathing;
 using Styx.Logic.POI;
+using Styx.WoWInternals.WoWObjects;
 using TreeSharp;
 using Action = TreeSharp.Action;
 
@@ -88,6 +89,8 @@ namespace Bots.VibeGrinder
             // Reuse LevelBot's target/loot filters (faction + blackspot + loot rules).
             Targeting.Instance.IncludeTargetsFilter += LevelBot.LevelBotIncludeTargetsFilter;
             LootTargeting.Instance.IncludeTargetsFilter += LevelBot.LevelbotIncludeLootsFilter;
+            // Pull discipline: bias FirstUnit toward isolated mobs so we don't open on a pack.
+            Targeting.Instance.WeighTargetsFilter += WeighTargetsAvoidPacks;
 
             _onKill = args => _supervisor.RecordKill();
             BotEvents.Player.OnMobKilled += _onKill;
@@ -120,7 +123,7 @@ namespace Bots.VibeGrinder
             uint map = me.MapId;
             _factions.Build(map);
 
-            GrindSpot spot = _selector.SelectBest(map, me.Location, me.Level, _supervisor.ActiveBlacklist());
+            GrindSpot spot = _selector.SelectBest(map, me.Location, me.Level, _supervisor.ActiveBlacklist(), _supervisor.CrowdCautionFactor);
             if (spot == null)
             {
                 Logging.Write(System.Drawing.Color.Orange,
@@ -137,10 +140,59 @@ namespace Bots.VibeGrinder
             return RunStatus.Success;
         }
 
+        /// <summary>
+        /// Pull discipline: deprioritise (never remove) mobs that have *hostile* neighbours within
+        /// PullCrowdRadius, so FirstUnit — the mob we open on — is the most isolated one available.
+        /// Only proximity-aggro mobs (reaction ≤ Hostile) count: neutral wildlife — the bulk of
+        /// low-level grind targets — won't add when you single-pull one of a pack, so a dense beast
+        /// camp must NOT be penalised. (Caveat: an AoE opener like War Stomp can still aggro nearby
+        /// neutrals — that's a routine concern, not a pull-selection one.) A squishy lowbie can't
+        /// survive real adds; selection rewards density, so without this the bot opens on whichever
+        /// hostile is nearest and drags its friends in. The penalty scales down with level and turns
+        /// off past PullCrowdLevelCeiling — by then you have AoE/cooldowns and density is upside.
+        /// Pre-pull only: once in combat we leave weighting alone so the routine can retarget to
+        /// whatever's actually hitting us.
+        /// </summary>
+        private void WeighTargetsAvoidPacks(System.Collections.Generic.List<Targeting.TargetPriority> units)
+        {
+            if (StyxWoW.Me.Combat) return;
+            var s = VibeGrinderSettings.Instance;
+            if (s.PullCrowdPenalty <= 0f || s.PullCrowdRadius <= 0f) return;
+
+            // Squishy-lowbie concern: full strength at/below PullCrowdFullLevel, tapering off by
+            // PullCrowdLevelCeiling (you have AoE/cooldowns; density is upside).
+            float levelScale = s.CrowdLevelScale(StyxWoW.Me.Level);
+            if (levelScale <= 0f) return;
+            // Adaptive: scale up the more we've been dying to packs (eased by progress).
+            float caution = _supervisor != null ? (float)_supervisor.CrowdCautionFactor : 1f;
+            float penalty = s.PullCrowdPenalty * levelScale * caution;
+
+            float r2 = s.PullCrowdRadius * s.PullCrowdRadius;
+            for (int i = 0; i < units.Count; i++)
+            {
+                WoWUnit a = units[i].Object.ToUnit();
+                if (a == null) continue;
+
+                int addRisk = 0;
+                for (int j = 0; j < units.Count; j++)
+                {
+                    if (j == i) continue;
+                    WoWUnit b = units[j].Object.ToUnit();
+                    // Only mobs that aggro on proximity drag in as adds; neutrals stay put.
+                    if (b != null && b.MyReaction <= WoWUnitReaction.Hostile
+                        && a.Location.DistanceSqr(b.Location) <= r2)
+                        addRisk++;
+                }
+                if (addRisk > 0)
+                    units[i].Score -= addRisk * penalty;
+            }
+        }
+
         public override void Stop()
         {
             Targeting.Instance.IncludeTargetsFilter -= LevelBot.LevelBotIncludeTargetsFilter;
             LootTargeting.Instance.IncludeTargetsFilter -= LevelBot.LevelbotIncludeLootsFilter;
+            Targeting.Instance.WeighTargetsFilter -= WeighTargetsAvoidPacks;
             if (_onKill != null)
             {
                 BotEvents.Player.OnMobKilled -= _onKill;
