@@ -155,7 +155,7 @@ namespace Bots.VibeGrinder
         public bool AllowTaxiTravel { get; set; }
 
         [Setting, Styx.Helpers.DefaultValue(false)]
-        [Category("Mailing"), Description("Mail valuables to a bank alt during vendor runs. Requires MailRecipient set + MailWhite/MailGreen enabled in General settings, and mailbox locations in GrindMobs.db (re-run GrindMobsExtractor). The bot's best food/drink are auto-protected from mailing/selling. Off by default.")]
+        [Category("Mailing"), Description("Mail valuables to a bank alt during vendor runs. Requires MailRecipient set + MailWhite/MailGreen enabled in General settings, and mailbox locations in Mailboxes.db (re-run GrindMobsExtractor). Enemy-faction-territory mailboxes are skipped automatically. The bot's best food/drink are auto-protected from mailing/selling. Off by default.")]
         public bool EnableMailing { get; set; }
 
         /// <summary>

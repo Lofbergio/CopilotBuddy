@@ -6,6 +6,7 @@ using Styx.Helpers;
 using Styx.Logic.AreaManagement;
 using Styx.Logic.Pathing;
 using Styx.Logic.Profiles;
+using Styx.WoWInternals;
 
 namespace Bots.VibeGrinder.Synthesis
 {
@@ -93,10 +94,44 @@ namespace Bots.VibeGrinder.Synthesis
             if (mgr == null) return;
 
             mgr.ForcedMailboxes.Clear();
-            foreach (WoWPoint pt in MailboxQueries.GetMailboxesOnMap(map))
-                mgr.ForcedMailboxes.Add(new Mailbox(pt));
 
-            Logging.Write("[VibeGrinder] Loaded {0} mailbox location(s) for map {1}.", mgr.ForcedMailboxes.Count, map);
+            // Skip mailboxes in enemy-faction territory: one guarded by NPCs the player is hostile to
+            // (an Alliance town for a Horde char) would get the bot killed walking in. Nearby factions
+            // are precomputed offline; resolve them live so one DB is correct for both factions. On an
+            // older Mailboxes.db (no faction data) every record's list is empty → all kept (prior behaviour).
+            WoWFaction myFaction = StyxWoW.Me?.FactionTemplate.Faction;
+            int skipped = 0;
+            foreach (MailboxRecord mb in MailboxQueries.GetMailboxesWithFactionsOnMap(map))
+            {
+                if (myFaction != null && IsEnemyTerritory(myFaction, mb.NearbyFactions))
+                {
+                    skipped++;
+                    continue;
+                }
+                mgr.ForcedMailboxes.Add(new Mailbox(mb.Location));
+            }
+
+            Logging.Write("[VibeGrinder] Loaded {0} mailbox location(s) for map {1} ({2} skipped as enemy territory).",
+                mgr.ForcedMailboxes.Count, map, skipped);
+        }
+
+        /// <summary>True if the player is hostile to any faction-aligned NPC near the mailbox.</summary>
+        private static bool IsEnemyTerritory(WoWFaction myFaction, List<int> nearbyFactions)
+        {
+            foreach (int faction in nearbyFactions)
+            {
+                if (faction <= 0) continue;
+                try
+                {
+                    if (myFaction.RelationTo(new WoWFaction((uint)faction)) < WoWUnitReaction.Neutral)
+                        return true;
+                }
+                catch
+                {
+                    // Unknown/invalid faction template — ignore, same as FactionResolver.
+                }
+            }
+            return false;
         }
     }
 }
