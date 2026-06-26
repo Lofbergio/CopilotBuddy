@@ -69,5 +69,88 @@ namespace Styx.Database
             }
             return result;
         }
+
+        /// <summary>
+        /// Mailboxes on a map together with the factions of faction-aligned NPCs near each one
+        /// (extracted offline). Callers resolve those factions live against the player to skip
+        /// enemy-territory mailboxes. On an older DB without the mailbox_factions table, every
+        /// record comes back with an empty faction list — i.e. "no faction info, keep it" — so the
+        /// feature degrades safely instead of erroring.
+        /// </summary>
+        public static List<MailboxRecord> GetMailboxesWithFactionsOnMap(uint mapId)
+        {
+            EnsureInitialized();
+            var result = new List<MailboxRecord>();
+            if (!_isAvailable) return result;
+
+            if (!HasFactionTable())
+            {
+                foreach (WoWPoint pt in GetMailboxesOnMap(mapId))
+                    result.Add(new MailboxRecord(pt, new List<int>()));
+                return result;
+            }
+
+            const string sql = @"
+SELECT m.id, m.x, m.y, m.z, f.faction
+FROM mailboxes m LEFT JOIN mailbox_factions f ON f.mailbox_id = m.id
+WHERE m.map_id = @map";
+            try
+            {
+                var byId = new Dictionary<long, MailboxRecord>();
+                using var cmd = new SQLiteCommand(sql, _connection);
+                cmd.Parameters.AddWithValue("@map", (int)mapId);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    long id = reader.GetInt64(0);
+                    if (!byId.TryGetValue(id, out var rec))
+                    {
+                        rec = new MailboxRecord(
+                            new WoWPoint(reader.GetFloat(1), reader.GetFloat(2), reader.GetFloat(3)),
+                            new List<int>());
+                        byId[id] = rec;
+                        result.Add(rec);
+                    }
+                    if (!reader.IsDBNull(4))
+                        rec.NearbyFactions.Add(reader.GetInt32(4));
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.WriteDebug("[Mailboxes] faction query failed: {0}", ex.Message);
+            }
+            return result;
+        }
+
+        private static bool? _hasFactionTable;
+
+        private static bool HasFactionTable()
+        {
+            if (_hasFactionTable.HasValue) return _hasFactionTable.Value;
+            try
+            {
+                using var cmd = new SQLiteCommand(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='mailbox_factions'", _connection);
+                _hasFactionTable = cmd.ExecuteScalar() != null;
+            }
+            catch
+            {
+                _hasFactionTable = false;
+            }
+            return _hasFactionTable.Value;
+        }
+    }
+
+    /// <summary>A mailbox location plus the factions of faction-aligned NPCs spawned near it.</summary>
+    public class MailboxRecord
+    {
+        public WoWPoint Location { get; }
+        public List<int> NearbyFactions { get; }
+
+        public MailboxRecord(WoWPoint location, List<int> nearbyFactions)
+        {
+            Location = location;
+            NearbyFactions = nearbyFactions;
+        }
     }
 }
