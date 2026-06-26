@@ -664,7 +664,8 @@ namespace CopilotBuddy.UI
 
         private void ToggleButtons(bool enabled)
         {
-            btnLoadProfile.IsEnabled = enabled;
+            // Load Profile is additionally gated on the selected bot needing a profile.
+            btnLoadProfile.IsEnabled = enabled && (BotManager.Current?.RequiresProfile ?? true);
             btnStart.IsEnabled = enabled;
             btnSettings.IsEnabled = enabled;
             cmbBotSelector.IsEnabled = enabled;
@@ -673,6 +674,20 @@ namespace CopilotBuddy.UI
             btnDevTools.IsEnabled = enabled;
             btnPlugins.IsEnabled = enabled;
             EnhancedMode.IsEnabled = enabled;
+        }
+
+        /// <summary>
+        /// Enables Load Profile only for bots that actually need a profile. Profile-less bots
+        /// (VibeGrinder, CombatBot, LazyRaider, DungeonBuddy) pick their own targets, so the button
+        /// is disabled with a hint. Never enables while the bot is running.
+        /// </summary>
+        private void RefreshProfileButton()
+        {
+            bool needsProfile = BotManager.Current?.RequiresProfile ?? true;
+            btnLoadProfile.IsEnabled = !_isRunning && needsProfile;
+            btnLoadProfile.ToolTip = needsProfile
+                ? null
+                : "This bot picks its own targets — no profile needed.";
         }
 
         private void SetStatus(string status)
@@ -751,7 +766,7 @@ namespace CopilotBuddy.UI
             btnStopGroup.Visibility = Visibility.Hidden;
             // Re-enable all controls that StartBot() disabled. Mirrors BotEvents_OnBotStopped
             // so the UI unlocks even when the worker thread never started (e.g. no profile loaded).
-            btnLoadProfile.IsEnabled = true;
+            RefreshProfileButton();
             cmbBotSelector.IsEnabled = true;
             btnSettings.IsEnabled = true;
             btnBotConfig.IsEnabled = true;
@@ -828,7 +843,7 @@ namespace CopilotBuddy.UI
             // Reset Pause MenuItem header back to "Pause" (HB 6.2.3 method_36 pattern).
             if (btnStopArrow.ContextMenu?.Items[0] is System.Windows.Controls.MenuItem pauseItem)
                 pauseItem.Header = "Pause";
-            btnLoadProfile.IsEnabled = true;
+            RefreshProfileButton();
             cmbBotSelector.IsEnabled = true;
             btnSettings.IsEnabled = true;
             SetStatus("CopilotBuddy Stopped");
@@ -859,7 +874,10 @@ namespace CopilotBuddy.UI
             if (botName != null && BotManager.Instance.Bots.TryGetValue(botName, out BotBase? bot) && bot != null)
             {
                 BotManager.Instance.SetCurrent(bot);
-                
+
+                // Disable Load Profile for profile-less bots (e.g. VibeGrinder).
+                RefreshProfileButton();
+
                 // Show Bot Config button — always visible when a bot is selected.
                 // The handler checks ConfigurationForm at click time.
                 btnBotConfig.Visibility = Visibility.Visible;
