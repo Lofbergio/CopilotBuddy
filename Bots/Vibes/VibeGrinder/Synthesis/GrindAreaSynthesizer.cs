@@ -1,12 +1,9 @@
-using System.Collections.Generic;
 using Bots.VibeGrinder.Selection;
+using Bots.Vibes.Shared;
 using Styx;
-using Styx.Database;
 using Styx.Helpers;
 using Styx.Logic.AreaManagement;
-using Styx.Logic.Pathing;
 using Styx.Logic.Profiles;
-using Styx.WoWInternals;
 
 namespace Bots.VibeGrinder.Synthesis
 {
@@ -19,10 +16,14 @@ namespace Bots.VibeGrinder.Synthesis
     public class GrindAreaSynthesizer
     {
         private readonly GrindArea _area = new GrindArea();
+        private readonly MailboxService _mailboxes;
         private Profile _profile;
         private uint _installedMap = uint.MaxValue;
-        // Mailboxes found unsafe at runtime (live hostile nearby) — kept out across reloads.
-        private readonly System.Collections.Generic.HashSet<WoWPoint> _runtimeUnsafeMailboxes = new();
+
+        public GrindAreaSynthesizer(MailboxService mailboxes)
+        {
+            _mailboxes = mailboxes;
+        }
 
         public GrindArea Area => _area;
 
@@ -86,7 +87,7 @@ namespace Bots.VibeGrinder.Synthesis
         }
 
         /// <summary>
-        /// Feed the map's mailbox locations (shared Mailboxes.db, via core MailboxQueries) into the
+        /// Feed the map's faction-safe mailboxes (shared MailboxService → Mailboxes.db) into the
         /// synthetic profile's ForcedMailboxes so LevelBot's reused mail behaviour can find one.
         /// Empty if Mailboxes.db is absent — mailing then just stays idle.
         /// </summary>
@@ -94,69 +95,7 @@ namespace Bots.VibeGrinder.Synthesis
         {
             var mgr = ProfileManager.CurrentProfile?.MailboxManager;
             if (mgr == null) return;
-
-            mgr.ForcedMailboxes.Clear();
-
-            // Skip mailboxes in enemy-faction territory: one guarded by NPCs the player is hostile to
-            // (an Alliance town for a Horde char) would get the bot killed walking in. Nearby factions
-            // are precomputed offline; resolve them live so one DB is correct for both factions. On an
-            // older Mailboxes.db (no faction data) every record's list is empty → all kept (prior behaviour).
-            WoWFaction myFaction = StyxWoW.Me?.FactionTemplate.Faction;
-            int skipped = 0;
-            foreach (MailboxRecord mb in MailboxQueries.GetMailboxesWithFactionsOnMap(map))
-            {
-                if (_runtimeUnsafeMailboxes.Contains(mb.Location)
-                    || (myFaction != null && IsEnemyTerritory(myFaction, mb.NearbyFactions)))
-                {
-                    skipped++;
-                    continue;
-                }
-                mgr.ForcedMailboxes.Add(new Mailbox(mb.Location));
-            }
-
-            Logging.Write("[VibeGrinder] Loaded {0} mailbox location(s) for map {1} ({2} skipped as enemy territory).",
-                mgr.ForcedMailboxes.Count, map, skipped);
-        }
-
-        /// <summary>
-        /// Session-blacklist a mailbox found unsafe at runtime (a live hostile by it that the static
-        /// DB couldn't see — Aldor/Scryer, a griefed town, a roamer). Drops it now and keeps it out
-        /// of future reloads. Idempotent.
-        /// </summary>
-        public void BlacklistMailbox(WoWPoint location)
-        {
-            if (!_runtimeUnsafeMailboxes.Add(location))
-                return;
-            ProfileManager.CurrentProfile?.MailboxManager?.ForcedMailboxes.RemoveAll(m => m.Location == location);
-        }
-
-        /// <summary>
-        /// Enemy territory = the player is hostile to a nearby NPC AND none of the player's own
-        /// faction stands there. The "own faction present" clause keeps shared sanctuaries like
-        /// Dalaran usable (both Horde and Alliance NPCs spawn within range there). Limitation: this
-        /// reads only static FactionTemplate.dbc reactions (WoWFaction.CompareFactions ignores
-        /// reputation), so reputation-gated hostility — Aldor/Scryer guards in Shattrath turning on
-        /// the opposing-rep player — is invisible. Those tier mailboxes fall back to the central
-        /// neutral Shattrath mailbox in practice; a rep-aware check would be needed for full cover.
-        /// </summary>
-        private static bool IsEnemyTerritory(WoWFaction myFaction, List<int> nearbyFactions)
-        {
-            bool hostile = false, friendly = false;
-            foreach (int faction in nearbyFactions)
-            {
-                if (faction <= 0) continue;
-                try
-                {
-                    WoWUnitReaction r = myFaction.RelationTo(new WoWFaction((uint)faction));
-                    if (r < WoWUnitReaction.Neutral) hostile = true;
-                    else if (r > WoWUnitReaction.Neutral) friendly = true;   // our own faction's guards are here
-                }
-                catch
-                {
-                    // Unknown/invalid faction template — ignore, same as FactionResolver.
-                }
-            }
-            return hostile && !friendly;
+            mgr.ForcedMailboxes = _mailboxes.LoadSafeMailboxes(map);
         }
     }
 }

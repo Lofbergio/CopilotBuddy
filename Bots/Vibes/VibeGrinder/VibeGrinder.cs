@@ -4,6 +4,7 @@ using Bots.VibeGrinder.Data;
 using Bots.VibeGrinder.Selection;
 using Bots.VibeGrinder.Supervision;
 using Bots.VibeGrinder.Synthesis;
+using Bots.Vibes.Shared;
 using Styx;
 using Styx.Helpers;
 using Styx.Logic;
@@ -13,7 +14,6 @@ using Styx.Logic.Inventory;
 using Styx.Logic.Pathing;
 using Styx.Logic.POI;
 using Styx.Logic.Profiles;
-using Styx.WoWInternals;
 using Styx.WoWInternals.WoWObjects;
 using TreeSharp;
 using Action = TreeSharp.Action;
@@ -30,6 +30,7 @@ namespace Bots.VibeGrinder
     public class VibeGrinder : BotBase
     {
         private FactionResolver _factions;
+        private MailboxService _mailboxes;
         private SpotSelector _selector;
         private GrindAreaSynthesizer _synth;
         private GrindSupervisor _supervisor;
@@ -37,9 +38,7 @@ namespace Bots.VibeGrinder
         private BotEvents.Player.MobKilledDelegate _onKill;
         private bool _spotInstalled;
         private readonly System.Diagnostics.Stopwatch _selectRetry = new System.Diagnostics.Stopwatch();
-        private uint _protectedFoodId, _protectedDrinkId;
-        private readonly System.Diagnostics.Stopwatch _consumableSync = new System.Diagnostics.Stopwatch();
-        private readonly System.Diagnostics.Stopwatch _mailSafetyThrottle = new System.Diagnostics.Stopwatch();
+        private readonly ConsumableProtection _consumables = new ConsumableProtection();
 
         public override string Name => "VibeGrinder";
 
@@ -88,7 +87,8 @@ namespace Bots.VibeGrinder
             _selectRetry.Reset();
 
             _factions = new FactionResolver();
-            _synth = new GrindAreaSynthesizer();
+            _mailboxes = new MailboxService();
+            _synth = new GrindAreaSynthesizer(_mailboxes);
             _selector = new SpotSelector(_factions);
             _supervisor = new GrindSupervisor(_selector, _synth, _factions);
 
@@ -204,7 +204,7 @@ namespace Bots.VibeGrinder
                 BotEvents.Player.OnMobKilled -= _onKill;
                 _onKill = null;
             }
-            ClearConsumableProtection();
+            _consumables.Clear();
             Bots.DungeonBuddy.Avoidance.WorldObstacleManager.Shutdown();
         }
 
@@ -213,86 +213,12 @@ namespace Bots.VibeGrinder
             float speed = StyxWoW.Me.MovementInfo.CurrentSpeed;
             Navigator.PathPrecision = System.Math.Clamp(speed * 0.15f, 1.5f, 10f);
             _supervisor?.Pulse();
-            SyncConsumableProtection();
-            CheckMailboxSafety();
-        }
-
-        /// <summary>
-        /// Runtime backstop for mailbox safety. The offline DB filter can't see reputation-gated
-        /// hostility (Aldor/Scryer guards turning on the opposing-rep player, a griefed neutral town)
-        /// or roamers — WoWFaction reactions are static. So when we're heading to a mailbox and close
-        /// enough that its surroundings are loaded, check live reactions; if anything hostile stands
-        /// by it, blacklist it for the session and clear the POI so the engine reroutes.
-        /// </summary>
-        private void CheckMailboxSafety()
-        {
-            if (!VibeGrinderSettings.Instance.EnableMailing || _synth == null) return;
-
-            BotPoi poi = BotPoi.Current;
-            if (poi == null || poi.Type != PoiType.Mail) return;
-
-            var me = StyxWoW.Me;
-            if (me == null) return;
-
-            WoWPoint loc = poi.Location;
-            // Only meaningful once close enough that the mailbox's surroundings are in the object manager.
-            if (me.Location.DistanceSqr(loc) > 70f * 70f) return;
-            if (_mailSafetyThrottle.IsRunning && _mailSafetyThrottle.Elapsed.TotalSeconds < 2) return;
-            _mailSafetyThrottle.Restart();
-
-            const float guardR2 = 25f * 25f;
-            bool hostileNear = false;
-            foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>())
+            if (VibeGrinderSettings.Instance.EnableMailing)
             {
-                if (u == null || !u.IsValid || u.IsDead) continue;
-                if (u.MyReaction < WoWUnitReaction.Neutral && u.Location.DistanceSqr(loc) <= guardR2)
-                {
-                    hostileNear = true;
-                    break;
-                }
-            }
-            if (!hostileNear) return;
-
-            Logging.Write(System.Drawing.Color.Orange,
-                "[VibeGrinder] Live hostile by the mailbox at {0} (reputation/roamer the DB can't see) — "
-                + "blacklisting for this session, rerouting.", loc);
-            _synth.BlacklistMailbox(loc);
-            BotPoi.Clear("VibeGrinder: unsafe mailbox");
-        }
-
-        /// <summary>
-        /// Keep the bot's current best food/drink in the runtime protected-items list so mailing or
-        /// selling (e.g. MailWhite makes consumables eligible) never strips what it rests with.
-        /// Refreshes as the best tier changes (level-up, restock); cleared on Stop. Only while mailing.
-        /// </summary>
-        private void SyncConsumableProtection()
-        {
-            if (!VibeGrinderSettings.Instance.EnableMailing) return;
-            if (_consumableSync.IsRunning && _consumableSync.Elapsed.TotalSeconds < 10) return;
-            _consumableSync.Restart();
-
-            uint food = Consumable.GetBestFood(false)?.Entry ?? 0;
-            if (food != _protectedFoodId)
-            {
-                if (_protectedFoodId != 0) ProtectedItemsManager.Remove(_protectedFoodId);
-                if (food != 0) ProtectedItemsManager.Add(food);
-                _protectedFoodId = food;
-            }
-
-            uint drink = Consumable.GetBestDrink(false)?.Entry ?? 0;
-            if (drink != _protectedDrinkId)
-            {
-                if (_protectedDrinkId != 0) ProtectedItemsManager.Remove(_protectedDrinkId);
-                if (drink != 0) ProtectedItemsManager.Add(drink);
-                _protectedDrinkId = drink;
+                _consumables.Sync();                       // keep best food/drink out of MailWhite
+                _mailboxes.CheckCurrentMailboxSafety();    // shared runtime backstop (see MailboxService)
             }
         }
 
-        private void ClearConsumableProtection()
-        {
-            if (_protectedFoodId != 0) { ProtectedItemsManager.Remove(_protectedFoodId); _protectedFoodId = 0; }
-            if (_protectedDrinkId != 0) { ProtectedItemsManager.Remove(_protectedDrinkId); _protectedDrinkId = 0; }
-            _consumableSync.Reset();
-        }
     }
 }
