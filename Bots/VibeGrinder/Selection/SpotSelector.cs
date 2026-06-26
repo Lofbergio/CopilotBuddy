@@ -73,9 +73,10 @@ namespace Bots.VibeGrinder.Selection
             Logging.WriteDebug("[VibeGrinder] {0} clusters from {1} spawns (minMobs={2}, scarce={3}).",
                 clusters.Count, eligible.Count, minMobs, scarce);
 
-            // Phase 1 — cheap rank with hard gates. Count drop reasons so "no spot" is explainable.
+            // Phase 1 — cheap rank, no navigation (reachability is gated in phase 2 via GeneratePath,
+            // which works at Start; CanNavigateFully needs a provider that isn't wired until ticks).
             var candidates = new List<Scored>();
-            int dropThin = 0, dropBlacklist = 0, dropFar = 0, dropUnreachable = 0;
+            int dropThin = 0, dropBlacklist = 0, dropFar = 0;
             foreach (Cluster c in clusters)
             {
                 if (c.Members.Count < minMobs) { dropThin++; continue; }
@@ -83,7 +84,6 @@ namespace Bots.VibeGrinder.Selection
 
                 float dist = playerLoc.Distance2D(c.Centroid);
                 if (dist > S.MaxTravelDistance) { dropFar++; continue; }
-                if (!Navigator.CanNavigateFully(playerLoc, c.Centroid)) { dropUnreachable++; continue; }
 
                 int totalNear = GrindMobsRepository.CountSpawnsNear(mapId, c.Centroid, S.GrindRadius);
                 float purity = totalNear <= 0 ? 1f : (float)c.Members.Count / totalNear;
@@ -102,8 +102,8 @@ namespace Bots.VibeGrinder.Selection
                 });
             }
 
-            Logging.Write("[VibeGrinder] {0} candidates after gates (dropped: {1} thin, {2} blacklisted, {3} too far, {4} unreachable).",
-                candidates.Count, dropThin, dropBlacklist, dropFar, dropUnreachable);
+            Logging.Write("[VibeGrinder] {0} candidates after gates (dropped: {1} thin, {2} blacklisted, {3} too far).",
+                candidates.Count, dropThin, dropBlacklist, dropFar);
 
             if (candidates.Count == 0)
                 return null;
@@ -111,18 +111,30 @@ namespace Bots.VibeGrinder.Selection
             // Scarcity also relaxes contention tolerance (accept Risky-by-contention).
             bool scarcityLenient = scarce || candidates.Count <= S.ScarcityCandidateFloor;
 
-            // Phase 2 — danger gate on the top-N by base score.
+            // Phase 2 — reachability + danger gate over a bounded budget of top candidates, so a few
+            // unreachable high-scorers don't starve out reachable ones.
             var ranked = candidates.OrderByDescending(c => c.Score).ToList();
-            int topN = Math.Min(S.TopCandidatesForPathCheck, ranked.Count);
+            int budget = Math.Min(ranked.Count, Math.Max(S.TopCandidatesForPathCheck, 12));
 
             GrindSpot bestSafe = null;
             GrindSpot bestRisky = null;
-            int dangerousDropped = 0, contestedSkipped = 0;
+            int dangerousDropped = 0, contestedSkipped = 0, dropUnreachable = 0;
 
-            for (int i = 0; i < topN; i++)
+            for (int i = 0; i < budget; i++)
             {
                 Scored sc = ranked[i];
-                float pathDanger = DangerEvaluator.PathDanger(playerLoc, sc.Cluster.Centroid, mapId, playerLevel);
+
+                // GeneratePath works at Start (lazy Tripper tiles, no provider needed). A null/empty
+                // or partial path = unreachable. One pathfind feeds both this gate and path-danger.
+                WoWPoint[] path = Navigator.GeneratePath(playerLoc, sc.Cluster.Centroid);
+                if (path == null || path.Length == 0)
+                {
+                    dropUnreachable++;
+                    Logging.WriteDebug("[VibeGrinder]  cand#{0} unreachable (no path) @ {1}", i, sc.Cluster.Centroid);
+                    continue;
+                }
+
+                float pathDanger = DangerEvaluator.PathDanger(path, mapId, playerLevel);
                 bool contested = HostilePlayersNear(sc.Cluster.Centroid, S.GrindRadius) > 0;
                 SpotClass cls = DangerEvaluator.Classify(sc.Threat, sc.GuardPack, pathDanger, contested);
 
@@ -146,10 +158,10 @@ namespace Bots.VibeGrinder.Selection
 
             GrindSpot chosen = bestSafe ?? bestRisky;
             if (chosen == null)
-                Logging.Write("[VibeGrinder] No acceptable spot among top {0} ({1} Dangerous, {2} contested-skipped). " +
-                    "Lower danger strictness, raise MaxTravelDistance, or move closer.", topN, dangerousDropped, contestedSkipped);
+                Logging.Write("[VibeGrinder] No acceptable spot in top {0} ({1} unreachable, {2} Dangerous, {3} contested-skipped). " +
+                    "Lower danger strictness, raise MaxTravelDistance, or move closer.", budget, dropUnreachable, dangerousDropped, contestedSkipped);
             else
-                Logging.Write("[VibeGrinder] Chosen {0} spot, score {1:F1}, {2} yd away.",
+                Logging.Write("[VibeGrinder] Chosen {0} spot, score {1:F1}, {2:F0} yd away.",
                     chosen.Classification, chosen.Score, playerLoc.Distance2D(chosen.Centroid));
 
             return chosen;

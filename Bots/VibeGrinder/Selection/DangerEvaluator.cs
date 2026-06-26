@@ -43,15 +43,19 @@ namespace Bots.VibeGrinder.Selection
         }
 
         /// <summary>
-        /// Danger of the route to a spot. Densely samples the generated path and accumulates threat
-        /// from hazards within CorridorRadius of the line. A guard pack on the path ⇒ +∞ (Dangerous).
-        /// Returns 0 when no path (reachability is gated separately by the caller).
+        /// Danger of the route to a spot, given a precomputed path. Densely samples the path and
+        /// accumulates threat from hazards within CorridorRadius. A guard pack on the path ⇒ +∞.
+        /// The caller supplies the path (and treats a null/empty path as unreachable) so one
+        /// GeneratePath call serves both the reachability gate and this danger check.
         /// </summary>
-        public static float PathDanger(WoWPoint from, WoWPoint centroid, uint mapId, int playerLevel)
+        public static float PathDanger(WoWPoint[] path, uint mapId, int playerLevel)
         {
-            WoWPoint[] path = Navigator.GeneratePath(from, centroid);
+            // Caller pre-checks reachability (null/empty path); guard anyway.
             if (path == null || path.Length == 0)
-                return 0f;
+                return float.PositiveInfinity;
+
+            WoWPoint from = path[0];
+            WoWPoint centroid = path[path.Length - 1];
 
             // One DB pull covering the straight-line region, then in-memory checks per sample.
             WoWPoint mid = new WoWPoint((from.X + centroid.X) / 2f, (from.Y + centroid.Y) / 2f, (from.Z + centroid.Z) / 2f);
