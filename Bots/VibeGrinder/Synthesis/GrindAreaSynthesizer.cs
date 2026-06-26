@@ -115,23 +115,33 @@ namespace Bots.VibeGrinder.Synthesis
                 mgr.ForcedMailboxes.Count, map, skipped);
         }
 
-        /// <summary>True if the player is hostile to any faction-aligned NPC near the mailbox.</summary>
+        /// <summary>
+        /// Enemy territory = the player is hostile to a nearby NPC AND none of the player's own
+        /// faction stands there. The "own faction present" clause keeps shared sanctuaries like
+        /// Dalaran usable (both Horde and Alliance NPCs spawn within range there). Limitation: this
+        /// reads only static FactionTemplate.dbc reactions (WoWFaction.CompareFactions ignores
+        /// reputation), so reputation-gated hostility — Aldor/Scryer guards in Shattrath turning on
+        /// the opposing-rep player — is invisible. Those tier mailboxes fall back to the central
+        /// neutral Shattrath mailbox in practice; a rep-aware check would be needed for full cover.
+        /// </summary>
         private static bool IsEnemyTerritory(WoWFaction myFaction, List<int> nearbyFactions)
         {
+            bool hostile = false, friendly = false;
             foreach (int faction in nearbyFactions)
             {
                 if (faction <= 0) continue;
                 try
                 {
-                    if (myFaction.RelationTo(new WoWFaction((uint)faction)) < WoWUnitReaction.Neutral)
-                        return true;
+                    WoWUnitReaction r = myFaction.RelationTo(new WoWFaction((uint)faction));
+                    if (r < WoWUnitReaction.Neutral) hostile = true;
+                    else if (r > WoWUnitReaction.Neutral) friendly = true;   // our own faction's guards are here
                 }
                 catch
                 {
                     // Unknown/invalid faction template — ignore, same as FactionResolver.
                 }
             }
-            return false;
+            return hostile && !friendly;
         }
     }
 }
