@@ -96,6 +96,7 @@ namespace Bots.VibeGrinder.Selection
                 candidates.Add(new Scored
                 {
                     Cluster = c,
+                    Dist = dist,
                     Score = baseScore,
                     Threat = threat,
                     GuardPack = guardPack,
@@ -111,10 +112,11 @@ namespace Bots.VibeGrinder.Selection
             // Scarcity also relaxes contention tolerance (accept Risky-by-contention).
             bool scarcityLenient = scarce || candidates.Count <= S.ScarcityCandidateFloor;
 
-            // Phase 2 — reachability + danger gate over a bounded budget of top candidates, so a few
-            // unreachable high-scorers don't starve out reachable ones.
-            var ranked = candidates.OrderByDescending(c => c.Score).ToList();
-            int budget = Math.Min(ranked.Count, Math.Max(S.TopCandidatesForPathCheck, 12));
+            // Phase 2 — NEAREST-FIRST: grind the closest viable spot, not the globally densest one
+            // across the zone. Density is already gated by minMobs; here we just want the nearest
+            // reachable, non-Dangerous cluster. Bounded budget caps the pathfinds.
+            var ranked = candidates.OrderBy(c => c.Dist).ToList();
+            int budget = Math.Min(ranked.Count, Math.Max(S.TopCandidatesForPathCheck, 25));
 
             GrindSpot bestSafe = null;
             GrindSpot bestRisky = null;
@@ -153,7 +155,7 @@ namespace Bots.VibeGrinder.Selection
                     bestRisky = spot;
 
                 if (bestSafe != null)
-                    break; // ranked desc — first Safe is the best Safe
+                    break; // nearest-first — the first Safe is the nearest Safe
             }
 
             GrindSpot chosen = bestSafe ?? bestRisky;
@@ -192,6 +194,7 @@ namespace Bots.VibeGrinder.Selection
         private sealed class Scored
         {
             public Cluster Cluster;
+            public float Dist;
             public float Score;
             public float Threat;
             public bool GuardPack;
