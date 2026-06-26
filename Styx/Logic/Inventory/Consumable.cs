@@ -50,14 +50,18 @@ namespace Styx.Logic.Inventory
 
             foreach (var item in food)
             {
-                if (item.StackCount > bestStack && item.ItemInfo.RequiredLevel > bestLevel && item.ItemInfo.RequiredLevel <= playerLevel)
-                {
-                    if (!includeSpecialtyItems && !item.ItemSpells.All(IsBasicFoodOrDrink))
-                        continue;
+                int level = item.ItemInfo.RequiredLevel;
+                if (level > playerLevel)
+                    continue;
+                if (!includeSpecialtyItems && !item.ItemSpells.All(IsBasicFoodOrDrink))
+                    continue;
 
+                // Best = highest usable tier; tie-break by larger stack.
+                if (level > bestLevel || (level == bestLevel && item.StackCount > bestStack))
+                {
                     bestItem = item;
+                    bestLevel = level;
                     bestStack = item.StackCount;
-                    bestLevel = item.ItemInfo.RequiredLevel;
                 }
             }
 
@@ -81,14 +85,18 @@ namespace Styx.Logic.Inventory
 
             foreach (var item in drinks)
             {
-                if (item.StackCount > bestStack && item.ItemInfo.RequiredLevel > bestLevel && item.ItemInfo.RequiredLevel <= playerLevel)
-                {
-                    if (!includeSpecialtyItems && !item.ItemSpells.All(IsBasicFoodOrDrink))
-                        continue;
+                int level = item.ItemInfo.RequiredLevel;
+                if (level > playerLevel)
+                    continue;
+                if (!includeSpecialtyItems && !item.ItemSpells.All(IsBasicFoodOrDrink))
+                    continue;
 
+                // Best = highest usable tier; tie-break by larger stack.
+                if (level > bestLevel || (level == bestLevel && item.StackCount > bestStack))
+                {
                     bestItem = item;
+                    bestLevel = level;
                     bestStack = item.StackCount;
-                    bestLevel = item.ItemInfo.RequiredLevel;
                 }
             }
 
