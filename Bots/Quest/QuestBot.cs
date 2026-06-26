@@ -75,18 +75,31 @@ public class QuestBot : BotBase
 
     public override void Start()
     {
+        // RequiresProfile=false is the explicit opt-in for self-feeding bots (VibeQuester,
+        // WholesomeAutoQuest) that generate + LoadNew their own profile — normally before
+        // base.Start(). If one reaches here without a profile/order yet, return quietly instead of
+        // throwing: the throw bubbles to the bot's 1s restart watchdog and spams once a second.
+        // Its scan loop then loads a profile and reinitializes the order. A real profile-driven run
+        // (RequiresProfile=true) still aborts loudly so a missing/under-covering profile is obvious.
         if (ProfileManager.CurrentOuterProfile == (Profile)null)
+        {
+            if (!RequiresProfile) return;
             throw new HonorbuddyUnableToStartException("You haven't loaded a profile.");
+        }
         // Profile loaded, but no sub-profile covers the current character level.
         // HB 3.3.5a pattern: explicit abort with level info rather than NPE.
         if (ProfileManager.CurrentProfile == (Profile)null)
         {
+            if (!RequiresProfile) return;
             int level = ObjectManager.Me?.Level ?? 0;
             throw new HonorbuddyUnableToStartException(
                 $"No sub-profile found for your level ({level}). Load a profile that covers level {level}.");
         }
         if (ProfileManager.CurrentProfile.QuestOrder.Count <= 0)
+        {
+            if (!RequiresProfile) return;
             throw new HonorbuddyUnableToStartException("Can not start quest bot - this profile does not contain a quest order.");
+        }
         QuestState.Instance.InitializeFromProfile(ProfileManager.CurrentProfile);
         LootTargeting.Instance.IncludeTargetsFilter += new IncludeTargetsFilterDelegate(LevelBot.LevelbotIncludeLootsFilter);
         Targeting.Instance.IncludeTargetsFilter += new IncludeTargetsFilterDelegate(QuestBot.QuestIncludeTargetsFilter);
