@@ -14,6 +14,7 @@ using Styx.Logic.Inventory;
 using Styx.Logic.Pathing;
 using Styx.Logic.POI;
 using Styx.Logic.Profiles;
+using Styx.WoWInternals;
 using Styx.WoWInternals.WoWObjects;
 using TreeSharp;
 using Action = TreeSharp.Action;
@@ -38,6 +39,7 @@ namespace Bots.VibeGrinder
         private BotEvents.Player.MobKilledDelegate _onKill;
         private bool _spotInstalled;
         private readonly System.Diagnostics.Stopwatch _selectRetry = new System.Diagnostics.Stopwatch();
+        private readonly System.Diagnostics.Stopwatch _safeRest = new System.Diagnostics.Stopwatch();
 
         public override string Name => "VibeGrinder";
 
@@ -63,8 +65,20 @@ namespace Bots.VibeGrinder
                         // is installed; once installed this gate falls through.
                         new Decorator(ctx => !_spotInstalled, new Action(ctx => EnsureSpotSelected())),
                         LevelBot.CreateDeathBehavior(),
+                        // Safe-rest positioning: before Singular sits to eat/drink in the middle of a camp,
+                        // back off to a clear spot. Returns Failure (→ falls through to normal combat/rest)
+                        // when already clear, boxed in, in combat, or not resting — so it can't deadlock.
+                        new Action(ctx => SafeRestReposition()),
                         LevelBot.CreateCombatBehavior(),
-                        LevelBot.CreateLootBehavior(),
+                        // Transit discipline (only while OnVendorRun): don't detour to loot corpses on the
+                        // way to a vendor — stay moving, out of the danger corridor sooner (drops are
+                        // grabbed later when grinding).
+                        new Decorator(ctx => !OnVendorRun(), LevelBot.CreateLootBehavior()),
+                        // ...and deliberately single-pull the most isolated hostile in pull range instead of
+                        // body-pulling blind into a pack. TransitPeel must TARGET the mob (CanPull keys off
+                        // CurrentTarget, and CombatBehavior only targets on a *switch* — our POI already ==
+                        // FirstUnit, so without an explicit target it never pulls and the POI thrashes).
+                        new Decorator(ctx => OnVendorRun() && !StyxWoW.Me.Combat, new Action(ctx => TransitPeel())),
                         LevelBot.CreateVendorBehavior(),
                         _supervisor != null ? _supervisor.RelocationCheck() : new Action(ctx => RunStatus.Failure),
                         LevelBot.CreateRoamBehavior(),
@@ -97,6 +111,9 @@ namespace Bots.VibeGrinder
             LootTargeting.Instance.IncludeTargetsFilter += LevelBot.LevelbotIncludeLootsFilter;
             // Pull discipline: bias FirstUnit toward isolated mobs so we don't open on a pack.
             Targeting.Instance.WeighTargetsFilter += WeighTargetsAvoidPacks;
+            // Transit discipline: surface nearby hostiles during vendor runs (the LevelBot filter adds
+            // none then → uncontrolled body-pulls) so TransitPeel can single them off deliberately.
+            Targeting.Instance.IncludeTargetsFilter += TransitIncludeHostiles;
 
             _onKill = args => _supervisor.RecordKill();
             BotEvents.Player.OnMobKilled += _onKill;
@@ -201,11 +218,144 @@ namespace Bots.VibeGrinder
             }
         }
 
+        /// <summary>
+        /// True while travelling to service a vendor (sell/repair/mail/buy/train/flight master). The
+        /// transit discipline (no loot detours, hostile-only peel) applies only in this window; once a
+        /// peel sets a Kill POI or we're grinding/roaming this is false, so normal play is untouched.
+        /// </summary>
+        /// <summary>
+        /// Safe-rest positioning. Singular's Rest just MoveStops + eats where it stands (Rest.cs), so after a
+        /// fight it sits at low HP/mana inside the camp and the next spawn kills it. Before that, if a hostile
+        /// is within SafeRestDangerRange, back off directly away from the nearest one to a reachable point and
+        /// re-check next tick. Returns Success while repositioning; Failure (→ Rest proceeds in place) when
+        /// already clear, already eating/drinking, in combat, can't path away, or after an 8s cap — so it
+        /// never deadlocks or interrupts an in-progress sit.
+        /// </summary>
+        private RunStatus SafeRestReposition()
+        {
+            var me = StyxWoW.Me;
+            bool eligible = me != null && !me.Combat && !me.IsDead && !me.IsGhost && !me.Mounted
+                            && !me.HasAura("Food") && !me.HasAura("Drink");
+            if (eligible)
+            {
+                var s = VibeGrinderSettings.Instance;
+                bool usesMana = me.PowerType == WoWPowerType.Mana;
+                bool resting = me.HealthPercent <= s.SafeRestHealthPct || (usesMana && me.ManaPercent <= s.SafeRestManaPct);
+                if (resting && _safeRest.Elapsed.TotalSeconds <= 8)
+                {
+                    float danger = s.SafeRestDangerRange;
+                    WoWUnit nearest = null;
+                    double nearestDist = double.MaxValue;
+                    foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(true, false))
+                    {
+                        if (u == null || u.Dead || !u.IsHostile) continue;
+                        double d = u.Distance;
+                        if (d <= danger && d < nearestDist) { nearestDist = d; nearest = u; }
+                    }
+                    if (nearest != null)
+                    {
+                        // Back off directly away from the nearest hostile to just past the danger range.
+                        float dx = me.Location.X - nearest.Location.X;
+                        float dy = me.Location.Y - nearest.Location.Y;
+                        float len = (float)System.Math.Sqrt(dx * dx + dy * dy);
+                        if (len < 0.1f) { dx = 1f; dy = 0f; len = 1f; }   // degenerate: any direction
+                        float scale = (danger + 12f) / len;
+                        WoWPoint away = new WoWPoint(me.Location.X + dx * scale, me.Location.Y + dy * scale, me.Location.Z);
+
+                        WoWPoint[] path = Navigator.GeneratePath(me.Location, away);
+                        if (path != null && path.Length > 0)
+                        {
+                            if (!_safeRest.IsRunning) _safeRest.Restart();
+                            TreeRoot.StatusText = "VibeGrinder: backing off to rest safely";
+                            Navigator.MoveTo(away);
+                            return RunStatus.Success;
+                        }
+                    }
+                }
+            }
+            if (_safeRest.IsRunning) _safeRest.Reset();
+            return RunStatus.Failure;
+        }
+
+        private static bool OnVendorRun()
+        {
+            switch (BotPoi.Current.Type)
+            {
+                case PoiType.Sell:
+                case PoiType.Repair:
+                case PoiType.Mail:
+                case PoiType.Buy:
+                case PoiType.Train:
+                case PoiType.Fly:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Transit targeting: LevelBotIncludeTargetsFilter adds NO faction targets during a vendor run
+        /// (HB 6.2.3: "only aggro mobs"), which is exactly why the bot body-pulls — it can't see a pack
+        /// until it's already standing in it. Re-add nearby *hostiles* within pull range (neutrals don't
+        /// proximity-aggro, so they never add on a trek) so the caution weighting (WeighTargetsAvoidPacks)
+        /// orders them and TransitPeel can single them off. Pre-combat, on-trek only; nothing else acts on
+        /// these (Roam excludes vendor POIs, the pull branch is gated on Kill) — only TransitPeel consumes them.
+        /// </summary>
+        private void TransitIncludeHostiles(System.Collections.Generic.List<WoWObject> incoming,
+                                            System.Collections.Generic.HashSet<WoWObject> outgoing)
+        {
+            if (!OnVendorRun() || StyxWoW.Me.Combat) return;
+            double pull = Targeting.PullDistance;
+            if (pull <= 0) return;
+            foreach (WoWObject obj in incoming)
+            {
+                if (obj is WoWUnit u && obj is not WoWPlayer
+                    && !u.Dead
+                    && u.MyReaction <= WoWUnitReaction.Hostile   // hostiles only — neutrals won't body-pull us
+                    && u.Distance <= pull)
+                {
+                    outgoing.Add(obj);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Transit peel: on a vendor run, before anything body-pulls us, deliberately single-pull the most
+        /// isolated hostile in pull range (TargetList is caution-ordered: FirstUnit == [0]) by handing it to
+        /// the existing CombatBehavior as a Kill POI. Returns Success once a POI is set (next tick pulls);
+        /// Failure (→ VendorBehavior resumes travel) when there's nothing to peel. Skips when essentially at
+        /// the vendor so it interacts instead of starting a fight on the doorstep.
+        /// </summary>
+        private RunStatus TransitPeel()
+        {
+            var me = StyxWoW.Me;
+            // At the destination — let VendorBehavior interact; don't peel on the doorstep.
+            if (BotPoi.Current.Location.Distance(me.Location) <= 12f) return RunStatus.Failure;
+
+            double pull = Targeting.PullDistance;
+            if (pull <= 0) return RunStatus.Failure;
+
+            foreach (WoWUnit u in Targeting.Instance.TargetList)   // caution-ordered: most isolated first
+            {
+                if (u == null || u.Dead) continue;
+                if (u.MyReaction > WoWUnitReaction.Hostile) continue;   // hostiles only — neutrals won't body-pull
+                if (u.Distance > pull || !u.InLineOfSpellSight) continue;
+                // Target it: CanPull()/Singular key off CurrentTarget, and CombatBehavior only calls
+                // Target() when switching off a different POI — ours already is FirstUnit, so without this
+                // the mob is never targeted, the pull never fires, and the Kill/vendor POI thrashes.
+                u.Target();
+                BotPoi.Current = new BotPoi(u, PoiType.Kill);
+                return RunStatus.Success;
+            }
+            return RunStatus.Failure;
+        }
+
         public override void Stop()
         {
             Targeting.Instance.IncludeTargetsFilter -= LevelBot.LevelBotIncludeTargetsFilter;
             LootTargeting.Instance.IncludeTargetsFilter -= LevelBot.LevelbotIncludeLootsFilter;
             Targeting.Instance.WeighTargetsFilter -= WeighTargetsAvoidPacks;
+            Targeting.Instance.IncludeTargetsFilter -= TransitIncludeHostiles;
             if (_onKill != null)
             {
                 BotEvents.Player.OnMobKilled -= _onKill;
