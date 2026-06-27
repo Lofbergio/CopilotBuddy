@@ -45,16 +45,27 @@ namespace Bots.VibeGrinder.Synthesis
             // NeedToSell/NeedToRepair read them off the profile though, so project them onto the synthetic
             // profile through the normal profile-config (XML) path — no core Profile setters. Without this the
             // profile keeps its defaults (MinFreeBagSlots 0 = sell only at 100%-full bags → never funds training).
-            // SellWhiteJunk (opt-in, default OFF) lets the vendor sweep clear low-value white junk (cooking
-            // meat). It's gated behind the setting because selling whites is only safe with the VendorGuard
-            // plugin enabled — off by default means greys-only selling, which never touches your gear/cloth.
+            //
+            // Sell mask is wide (grey→blue, NEVER purple); VibeGrinder's OnVendorItems hook then protects
+            // every item whose disposition isn't Vendor, so only true junk is sold (ItemDisposition decides).
+            // Mail flags are all OFF: mailing is driven entirely by the OnMailItems hook, not by quality.
+            // NeedToMail() doesn't depend on these flags, so mail runs still trigger. See Loot/CLAUDE.md.
             var vg = VibeGrinderSettings.Instance;
             // Durability is now an int percent (0-100) — no float-locale round-trip risk. Project it
             // onto the profile as the 0-1 fraction LevelBot's repair gate expects.
             var xml = new XElement("HBProfile",
                 new XElement("MinFreeBagSlots", vg.MinFreeBagSlots),
                 new XElement("MinDurability", vg.MinDurabilityFraction.ToString(CultureInfo.InvariantCulture)),
-                new XElement("SellWhite", vg.SellWhiteJunk));
+                new XElement("SellGrey", true),
+                new XElement("SellWhite", true),
+                new XElement("SellGreen", true),
+                new XElement("SellBlue", true),
+                new XElement("SellPurple", false),
+                new XElement("MailGrey", false),
+                new XElement("MailWhite", false),
+                new XElement("MailGreen", false),
+                new XElement("MailBlue", false),
+                new XElement("MailPurple", false));
             _profile = new Profile(xml, null) { Name = "VibeGrinder (synthetic)" };
             // Empty VendorManager + this flag => vendor tree auto-resolves sell/repair/food from data.bin.
             CharacterSettings.Instance.FindVendorsAutomatically = true;

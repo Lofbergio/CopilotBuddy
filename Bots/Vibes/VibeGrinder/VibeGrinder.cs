@@ -38,7 +38,6 @@ namespace Bots.VibeGrinder
         private BotEvents.Player.MobKilledDelegate _onKill;
         private bool _spotInstalled;
         private readonly System.Diagnostics.Stopwatch _selectRetry = new System.Diagnostics.Stopwatch();
-        private readonly ConsumableProtection _consumables = new ConsumableProtection();
 
         public override string Name => "VibeGrinder";
 
@@ -101,6 +100,13 @@ namespace Bots.VibeGrinder
 
             _onKill = args => _supervisor.RecordKill();
             BotEvents.Player.OnMobKilled += _onKill;
+
+            // Loot disposition: VibeGrinder owns sell/mail item selection via ItemDisposition (one source
+            // of truth, category-aware). The sell hook protects everything that isn't Vendor; the mail hook
+            // queues everything that is Mail. The synthetic profile's sell mask + zeroed mail flags make
+            // these hooks the deciders (see GrindAreaSynthesizer.EnsureProfile and Loot/CLAUDE.md).
+            Vendors.OnVendorItems += OnVendorSweep;
+            Vendors.OnMailItems += OnMailSweep;
 
             Bots.DungeonBuddy.Avoidance.WorldObstacleManager.Initialize();
         }
@@ -205,7 +211,8 @@ namespace Bots.VibeGrinder
                 BotEvents.Player.OnMobKilled -= _onKill;
                 _onKill = null;
             }
-            _consumables.Clear();
+            Vendors.OnVendorItems -= OnVendorSweep;
+            Vendors.OnMailItems -= OnMailSweep;
             _synth?.RestoreCharacterSettings();   // undo the global FoodAmount/DrinkAmount seeding
             GrindMobsRepository.Shutdown();   // release the DB handle so a later Start re-opens cleanly
             Bots.DungeonBuddy.Avoidance.WorldObstacleManager.Shutdown();
@@ -219,13 +226,72 @@ namespace Bots.VibeGrinder
             Navigator.PathPrecision = System.Math.Clamp(me.MovementInfo.CurrentSpeed * 0.15f, 1.5f, 10f);
             _supervisor?.Pulse();
 
-            var s = VibeGrinderSettings.Instance;
-            // Protect rest food/drink whenever the engine may sell whites — mailing OR SellWhiteJunk.
-            // (Gating only on EnableMailing left consumables sellable during a plain white-vendor run.)
-            if (s.EnableMailing || s.SellWhiteJunk)
-                _consumables.Sync();
-            if (s.EnableMailing)
+            if (VibeGrinderSettings.Instance.EnableMailing)
                 _mailboxes?.CheckCurrentMailboxSafety();   // shared runtime backstop (see MailboxService)
+        }
+
+        /// <summary>
+        /// Sell hook (Vendors.OnVendorItems): protect every carried item whose disposition isn't Vendor.
+        /// The profile sell mask is wide (grey→blue), so SellAllItems would otherwise sell white cloth,
+        /// BoE greens, etc. — protecting non-Vendor items leaves exactly the junk to be sold.
+        /// </summary>
+        private void OnVendorSweep(SellItemsEventArgs args)
+        {
+            var me = StyxWoW.Me;
+            if (me == null) return;
+
+            int protectedCount = 0, willMail = 0;
+            foreach (WoWItem item in me.CarriedItems)
+            {
+                if (item == null) continue;
+                DispositionAction action;
+                try
+                {
+                    action = ItemDisposition.Classify(item);
+                }
+                catch (System.Exception ex)
+                {
+                    // Fail safe: an item we can't classify must NOT be sold (the sell mask is wide).
+                    action = DispositionAction.Keep;
+                    Logging.WriteDebug("[VibeGrinder] disposition classify failed for {0} ({1}) — protecting.",
+                        item.Name, ex.Message);
+                }
+                if (action != DispositionAction.Vendor && !args.IdExceptions.Contains(item.Entry))
+                {
+                    args.IdExceptions.Add(item.Entry);
+                    protectedCount++;
+                    if (action == DispositionAction.Mail) willMail++;
+                }
+                Logging.WriteDebug("[VibeGrinder] disposition: {0} [{1}/{2}{3}] -> {4}",
+                    item.Name, item.ItemInfo?.ItemClass, item.ItemInfo?.Quality,
+                    item.IsSoulbound ? "/SB" : "", action);
+            }
+            if (protectedCount > 0)
+                Logging.Write("[VibeGrinder] Vendor sweep: protecting {0} item(s) from sale ({1} queued to mail, rest kept).",
+                    protectedCount, willMail);
+        }
+
+        /// <summary>
+        /// Mail hook (Vendors.OnMailItems): queue every carried item whose disposition is Mail. The
+        /// classifier has already excluded soulbound/epics, so everything here is mailable BoE value.
+        /// </summary>
+        private void OnMailSweep(MailItemsEventArgs args)
+        {
+            var me = StyxWoW.Me;
+            if (me == null) return;
+
+            int queued = 0;
+            foreach (WoWItem item in me.CarriedItems)
+            {
+                if (item == null) continue;
+                if (ItemDisposition.Classify(item) == DispositionAction.Mail && !args.AdditionalItems.Contains(item))
+                {
+                    args.AdditionalItems.Add(item);
+                    queued++;
+                }
+            }
+            if (queued > 0)
+                Logging.Write("[VibeGrinder] Mail run: queuing {0} valuable item(s) for the bank.", queued);
         }
 
     }
