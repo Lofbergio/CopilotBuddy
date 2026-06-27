@@ -25,6 +25,7 @@ namespace Bots.VibeGrinder.Synthesis
         // Originals of the global CharacterSettings we seed, so Stop() can restore them (don't
         // permanently overwrite a user's deliberate 0 = "never buy consumables").
         private int _origFoodAmount = -1, _origDrinkAmount = -1;
+        private bool? _origRessAtSpiritHealers;
 
         public GrindAreaSynthesizer(MailboxService mailboxes)
         {
@@ -80,6 +81,14 @@ namespace Bots.VibeGrinder.Synthesis
                 CharacterSettings.Instance.FoodAmount = 20;
             if (CharacterSettings.Instance.DrinkAmount == 0)
                 CharacterSettings.Instance.DrinkAmount = 20;
+
+            // Unattended corpse-camp escape. With this OFF (the default) LevelBot's 3-strike camp
+            // protection is dead code, so a corpse camped by a hostile pack spins forever: it can't res
+            // (mobs in range), never escalates to the spirit healer, and the death subtree keeps the tree
+            // busy so the supervisor can't relocate. Enabling it lets a *camped* corpse res at the
+            // graveyard (normal deaths still corpse-run) — which then frees the supervisor to relocate.
+            _origRessAtSpiritHealers = CharacterSettings.Instance.RessAtSpiritHealers;
+            CharacterSettings.Instance.RessAtSpiritHealers = true;
 
             ProfileManager.UseSyntheticProfile(_profile);
         }
@@ -150,6 +159,7 @@ namespace Bots.VibeGrinder.Synthesis
         {
             if (_origFoodAmount >= 0) { CharacterSettings.Instance.FoodAmount = _origFoodAmount; _origFoodAmount = -1; }
             if (_origDrinkAmount >= 0) { CharacterSettings.Instance.DrinkAmount = _origDrinkAmount; _origDrinkAmount = -1; }
+            if (_origRessAtSpiritHealers.HasValue) { CharacterSettings.Instance.RessAtSpiritHealers = _origRessAtSpiritHealers.Value; _origRessAtSpiritHealers = null; }
         }
     }
 }
