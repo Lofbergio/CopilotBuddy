@@ -1103,8 +1103,7 @@ namespace Styx.Logic.Pathing
 			if (unit == null)
 			{
 				Logging.WriteDiagnostic("Could not find unit to interact with.");
-				_currentPathIndex++;   // skip this off-mesh hop instead of wedging here forever (parity with HandleInteractObject)
-				return MoveResult.Moved;
+				return MoveResult.Failed;
 			}
 
 			if (!unit.WithinInteractRange)

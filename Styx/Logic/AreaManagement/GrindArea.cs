@@ -133,11 +133,6 @@ namespace Styx.Logic.AreaManagement
 					return true;
 				if (LastHotSpot == _currentHotspot && Targeting.Instance.TargetList.Count == 0)
 					return true;
-				// Never arrived (LastHotSpot != current) and nothing to kill after 2 min → the hotspot is
-				// blocked/unreachable; cut losses well before the 15-min hard cap instead of busy-looping at it.
-				if (LastHotSpot != _currentHotspot && Targeting.Instance.TargetList.Count == 0
-					&& _hotspotTimer.Elapsed.TotalSeconds > 120)
-					return true;
 				if (LastHotSpot == _currentHotspot && LevelbotSettings.Instance.GroundMountFarmingMode)
 					return true;
 				if (LastHotSpot == _currentHotspot && StyxWoW.Me?.Mounted == true && StyxWoW.Me?.Combat == true)

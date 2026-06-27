@@ -1,4 +1,3 @@
-using System;
 using Styx.Helpers;
 using Styx.Logic;
 using Styx.Logic.Pathing;
@@ -18,9 +17,6 @@ namespace CommonBehaviors.Actions
 		private WoWPoint _lastLocation = WoWPoint.Empty;
 		private ulong _lastGuid;
 		private bool _hasLoggedMove;
-		// No-progress give-up (static interact destinations only).
-		private float _stallDist;
-		private DateTime _stallSince = DateTime.MinValue;
 
 		protected override RunStatus Run(object context)
 		{
@@ -110,31 +106,6 @@ namespace CommonBehaviors.Actions
 				case PoiType.Fly:    // Flight master needs close range
 					precision = 4f;  // Close enough to interact
 					break;
-			}
-
-			// No-progress give-up for STATIC interact destinations (vendor/loot/mailbox/trainer/etc.).
-			// These are fixed points: if we can't get within range for 20s we're blocked by terrain
-			// (partial navmesh path). Return Failure so the caller can blacklist/clear instead of walking
-			// at an unreachable point forever. Kill/Hotspot/Quest are excluded — moving targets and roam
-			// handle their own give-up (and would false-trip on legitimately-moving destinations).
-			bool staticDest = botPoi.Type is PoiType.Loot or PoiType.Skin or PoiType.Harvest
-				or PoiType.Sell or PoiType.Buy or PoiType.Mail or PoiType.Repair or PoiType.Train or PoiType.Fly;
-			if (staticDest)
-			{
-				LocalPlayer? meNow = ObjectManager.Me;
-				float dist = meNow != null ? meNow.Location.Distance(_lastLocation) : 0f;
-				if (targetChanged || _stallSince == DateTime.MinValue || dist <= precision || dist < _stallDist - 3f)
-				{
-					_stallDist = dist;
-					_stallSince = DateTime.UtcNow;
-				}
-				else if ((DateTime.UtcNow - _stallSince).TotalSeconds > 20)
-				{
-					Logging.Write("[Move] No progress toward {0} in 20s — giving up (unreachable?).", botPoi);
-					_hasLoggedMove = false;
-					_stallSince = DateTime.MinValue;
-					return RunStatus.Failure;
-				}
 			}
 
 			// HB 6.2.3 pattern: movement always goes through Flightor, which dispatches to
