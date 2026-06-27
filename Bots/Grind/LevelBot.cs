@@ -65,6 +65,20 @@ namespace Bots.Grind
         private static readonly WaitTimer _releaseTimer = WaitTimer.FiveSeconds;
         private static WaitTimer _repairCostTimer = new WaitTimer(TimeSpan.FromMinutes(3.0));
         private static ulong _lastRepairCost;
+        // After a train trip that couldn't afford everything, NeedClassTraining stays set; without a
+        // cooldown the bot walks back to the trainer every tick and never grinds for the money. Throttle
+        // retries so it grinds in between.
+        private static DateTime _nextTrainAttempt = DateTime.MinValue;
+
+        // Combat-stall watchdog: if the current target takes no damage for a long stretch it's evading/
+        // immune/unreachable — blacklist it instead of re-pulling the same mob forever.
+        private static ulong _combatGuid;
+        private static double _combatLastHpPct;
+        private static DateTime _combatHpDropAt = DateTime.MinValue;
+        // Corpse-run progress watchdog: if a ghost can't get closer to its corpse (partial-path / blocked),
+        // fall back to the spirit healer rather than running at an unreachable corpse forever.
+        private static float _corpseMoveLastDist;
+        private static DateTime _corpseMoveProgressAt = DateTime.MinValue;
 
         // Root behavior cache
         private PrioritySelector _rootBehavior;
@@ -238,6 +252,9 @@ namespace Bots.Grind
                                    Targeting.Instance.FirstUnit != null;
                         },
                         new PrioritySelector(
+                            // Progress tracker (always falls through): record target HP each combat tick so
+                            // the stall watchdog below has continuous data even when the routine is casting.
+                            new TreeSharp.Action(ctx => { UpdateCombatProgress(); return RunStatus.Failure; }),
                             new Decorator(
                                 ctx => StyxWoW.Me.Mounted,
                                 new TreeSharp.Action(ctx => Mount.Dismount("Combat"))
@@ -245,11 +262,58 @@ namespace Bots.Grind
                             Routine.HealBehavior,
                             Routine.CombatBuffBehavior,
                             Routine.CombatBehavior,
+                            // No damage dealt to the target for 30s → evading/immune/unreachable. Blacklist it.
+                            new Decorator(
+                                ctx => CombatStalled(),
+                                new TreeSharp.Action(ctx => AbandonStalledTarget())
+                            ),
                             new ActionAlwaysSucceed()
                         )
                     )
                 )
             );
+        }
+
+        /// <summary>Record the current target's HP each combat tick so CombatStalled has continuous data.</summary>
+        private static void UpdateCombatProgress()
+        {
+            WoWUnit u = Targeting.Instance.FirstUnit;
+            if (u == null) { _combatGuid = 0; return; }
+            double hp = u.HealthPercent;
+            if (u.Guid != _combatGuid)
+            {
+                _combatGuid = u.Guid;
+                _combatLastHpPct = hp;
+                _combatHpDropAt = DateTime.UtcNow;
+            }
+            else if (hp < _combatLastHpPct)
+            {
+                _combatLastHpPct = hp;
+                _combatHpDropAt = DateTime.UtcNow;
+            }
+        }
+
+        /// <summary>True when the current target's HP hasn't dropped for 30s — evading/immune/unreachable.</summary>
+        private static bool CombatStalled()
+        {
+            WoWUnit u = Targeting.Instance.FirstUnit;
+            return _combatGuid != 0 && u != null && u.Guid == _combatGuid
+                   && (DateTime.UtcNow - _combatHpDropAt).TotalSeconds > 30;
+        }
+
+        private static void AbandonStalledTarget()
+        {
+            WoWUnit u = Targeting.Instance.FirstUnit;
+            if (u != null)
+            {
+                Logging.Write(System.Drawing.Color.Orange,
+                    "[LB] {0} took no damage in 30s (evading/immune/unreachable?) — blacklisting 3m.", u.Name);
+                Blacklist.Add(u.Guid, TimeSpan.FromMinutes(3));
+            }
+            if (BotPoi.Current.Type == PoiType.Kill)
+                BotPoi.Clear("combat stall");
+            StyxWoW.Me.ClearTarget();
+            _combatGuid = 0;
         }
 
         private static bool CanPull()
@@ -308,6 +372,24 @@ namespace Bots.Grind
                         // HB 4.3.4 smethod_85: Wait up to 10 sec for server to send CorpsePoint
                         new Wait(10, ctx => StyxWoW.Me.CorpsePoint != WoWPoint.Empty, new ActionAlwaysSucceed()),
                         new ActionSetActivity("Moving to corpse"),
+                        // Corpse-run stall → spirit healer. A reachable run keeps closing distance; a
+                        // partial-path/unreachable corpse plateaus. Progress-based, so legit long runs are safe.
+                        new TreeSharp.Action(ctx =>
+                        {
+                            float d = StyxWoW.Me.Location.Distance(StyxWoW.Me.CorpsePoint);
+                            if (_corpseMoveProgressAt == DateTime.MinValue || d < _corpseMoveLastDist - 3f)
+                            {
+                                _corpseMoveLastDist = d;
+                                _corpseMoveProgressAt = DateTime.UtcNow;
+                            }
+                            else if ((DateTime.UtcNow - _corpseMoveProgressAt).TotalSeconds > 30)
+                            {
+                                Logging.Write(System.Drawing.Color.Orange,
+                                    "[LB] No progress toward corpse in 30s (unreachable?) — using the spirit healer.");
+                                ShouldUseSpiritHealer = true;
+                            }
+                            return RunStatus.Success;
+                        }),
                         // HB 4.3.4 smethod_86/87/88: fly if !diedIndoors && (Mounted || CanFly), else walk
                         new PrioritySelector(
                             new Decorator(
@@ -368,6 +450,7 @@ namespace Bots.Grind
                                     Lua.DoString("AcceptXPLoss()");
                                     ShouldUseSpiritHealer = false;
                                     _deathCount = 0;
+                                    _corpseMoveProgressAt = DateTime.MinValue;
                                 })
                             )
                         )
@@ -389,7 +472,7 @@ namespace Bots.Grind
                     new DecoratorContinue(
                         ctx => StyxWoW.Me.IsAlive && !StyxWoW.Me.IsGhost,
                         new Sequence(
-                            new TreeSharp.Action(ctx => _corpseWaitStopwatch.Reset()),
+                            new TreeSharp.Action(ctx => { _corpseWaitStopwatch.Reset(); _corpseMoveProgressAt = DateTime.MinValue; }),
                             new ActionClearPoi("Resurrected"),
                             new ActionAlwaysFail()
                         )
@@ -418,6 +501,17 @@ namespace Bots.Grind
                             new TreeSharp.Action(ctx => GrabCorpse()),
                             new TreeSharp.Action(ctx => _corpseWaitStopwatch.Reset()),
                             new WaitContinue(5, ctx => StyxWoW.Me.IsAlive, null),
+                            // If the grab didn't take (ghost not actually on the corpse), escalate to the
+                            // spirit healer instead of re-running the 40s timer forever.
+                            new DecoratorContinue(
+                                ctx => StyxWoW.Me.IsGhost,
+                                new TreeSharp.Action(ctx =>
+                                {
+                                    Logging.Write(System.Drawing.Color.Orange,
+                                        "[LB] Corpse grab didn't resurrect us — using the spirit healer.");
+                                    ShouldUseSpiritHealer = true;
+                                })
+                            ),
                             new ActionClearPoi("Res timer expired. Grabbed our corpse.")
                         )
                     ),
@@ -753,7 +847,7 @@ namespace Bots.Grind
                                             new TreeSharp.Action(ctx => SleepForLag())
                                         )
                                     ),
-                                    new TreeSharp.Action(ctx => BotPoi.Current.AsObject.Interact()),
+                                    new TreeSharp.Action(ctx => BotPoi.Current.AsObject?.Interact()),   // live ref; may despawn mid-tick
                                     new WaitLuaEvent("LOOT_OPENED", 
                                         () => BotPoi.Current.Type != PoiType.Loot ? 10 : 3,
                                         new TreeSharp.Action(ctx =>
@@ -800,11 +894,13 @@ namespace Bots.Grind
                                 {
                                     Logging.Write("Loot timer exceeded, blacklisting lootable.");
                                     SleepForLag();
+                                    WoWObject obj = BotPoi.Current.AsObject;
+                                    if (obj == null) { BotPoi.Clear("Loot object despawned"); return; }
                                     bool canStillLoot = BotPoi.Current.Type switch
                                     {
-                                        PoiType.Harvest => BotPoi.Current.AsObject.ToGameObject().CanLoot,
-                                        PoiType.Skin => BotPoi.Current.AsObject.ToUnit().CanSkin,
-                                        _ => BotPoi.Current.AsObject.ToUnit().CanLoot
+                                        PoiType.Harvest => obj.ToGameObject().CanLoot,
+                                        PoiType.Skin => obj.ToUnit().CanSkin,
+                                        _ => obj.ToUnit().CanLoot
                                     };
                                     if (canStillLoot)
                                     {
@@ -911,7 +1007,21 @@ namespace Bots.Grind
                         // Move to vendor
                         new Decorator(
                             ctx => BotPoi.Current.Location.Distance(StyxWoW.Me.Location) > 5.0,
-                            new ActionMoveToPoi()
+                            new PrioritySelector(
+                                new ActionMoveToPoi(),
+                                // ActionMoveToPoi returned Failure = no progress for 20s → destination
+                                // unreachable. Blacklist the vendor (if any) and clear so we pick another /
+                                // resume grinding, instead of walking at it forever.
+                                new Sequence(
+                                    new TreeSharp.Action(ctx => Logging.Write(System.Drawing.Color.Orange,
+                                        "Can't reach {0} — blacklisting and moving on.", BotPoi.Current)),
+                                    new DecoratorContinue(
+                                        ctx => BotPoi.Current.AsVendor != null,
+                                        new TreeSharp.Action(ctx => ProfileManager.CurrentProfile.VendorManager.Blacklist.Add(BotPoi.Current.AsVendor))
+                                    ),
+                                    new ActionClearPoi("Destination unreachable")
+                                )
+                            )
                         ),
                         // At vendor
                         new Decorator(
@@ -939,16 +1049,22 @@ namespace Bots.Grind
                                     new Sequence(
                                         new TreeSharp.Action(ctx => Navigator.PlayerMover.MoveStop()),
                                         new TreeSharp.Action(ctx => SleepForLag()),
-                                        new TreeSharp.Action(ctx => BotPoi.Current.AsObject.Interact()),
-                                        new WaitContinue(5, ctx => IsVendorFrameOpen(),
+                                        new TreeSharp.Action(ctx => BotPoi.Current.AsObject?.Interact()),   // live ref; may despawn mid-tick
+                                        // Wait for an ACTIONABLE frame (merchant/mail/trainer/taxi), NOT gossip —
+                                        // gossip is a transit state. Counting it as "arrived" made WaitContinue
+                                        // return immediately and the gossip-selection below never ran (bot wedged
+                                        // on multi-role NPCs).
+                                        new WaitContinue(5, ctx => IsActionableVendorFrameOpen(),
                                             new PrioritySelector(
                                                 new DecoratorFrameIsVisible<GossipFrame>(new Sequence(
                                                     new TreeSharp.Action(ctx =>
                                                     {
-                                                        var entry = GossipFrame.Instance.GossipOptionEntries
-                                                            .FirstOrDefault(e => e.Type == BotPoi.Current.Type.GetGossipType());
-                                                        if (entry.Index >= 0)
-                                                            GossipFrame.Instance.SelectGossipOption(entry.Index);
+                                                        // Match the gossip option by type. GossipEntry is a struct, so
+                                                        // FirstOrDefault returns Index 0 when nothing matches (the >= 0
+                                                        // guard can't detect that) — which would select the wrong option.
+                                                        var gt = BotPoi.Current.Type.GetGossipType();
+                                                        foreach (var e in GossipFrame.Instance.GossipOptionEntries)
+                                                            if (e.Type == gt) { GossipFrame.Instance.SelectGossipOption(e.Index); break; }
                                                     }),
                                                     // HB 6.2.3 fix: delay after gossip selection to let the game
                                                     // process the request and open the correct frame
@@ -973,9 +1089,9 @@ namespace Bots.Grind
                                         )
                                     )
                                 ),
-                                // Vendor frame is open - do actions
+                                // Actionable frame is open - do actions (gossip alone is not actionable)
                                 new Decorator(
-                                    ctx => IsVendorFrameOpen(),
+                                    ctx => IsActionableVendorFrameOpen(),
                                     new PrioritySelector(
                                         // Sell/Repair — HB 6.2.3 pattern: require MerchantFrame visible
                                         new DecoratorIsPoiType(new[] { PoiType.Sell, PoiType.Repair },
@@ -1082,6 +1198,9 @@ namespace Bots.Grind
                                             new ActionDebugString("Training Skills"),
                                             new ActionSetActivity("Training Skills"),
                                             new TreeSharp.Action(ctx => Vendors.TrainSkills()),
+                                            // Back off retries for 5 min; if spells were all learned TrainSkills clears
+                                            // NeedClassTraining so this is moot, otherwise we grind before retrying.
+                                            new TreeSharp.Action(ctx => _nextTrainAttempt = DateTime.UtcNow.AddMinutes(5)),
                                             new TreeSharp.Action(ctx => Lua.DoString("CloseTrainer()")),
                                             new ActionClearPoi("Done training")
                                         ))
@@ -1145,7 +1264,9 @@ namespace Bots.Grind
                 return false;
             if (ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Train) == null)
                 return false;
-            return Vendors.ForceTrainer || Vendors.NeedClassTraining;
+            // ForceTrainer bypasses the cooldown; an organic NeedClassTraining respects it so unaffordable
+            // spells don't yo-yo the bot to the trainer every tick.
+            return Vendors.ForceTrainer || (Vendors.NeedClassTraining && DateTime.UtcNow >= _nextTrainAttempt);
         }
 
         private static bool NeedToRepair()
@@ -1250,6 +1371,15 @@ namespace Bots.Grind
         {
             return MerchantFrame.Instance.IsVisible ||
                    GossipFrame.Instance.IsVisible ||
+                   MailFrame.Instance.IsVisible ||
+                   TrainerFrame.Instance.IsVisible ||
+                   TaxiFrame.Instance.IsVisible;
+        }
+
+        /// <summary>An "arrived" frame we can actually act on — gossip excluded (it's a transit menu).</summary>
+        private static bool IsActionableVendorFrameOpen()
+        {
+            return MerchantFrame.Instance.IsVisible ||
                    MailFrame.Instance.IsVisible ||
                    TrainerFrame.Instance.IsVisible ||
                    TaxiFrame.Instance.IsVisible;
