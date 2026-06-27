@@ -39,16 +39,35 @@ namespace Bots.VibeGrinder.Selection
         {
             var blocked = blacklist != null ? blacklist.ToList() : new List<WoWPoint>();
 
-            GrindSpot best = Search(mapId, playerLoc, playerLevel, blocked, caution);
-            if (best == null && blocked.Count > 0)
+            // Path-gauntlet leniency ladder: prefer a route that avoids over-level hostiles, but if nothing
+            // qualifies, relax rather than idle forever — the user would rather it grind the least-bad route
+            // than stall. Balanced → ×2 → off (off = pre-gauntlet behaviour: accept the best-scored reachable
+            // spot). Each rung keeps the existing blacklist-honoured-then-cleared fallback.
+            int balanced = S.PathGauntletTolerance;
+            int[] ladder = { balanced, balanced * 2, int.MaxValue };
+
+            foreach (int tol in ladder)
             {
-                Styx.Helpers.Logging.Write("[VibeGrinder] No spot outside blacklist; clearing it and retrying once.");
-                best = Search(mapId, playerLoc, playerLevel, new List<WoWPoint>(), caution);
+                GrindSpot best = Search(mapId, playerLoc, playerLevel, blocked, caution, tol);
+                if (best == null && blocked.Count > 0)
+                {
+                    Styx.Helpers.Logging.Write("[VibeGrinder] No spot outside blacklist; clearing it and retrying once.");
+                    best = Search(mapId, playerLoc, playerLevel, new List<WoWPoint>(), caution, tol);
+                }
+                if (best != null)
+                {
+                    if (tol != balanced)
+                        Styx.Helpers.Logging.Write(System.Drawing.Color.Orange,
+                            "[VibeGrinder] Relaxed path-danger strictness ({0}) — no safer-route spot available; " +
+                            "expect to fight through over-level mobs en route.",
+                            tol == int.MaxValue ? "off" : "tolerate " + tol);
+                    return best;
+                }
             }
-            return best;
+            return null;
         }
 
-        private GrindSpot Search(uint mapId, WoWPoint playerLoc, int playerLevel, List<WoWPoint> blocked, double caution)
+        private GrindSpot Search(uint mapId, WoWPoint playerLoc, int playerLevel, List<WoWPoint> blocked, double caution, int pathGauntletTolerance)
         {
             bool scarce = playerLevel <= S.ScarcityLevelCeiling;
             // Scarce: halve the density requirement (floor of 2 — a lone spawn isn't a "spot").
@@ -189,9 +208,21 @@ namespace Bots.VibeGrinder.Selection
                 if (aggroBubble)
                     cls = SpotClass.Dangerous;
 
+                // Over-level hostile gauntlet on the *route* (elite-only PathDanger can't see normal
+                // over-level packs). Reject routes that body-pull us past too many; the ladder in
+                // SelectBest relaxes pathGauntletTolerance (→ off) if nothing safer qualifies.
+                int gauntlet = 0;
+                if (cls != SpotClass.Dangerous && pathGauntletTolerance != int.MaxValue)
+                {
+                    gauntlet = DangerEvaluator.OverlevelHostilesOnPath(
+                        path, mapId, playerLevel, _factions, S.AggroAvoidBuffer, S.PathHostileLevelMargin);
+                    if (gauntlet >= pathGauntletTolerance)
+                        cls = SpotClass.Dangerous;
+                }
+
                 Logging.WriteDebug(
-                    "[VibeGrinder]  cand#{0} score={1:F1} avgLvl={2:F1} threat={3:F1} guardPack={4} hostilePack={5} aggroBubble={6} pathDanger={7:F1} contested={8} mobs={9} dist={10:F0} -> {11} @ {12}",
-                    i, sc.Score, sc.AvgLevel, sc.Threat, sc.GuardPack, sc.HostilePack, aggroBubble, pathDanger, contested, sc.Cluster.Members.Count,
+                    "[VibeGrinder]  cand#{0} score={1:F1} avgLvl={2:F1} threat={3:F1} guardPack={4} hostilePack={5} aggroBubble={6} gauntlet={7} pathDanger={8:F1} contested={9} mobs={10} dist={11:F0} -> {12} @ {13}",
+                    i, sc.Score, sc.AvgLevel, sc.Threat, sc.GuardPack, sc.HostilePack, aggroBubble, gauntlet, pathDanger, contested, sc.Cluster.Members.Count,
                     playerLoc.Distance2D(sc.Cluster.Centroid), cls, sc.Cluster.Centroid);
 
                 if (cls == SpotClass.Dangerous) { dangerousDropped++; continue; }

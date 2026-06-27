@@ -166,6 +166,17 @@ namespace Bots.VibeGrinder
         [Browsable(false)] public float CorridorRadius => 30f;
         [Browsable(false)] public float CorridorDangerCap => 20f;
         [Browsable(false)] public float SafeThreatThreshold => 2f;
+        // Path gauntlet: over-level HOSTILE normals on the route (elite-only PathDanger can't see them).
+        // Margin 2 ⇒ counts hostiles > player+2 (i.e. +3 and up) — a body-pull while running past is lethal
+        // to a squishy lowbie even at +3. Tolerance 2 ⇒ reject a route that crosses ≥2 of them; SelectBest
+        // relaxes this (→ ×2 → off) when no safer-route spot qualifies, so it never idles forever.
+        [Browsable(false)] public int PathHostileLevelMargin => 2;
+        [Browsable(false)] public int PathGauntletTolerance => 2;
+        // Safe-rest: before sitting to eat/drink, back off if a hostile is within SafeRestDangerRange.
+        // Triggers only once HP/mana is low enough that a rest is imminent.
+        [Browsable(false)] public int SafeRestHealthPct => 55;
+        [Browsable(false)] public int SafeRestManaPct => 45;
+        [Browsable(false)] public float SafeRestDangerRange => 30f;
 
         // ---- Supervisor timings ----
         [Browsable(false)] public int SupervisorIntervalSec => 15;

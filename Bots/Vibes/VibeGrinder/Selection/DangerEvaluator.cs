@@ -119,6 +119,50 @@ namespace Bots.VibeGrinder.Selection
             return false;
         }
 
+        /// <summary>
+        /// Over-level hostile *gauntlet* on the travel route. The elites-only PathDanger gate can't see a
+        /// corridor of over-level normal hostiles (e.g. lvl 16-17 raptors to a lvl 13) — yet body-pulling
+        /// several of those while running past is lethal to a squishy lowbie. Counts DISTINCT over-level
+        /// hostiles (faction-hostile, max_level &gt; playerLevel+levelMargin) whose aggro range (buffer)
+        /// the densified path enters. Neutrals are ignored (no walk-by aggro). The caller treats a count
+        /// at/above its tolerance as Dangerous. 0 when buffer/path is empty or nothing qualifies.
+        /// </summary>
+        public static int OverlevelHostilesOnPath(WoWPoint[] path, uint mapId, int playerLevel,
+            FactionResolver factions, float buffer, int levelMargin)
+        {
+            if (buffer <= 0f || path == null || path.Length == 0 || factions == null)
+                return 0;
+
+            WoWPoint from = path[0];
+            WoWPoint to = path[path.Length - 1];
+            WoWPoint mid = new WoWPoint((from.X + to.X) / 2f, (from.Y + to.Y) / 2f, (from.Z + to.Z) / 2f);
+            float span = from.Distance2D(to) / 2f + buffer;
+
+            List<MobSpawn> hazards = GrindMobsRepository.QueryHazardsNear(mapId, mid, span, playerLevel, levelMargin);
+            if (hazards.Count == 0)
+                return 0;
+
+            // Over-level AND hostile only: the rank>=1 elites QueryHazardsNear also returns are handled by
+            // PathDanger's elite gauntlet; here we want the normal-but-over-level hostiles it misses.
+            var hostiles = hazards
+                .Where(h => h.MaxLevel > playerLevel + levelMargin && factions.HostileFactions.Contains(h.Faction))
+                .ToList();
+            if (hostiles.Count == 0)
+                return 0;
+
+            var samples = Densify(path, 20f).ToList();
+            float b2 = buffer * buffer;
+            int crossed = 0;
+            foreach (MobSpawn h in hostiles)
+            {
+                foreach (WoWPoint s in samples)
+                {
+                    if (s.DistanceSqr(h.Point) <= b2) { crossed++; break; }   // path enters this mob's aggro
+                }
+            }
+            return crossed;
+        }
+
         public static SpotClass Classify(float threat, bool guardPack, float pathDanger, bool liveContested)
         {
             if (guardPack || float.IsInfinity(pathDanger) || pathDanger > S.CorridorDangerCap)
