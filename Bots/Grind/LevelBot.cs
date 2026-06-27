@@ -988,7 +988,9 @@ namespace Bots.Grind
                                                     new TreeSharp.Action(ctx => Vendors.SellAllItems()),
                                                     new ActionSleep(2000),
                                                     new DecoratorContinue(
-                                                        ctx => StyxWoW.Me.FreeBagSlots < 2,
+                                                        // Don't stop if a mail run would free the bags — let the sequence reach the
+                                                        // mail redirect below. (With disposition, a sell run legitimately sells little.)
+                                                        ctx => StyxWoW.Me.FreeBagSlots < 2 && !NeedToMail(),
                                                         new Sequence(
                                                             new TreeSharp.Action(ctx => Logging.Write(System.Drawing.Color.Red,
                                                                 "We have just done a sell run and bags are still full. Stopping the bot.")),
@@ -1167,7 +1169,7 @@ namespace Bots.Grind
                 _repairCostTimer.Reset();
             }
 
-            if (StyxWoW.Me.Coinage <= _lastRepairCost)
+            if (StyxWoW.Me.Coinage < _lastRepairCost)
             {
                 if (Vendors.ForceRepair)
                 {

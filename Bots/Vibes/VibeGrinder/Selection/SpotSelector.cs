@@ -166,6 +166,16 @@ namespace Bots.VibeGrinder.Selection
                     Logging.WriteDebug("[VibeGrinder]  cand#{0} unreachable (no path) @ {1}", i, sc.Cluster.Centroid);
                     continue;
                 }
+                // GeneratePath returns PARTIAL paths as "success" (Detour DT_PARTIAL_RESULT), so a path
+                // that stops short of the centroid = unreachable (island/cliff/across water). Don't install
+                // a spot we can only walk toward forever — the endpoint must land near the destination.
+                if (path[path.Length - 1].Distance2D(sc.Cluster.Centroid) > 20f)
+                {
+                    dropUnreachable++;
+                    Logging.WriteDebug("[VibeGrinder]  cand#{0} unreachable (partial path, ends {1:F0}yd short) @ {2}",
+                        i, path[path.Length - 1].Distance2D(sc.Cluster.Centroid), sc.Cluster.Centroid);
+                    continue;
+                }
 
                 float pathDanger = DangerEvaluator.PathDanger(path, mapId, playerLevel);
                 bool contested = HostilePlayersNear(sc.Cluster.Centroid, S.GrindRadius) > 0;

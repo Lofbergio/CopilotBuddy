@@ -295,6 +295,7 @@ namespace Styx.Logic
 				Logging.Write("Vendor does not sell food or water. Blacklisting it.");
 				ProfileManager.CurrentProfile?.VendorManager?.Blacklist.Add(BotPoi.Current.AsVendor);
 				BotPoi.Clear("Blacklisted Vendor");
+				ForceBuy = false;   // else NeedToBuy stays true forever and re-arms on the next vendor
 				return;
 			}
 

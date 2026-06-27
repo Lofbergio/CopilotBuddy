@@ -1,4 +1,5 @@
 using Styx;
+using Styx.Helpers;
 using Styx.WoWInternals.WoWObjects;
 
 namespace Bots.VibeGrinder
@@ -28,6 +29,10 @@ namespace Bots.VibeGrinder
     public static class ItemDisposition
     {
         private static VibeGrinderSettings S => VibeGrinderSettings.Instance;
+
+        /// <summary>Mailing is usable only when enabled AND a recipient is set (mirrors NeedToMail's gate).</summary>
+        private static bool MailingConfigured =>
+            S.EnableMailing && !string.IsNullOrEmpty(CharacterSettings.Instance.MailRecipient);
 
         public static DispositionAction Classify(WoWItem item)
         {
@@ -99,9 +104,12 @@ namespace Bots.VibeGrinder
 
             if (desired == DispositionAction.Mail)
             {
-                if (item.IsSoulbound || item.IsConjured)
-                    return epic ? DispositionAction.Keep : DispositionAction.Vendor;
-                return DispositionAction.Mail;
+                // Only BoE items can be mailed, and only when mailing is actually set up. Otherwise
+                // DEGRADE rather than hoard unmailable valuables until bags jam and the bot stops:
+                // epics are kept (never auto-sold), everything else is vendored so the grind continues.
+                if (!item.IsSoulbound && !item.IsConjured && MailingConfigured)
+                    return DispositionAction.Mail;
+                return epic ? DispositionAction.Keep : DispositionAction.Vendor;
             }
 
             return DispositionAction.Keep;
