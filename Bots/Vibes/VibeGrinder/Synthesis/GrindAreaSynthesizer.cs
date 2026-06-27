@@ -22,6 +22,9 @@ namespace Bots.VibeGrinder.Synthesis
         private readonly MailboxService _mailboxes;
         private Profile _profile;
         private uint _installedMap = uint.MaxValue;
+        // Originals of the global CharacterSettings we seed, so Stop() can restore them (don't
+        // permanently overwrite a user's deliberate 0 = "never buy consumables").
+        private int _origFoodAmount = -1, _origDrinkAmount = -1;
 
         public GrindAreaSynthesizer(MailboxService mailboxes)
         {
@@ -46,15 +49,11 @@ namespace Bots.VibeGrinder.Synthesis
             // meat). It's gated behind the setting because selling whites is only safe with the VendorGuard
             // plugin enabled — off by default means greys-only selling, which never touches your gear/cloth.
             var vg = VibeGrinderSettings.Instance;
-            // MinDurability is a 0–1 fraction. The Styx settings round-trip can reload a saved "0,35" as 35
-            // (comma read as a thousands separator), which would make the bot think it ALWAYS needs repair
-            // (LowestDurabilityPercent 1.0 <= 35). Normalize any out-of-range value back into [0,1].
-            float minDur = vg.MinDurability;
-            if (minDur > 1f) minDur /= 100f;
-            minDur = Math.Clamp(minDur, 0f, 1f);
+            // Durability is now an int percent (0-100) — no float-locale round-trip risk. Project it
+            // onto the profile as the 0-1 fraction LevelBot's repair gate expects.
             var xml = new XElement("HBProfile",
                 new XElement("MinFreeBagSlots", vg.MinFreeBagSlots),
-                new XElement("MinDurability", minDur.ToString(CultureInfo.InvariantCulture)),
+                new XElement("MinDurability", vg.MinDurabilityFraction.ToString(CultureInfo.InvariantCulture)),
                 new XElement("SellWhite", vg.SellWhiteJunk));
             _profile = new Profile(xml, null) { Name = "VibeGrinder (synthetic)" };
             // Empty VendorManager + this flag => vendor tree auto-resolves sell/repair/food from data.bin.
@@ -63,6 +62,9 @@ namespace Bots.VibeGrinder.Synthesis
             // Unattended grinder must restock consumables. Default 0 => never buys food/water, so a mana class
             // sit-regens for minutes when OOM (which despawns nearby loot). Seed sane amounts only if the user
             // hasn't set their own. (BuyItems only buys drink for mana classes, so this is safe for all.)
+            // Capture originals first so Stop() can restore (these are GLOBAL CharacterSettings).
+            _origFoodAmount = CharacterSettings.Instance.FoodAmount;
+            _origDrinkAmount = CharacterSettings.Instance.DrinkAmount;
             if (CharacterSettings.Instance.FoodAmount == 0)
                 CharacterSettings.Instance.FoodAmount = 20;
             if (CharacterSettings.Instance.DrinkAmount == 0)
@@ -124,8 +126,19 @@ namespace Bots.VibeGrinder.Synthesis
         private void LoadMailboxesForMap(uint map)
         {
             var mgr = ProfileManager.CurrentProfile?.MailboxManager;
-            if (mgr == null) return;
+            if (mgr == null)
+            {
+                Logging.WriteDebug("[VibeGrinder] Mailbox load skipped: no MailboxManager on the current profile yet.");
+                return;
+            }
             mgr.ForcedMailboxes = _mailboxes.LoadSafeMailboxes(map);
+        }
+
+        /// <summary>Restore the global CharacterSettings we seeded in EnsureProfile. Call from Stop().</summary>
+        public void RestoreCharacterSettings()
+        {
+            if (_origFoodAmount >= 0) { CharacterSettings.Instance.FoodAmount = _origFoodAmount; _origFoodAmount = -1; }
+            if (_origDrinkAmount >= 0) { CharacterSettings.Instance.DrinkAmount = _origDrinkAmount; _origDrinkAmount = -1; }
         }
     }
 }

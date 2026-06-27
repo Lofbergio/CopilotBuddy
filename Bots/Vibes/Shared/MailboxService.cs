@@ -99,7 +99,10 @@ namespace Bots.Vibes.Shared
         {
             if (!_runtimeUnsafe.Add(location))
                 return;
-            ProfileManager.CurrentProfile?.MailboxManager?.ForcedMailboxes.RemoveAll(m => m.Location == location);
+            // Tolerance, not exact float equality: a POI location can be a navmesh-snapped copy of the
+            // DB point, so == would silently fail to remove it and the bot would reroute back in a loop.
+            ProfileManager.CurrentProfile?.MailboxManager?.ForcedMailboxes
+                .RemoveAll(m => m.Location.DistanceSqr(location) < 1f);
         }
 
         /// <summary>

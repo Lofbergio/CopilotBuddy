@@ -1,3 +1,4 @@
+using System;
 using System.ComponentModel;
 using System.IO;
 using Styx;
@@ -5,10 +6,37 @@ using Styx.Helpers;
 
 namespace Bots.VibeGrinder
 {
+    /// <summary>How hard the bot works to avoid pulling extra mobs.</summary>
+    public enum AddAvoidance
+    {
+        /// <summary>Pull the nearest mob regardless of neighbours.</summary>
+        Off,
+        /// <summary>Solo-pull while low/squishy, relax as you out-level, tighten up after pack deaths.</summary>
+        Auto,
+        /// <summary>Always prefer isolated pulls — safer, slower XP.</summary>
+        Aggressive,
+    }
+
+    /// <summary>When the supervisor is allowed to leave a spot.</summary>
+    public enum RelocateMode
+    {
+        /// <summary>Never auto-relocate.</summary>
+        Off,
+        /// <summary>Only leave on a death loop (dying repeatedly).</summary>
+        DeathLoopOnly,
+        /// <summary>Leave on player camping, out-leveling, depletion, or a death loop.</summary>
+        Auto,
+    }
+
     /// <summary>
     /// VibeGrinder tunables, persisted to Settings/VibeGrinderSettings_{Name}.xml.
-    /// Defaults are tuned for unattended overnight grinding: conservative on danger,
-    /// lenient on contention/scarcity. See the design doc for the rationale per field.
+    ///
+    /// Design: the UI exposes only knobs a player can reason about ("how far above me will I fight?",
+    /// "avoid packs how hard?", "when do I leave a spot?"). The many formula constants the algorithm
+    /// needs (scan radii, scoring weights, supervisor timings, the add-avoidance tuning curve) are
+    /// fixed below as [Browsable(false)] computed properties — same values as before, just not
+    /// user-facing, because no one can sanely tune "CorridorDangerCap=20 vs 22". Two enums
+    /// (AddAvoidance, RelocateMode) replace ~14 individually-meaningless knobs.
     /// </summary>
     public class VibeGrinderSettings : Settings
     {
@@ -24,135 +52,44 @@ namespace Bots.VibeGrinder
         {
         }
 
-        // ---- Level band ----
+        // =====================================================================================
+        //  User-facing settings
+        // =====================================================================================
+
+        // ---- Spot ----
         [Setting, Styx.Helpers.DefaultValue(2)]
-        [Category("Spot"), Description("How many levels below the character a target mob may be.")]
+        [Category("Spot"), Description("Levels BELOW you the bot will still fight at a chosen spot (and how far you must out-level it before relocating). Spot discovery itself uses a fixed combat-safe ±2 window.")]
         public int LevelBandBelow { get; set; }
 
         [Setting, Styx.Helpers.DefaultValue(3)]
-        [Category("Spot"), Description("How many levels above the character a target mob may be.")]
+        [Category("Spot"), Description("Levels ABOVE you the bot will still fight at a chosen spot. Spot discovery itself uses a fixed combat-safe ±2 window.")]
         public int LevelBandAbove { get; set; }
 
-        [Setting, Styx.Helpers.DefaultValue(0.4f)]
-        [Category("Spot"), Description("How hard to penalise spots whose nearby attackable mobs average BELOW your level (quadratic). Stops the bot anchoring on a couple of band-edge mobs in a sea of gray lowbies. 0 disables; higher = avoid low spots harder.")]
-        public float LowLevelSpotPenalty { get; set; }
-
-        // ---- Spot geometry ----
-        [Setting, Styx.Helpers.DefaultValue(2500f)]
+        [Setting, Styx.Helpers.DefaultValue(2500)]
         [Category("Spot"), Description("Max distance (yd) the bot will travel to a spot. Same-map only.")]
-        public float MaxTravelDistance { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(90f)]
-        [Category("Spot"), Description("Cluster/grind radius (yd) defining a spot.")]
-        public float GrindRadius { get; set; }
+        public int MaxTravelDistance { get; set; }
 
         [Setting, Styx.Helpers.DefaultValue(6)]
-        [Category("Spot"), Description("Minimum eligible mobs for a cluster to count as a spot.")]
+        [Category("Spot"), Description("Minimum eligible mobs for a cluster to count as a spot. Lower it on low-population servers; the bot auto-relaxes this when candidates are scarce or you're very low level.")]
         public int MinMobsPerSpot { get; set; }
 
-        [Setting, Styx.Helpers.DefaultValue(250f)]
-        [Category("Spot"), Description("Distance (yd) at which a spot scores half an identical one at your feet. Lower = prefer closer spots more strongly over denser-but-farther ones.")]
-        public float ProximityHalfDistance { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(5)]
-        [Category("Spot"), Description("How many top candidates get the expensive path-danger check.")]
-        public int TopCandidatesForPathCheck { get; set; }
-
         // ---- Danger ----
-        [Setting, Styx.Helpers.DefaultValue(150f)]
-        [Category("Danger"), Description("Radius (yd) around a centroid scanned for hazards.")]
-        public float DangerRadius { get; set; }
-
         [Setting, Styx.Helpers.DefaultValue(4)]
-        [Category("Danger"), Description("A normal mob above (character level + this) counts as a hazard.")]
+        [Category("Danger"), Description("A normal mob more than this many levels above you counts as a hazard. Lower = avoid tough areas harder.")]
         public int DangerLevelMargin { get; set; }
 
-        [Setting, Styx.Helpers.DefaultValue(3)]
-        [Category("Danger"), Description("Hazards clustered this tightly form a 'guard pack' (Dangerous).")]
-        public int ElitePackCount { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(25f)]
-        [Category("Danger"), Description("Radius (yd) for guard-pack clustering.")]
-        public float ElitePackRadius { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(30f)]
-        [Category("Danger"), Description("Half-width (yd) of the travel corridor scanned for hazards.")]
-        public float CorridorRadius { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(20f)]
-        [Category("Danger"), Description("Threat above this on the route marks a spot Dangerous.")]
-        public float CorridorDangerCap { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(2f)]
-        [Category("Danger"), Description("Destination threat at/below this is considered Safe.")]
-        public float SafeThreatThreshold { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(35f)]
-        [Category("Danger"), Description("Hard body-pull gate: an over-level HOSTILE mob within this distance (yd) of a kill position makes a spot Dangerous. Such mobs aggro from beyond pull range when you walk in to fight or loot, and are too strong to clear. 0 disables.")]
-        public float AggroAvoidBuffer { get; set; }
-
-        // ---- Scarcity (leniency for inconvenience only — never danger) ----
-        [Setting, Styx.Helpers.DefaultValue(2)]
-        [Category("Scarcity"), Description("At/below this candidate count, relax contention/density.")]
-        public int ScarcityCandidateFloor { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(10)]
-        [Category("Scarcity"), Description("At/below this character level, relax contention/density.")]
-        public int ScarcityLevelCeiling { get; set; }
-
-        // ---- Supervisor ----
-        [Setting, Styx.Helpers.DefaultValue(15)]
-        [Category("Supervisor"), Description("Seconds between relocation evaluations.")]
-        public int SupervisorIntervalSec { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(60)]
-        [Category("Supervisor"), Description("Seconds a player must linger in-spot before relocating.")]
-        public int IntrusionSeconds { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(3f)]
-        [Category("Supervisor"), Description("Depletion confirmation: only relocate a target-empty spot if kills in the last minute were below this. Not a standalone trigger (kills/min is combat-bound at low level, not a supply signal).")]
-        public float MinKillsPerMin { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(45)]
-        [Category("Supervisor"), Description("Seconds with no targets at a hotspot before depletion fires.")]
-        public int EmptyTargetSeconds { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(3)]
-        [Category("Supervisor"), Description("Deaths within the window that trip the death-loop relocate.")]
-        public int DeathLoopCount { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(5)]
-        [Category("Supervisor"), Description("Death-loop window in minutes.")]
-        public int DeathLoopWindowMin { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(45)]
-        [Category("Supervisor"), Description("Minutes an abandoned spot stays blacklisted.")]
-        public int BlacklistMinutes { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(true)]
-        [Category("Supervisor"), Description("Relocate when a player camps the spot.")]
-        public bool EnableIntrusionRelocate { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(true)]
-        [Category("Supervisor"), Description("Relocate when out-leveling the spot.")]
-        public bool EnableLevelDriftRelocate { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(true)]
-        [Category("Supervisor"), Description("Relocate when the spot is depleted.")]
-        public bool EnableDepletionRelocate { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(true)]
-        [Category("Supervisor"), Description("Relocate on a death loop.")]
-        public bool EnableDeathLoopRelocate { get; set; }
+        [Setting, Styx.Helpers.DefaultValue(35)]
+        [Category("Danger"), Description("Hard body-pull gate: an over-level HOSTILE mob within this distance (yd) of a kill position makes a spot Dangerous (it aggros from beyond pull range and is too strong to clear). 0 disables.")]
+        public int AggroAvoidBuffer { get; set; }
 
         // ---- Survival ----
         [Setting, Styx.Helpers.DefaultValue(2)]
         [Category("Survival"), Description("Free bag slots to keep before a vendor run.")]
         public int MinFreeBagSlots { get; set; }
 
-        [Setting, Styx.Helpers.DefaultValue(0.35f)]
-        [Category("Survival"), Description("Durability fraction (0-1) before a repair run.")]
-        public float MinDurability { get; set; }
+        [Setting, Styx.Helpers.DefaultValue(35)]
+        [Category("Survival"), Description("Repair when durability drops below this percent (0-100).")]
+        public int MinDurabilityPct { get; set; }
 
         [Setting, Styx.Helpers.DefaultValue(false)]
         [Category("Survival"), Description("Sell WHITE items (e.g. cooking meat) at vendors to clear bag junk. OFF by default (greys only). If you turn this ON, also enable the VendorGuard plugin — otherwise white cloth / BoE gear gets vendored too.")]
@@ -162,9 +99,81 @@ namespace Bots.VibeGrinder
         [Category("Survival"), Description("Allow flight-path travel between continents (off for overnight).")]
         public bool AllowTaxiTravel { get; set; }
 
+        [Setting, Styx.Helpers.DefaultValue(AddAvoidance.Auto)]
+        [Category("Survival"), Description("How hard to avoid pulling extra mobs. Auto: solo-pull while low/squishy, relax as you out-level, tighten up after deaths to adds. Aggressive: always prefer isolated pulls (safer, slower). Off: pull the nearest mob regardless of neighbours.")]
+        public AddAvoidance AddAvoidanceMode { get; set; }
+
+        // ---- Supervisor ----
+        [Setting, Styx.Helpers.DefaultValue(RelocateMode.Auto)]
+        [Category("Supervisor"), Description("When to leave a spot. Auto: relocate on player camping, out-leveling, depletion, or a death loop. DeathLoopOnly: only leave if you're dying repeatedly. Off: never auto-relocate.")]
+        public RelocateMode Relocate { get; set; }
+
+        [Setting, Styx.Helpers.DefaultValue(45)]
+        [Category("Supervisor"), Description("Minutes an abandoned spot stays blacklisted before the bot will consider it again.")]
+        public int BlacklistMinutes { get; set; }
+
+        // ---- Mailing ----
         [Setting, Styx.Helpers.DefaultValue(false)]
-        [Category("Mailing"), Description("Mail valuables to a bank alt during vendor runs. Requires MailRecipient set + MailWhite/MailGreen enabled in General settings, and mailbox locations in Mailboxes.db (re-run GrindMobsExtractor). Enemy-faction-territory mailboxes are skipped automatically. The bot's best food/drink are auto-protected from mailing/selling. Off by default.")]
+        [Category("Mailing"), Description("Mail valuables to a bank alt during vendor runs. Requires MailRecipient set + MailWhite/MailGreen enabled in General settings, and mailbox locations in Mailboxes.db. Enemy-faction-territory mailboxes are skipped automatically. The bot's best food/drink are auto-protected. Off by default.")]
         public bool EnableMailing { get; set; }
+
+        // =====================================================================================
+        //  Fixed algorithm constants (not user-tunable; kept as members so call sites are stable)
+        // =====================================================================================
+
+        // ---- Spot geometry / scoring ----
+        [Browsable(false)] public float GrindRadius => 90f;                 // cluster/grind radius (yd)
+        [Browsable(false)] public float ProximityHalfDistance => 250f;      // half-score distance
+        [Browsable(false)] public float LowLevelSpotPenalty => 0.4f;        // quadratic low-avg-level penalty
+        [Browsable(false)] public int TopCandidatesForPathCheck => 25;      // path-danger budget
+        [Browsable(false)] public int ScarcityCandidateFloor => 2;          // relax contention at/below
+        [Browsable(false)] public int ScarcityLevelCeiling => 10;           // relax density at/below level
+
+        // ---- Danger model ----
+        [Browsable(false)] public float DangerRadius => 150f;
+        [Browsable(false)] public int ElitePackCount => 3;
+        [Browsable(false)] public float ElitePackRadius => 25f;
+        [Browsable(false)] public float CorridorRadius => 30f;
+        [Browsable(false)] public float CorridorDangerCap => 20f;
+        [Browsable(false)] public float SafeThreatThreshold => 2f;
+
+        // ---- Supervisor timings ----
+        [Browsable(false)] public int SupervisorIntervalSec => 15;
+        [Browsable(false)] public int IntrusionSeconds => 60;
+        [Browsable(false)] public float MinKillsPerMin => 3f;
+        [Browsable(false)] public int EmptyTargetSeconds => 45;
+        [Browsable(false)] public int DeathLoopCount => 3;
+        [Browsable(false)] public int DeathLoopWindowMin => 5;
+
+        // ---- Supervisor triggers (derived from Relocate mode) ----
+        [Browsable(false)] public bool EnableIntrusionRelocate => Relocate == RelocateMode.Auto;
+        [Browsable(false)] public bool EnableLevelDriftRelocate => Relocate == RelocateMode.Auto;
+        [Browsable(false)] public bool EnableDepletionRelocate => Relocate == RelocateMode.Auto;
+        [Browsable(false)] public bool EnableDeathLoopRelocate => Relocate != RelocateMode.Off;
+
+        // ---- Add-avoidance tuning (derived from AddAvoidanceMode) ----
+        [Browsable(false)] public float PullCrowdRadius => AddAvoidanceMode == AddAvoidance.Off ? 0f : 12f;
+        [Browsable(false)]
+        public float PullCrowdPenalty => AddAvoidanceMode switch
+        {
+            AddAvoidance.Off => 0f,
+            AddAvoidance.Aggressive => 120f,
+            _ => 60f,
+        };
+        [Browsable(false)] public int PullCrowdFullLevel => 15;
+        [Browsable(false)] public int PullCrowdLevelCeiling => AddAvoidanceMode == AddAvoidance.Aggressive ? 70 : 50;
+        [Browsable(false)] public int PackDeathAttackers => 2;
+        [Browsable(false)] public float CrowdCautionStep => AddAvoidanceMode == AddAvoidance.Off ? 0f : 0.75f;
+        [Browsable(false)] public float CrowdCautionMax => 3f;
+        [Browsable(false)] public float CrowdCautionEase => 0.5f;
+        [Browsable(false)] public int CrowdCautionKillStreak => 25;
+        [Browsable(false)]
+        public float SpotCrowdPenalty => AddAvoidanceMode switch
+        {
+            AddAvoidance.Off => 0f,
+            AddAvoidance.Aggressive => 0.3f,
+            _ => 0.15f,
+        };
 
         /// <summary>
         /// Add-avoidance level taper, shared by pull weighting and spot selection so they can't drift:
@@ -178,46 +187,24 @@ namespace Bots.VibeGrinder
             return System.Math.Clamp((float)(PullCrowdLevelCeiling - level) / span, 0f, 1f);
         }
 
-        // ---- Pull discipline (add avoidance) ----
-        [Setting, Styx.Helpers.DefaultValue(12f)]
-        [Category("Survival"), Description("Pull bias: a candidate mob with HOSTILE (proximity-aggro) neighbours within this radius (yd) is deprioritised, so the bot opens on isolated mobs and avoids dragging a pack. Neutral wildlife doesn't count (single-pull is safe). 0 disables.")]
-        public float PullCrowdRadius { get; set; }
+        /// <summary>Repair-gate durability as a 0-1 fraction (the profile/LevelBot consumes a fraction).</summary>
+        public float MinDurabilityFraction => System.Math.Clamp(MinDurabilityPct / 100f, 0f, 0.99f);
 
-        [Setting, Styx.Helpers.DefaultValue(60f)]
-        [Category("Survival"), Description("Score penalty per hostile add-risk neighbour when choosing what to pull. Higher = avoid packs harder. Deprioritises only, never blocks a pull. 0 disables.")]
-        public float PullCrowdPenalty { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(15)]
-        [Category("Survival"), Description("At/below this level pull add-avoidance runs at full strength — no class can handle hostile packs this early. Above it the penalty tapers linearly toward PullCrowdLevelCeiling (so it's roughly half-strength around 30, 'semi-afraid').")]
-        public int PullCrowdFullLevel { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(50)]
-        [Category("Survival"), Description("Level at/above which pull add-avoidance turns off entirely — by now most classes have AoE/cooldowns and density is pure upside. Between PullCrowdFullLevel and here it scales linearly. 0 disables avoidance everywhere.")]
-        public int PullCrowdLevelCeiling { get; set; }
-
-        // ---- Adaptive add-fear (escalate on pack deaths, ease on real progress) ----
-        [Setting, Styx.Helpers.DefaultValue(2)]
-        [Category("Survival"), Description("Attackers on you at the moment of death for it to count as a 'pack death' that raises crowd caution. 2 = an add helped kill you.")]
-        public int PackDeathAttackers { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(0.75f)]
-        [Category("Survival"), Description("How much the crowd-caution multiplier rises per pack death (it multiplies the pull penalty). 0 disables adaptive fear.")]
-        public float CrowdCautionStep { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(3f)]
-        [Category("Survival"), Description("Ceiling on the crowd-caution multiplier, so a bad night can't make pulling impossible.")]
-        public float CrowdCautionMax { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(0.5f)]
-        [Category("Survival"), Description("Amount crowd caution eases per progress event — a level-up, an area switch, or a completed clean kill streak. Event-driven, never idle wall-clock.")]
-        public float CrowdCautionEase { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(25)]
-        [Category("Survival"), Description("Kills with no death that complete a 'clean streak' and ease crowd caution one step. 0 disables streak easing.")]
-        public int CrowdCautionKillStreak { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(0.15f)]
-        [Category("Survival"), Description("How hard a spot's score is cut for hostile mobs packed within PullCrowdRadius — applied per extra hostile in the worst knot, scaled by the same level taper and crowd-caution as pulls. A factor, not a veto. 0 ignores spot crowding in selection.")]
-        public float SpotCrowdPenalty { get; set; }
+        /// <summary>
+        /// Clamp user-entered values into sane ranges. Call once at Start — a 0 or negative in the
+        /// wrong place (bag slots, mob count, travel distance) silently breaks selection with no error.
+        /// </summary>
+        public void Sanitize()
+        {
+            LevelBandBelow = Math.Clamp(LevelBandBelow, 0, 30);
+            LevelBandAbove = Math.Clamp(LevelBandAbove, 0, 30);
+            MaxTravelDistance = Math.Clamp(MaxTravelDistance, 100, 50000);
+            MinMobsPerSpot = Math.Clamp(MinMobsPerSpot, 1, 50);
+            DangerLevelMargin = Math.Clamp(DangerLevelMargin, 0, 60);
+            AggroAvoidBuffer = Math.Clamp(AggroAvoidBuffer, 0, 200);
+            MinFreeBagSlots = Math.Clamp(MinFreeBagSlots, 0, 28);
+            MinDurabilityPct = Math.Clamp(MinDurabilityPct, 0, 99);
+            BlacklistMinutes = Math.Clamp(BlacklistMinutes, 0, 1440);
+        }
     }
 }

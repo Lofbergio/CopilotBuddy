@@ -80,6 +80,7 @@ namespace Bots.VibeGrinder
         {
             // --- Start contract: clean slate. Spot selection is deferred to the first tick
             // (EnsureSpotSelected) because the navmesh isn't loaded yet during Start(). ---
+            VibeGrinderSettings.Instance.Sanitize();   // clamp any out-of-range user values
             LevelBot.ResetState();
             BotPoi.Clear("VibeGrinder start");
             _root = null;
@@ -205,19 +206,26 @@ namespace Bots.VibeGrinder
                 _onKill = null;
             }
             _consumables.Clear();
+            _synth?.RestoreCharacterSettings();   // undo the global FoodAmount/DrinkAmount seeding
+            GrindMobsRepository.Shutdown();   // release the DB handle so a later Start re-opens cleanly
             Bots.DungeonBuddy.Avoidance.WorldObstacleManager.Shutdown();
         }
 
         public override void Pulse()
         {
-            float speed = StyxWoW.Me.MovementInfo.CurrentSpeed;
-            Navigator.PathPrecision = System.Math.Clamp(speed * 0.15f, 1.5f, 10f);
+            var me = StyxWoW.Me;
+            if (me == null) return;   // null on loading screens / zone transitions
+
+            Navigator.PathPrecision = System.Math.Clamp(me.MovementInfo.CurrentSpeed * 0.15f, 1.5f, 10f);
             _supervisor?.Pulse();
-            if (VibeGrinderSettings.Instance.EnableMailing)
-            {
-                _consumables.Sync();                       // keep best food/drink out of MailWhite
-                _mailboxes.CheckCurrentMailboxSafety();    // shared runtime backstop (see MailboxService)
-            }
+
+            var s = VibeGrinderSettings.Instance;
+            // Protect rest food/drink whenever the engine may sell whites — mailing OR SellWhiteJunk.
+            // (Gating only on EnableMailing left consumables sellable during a plain white-vendor run.)
+            if (s.EnableMailing || s.SellWhiteJunk)
+                _consumables.Sync();
+            if (s.EnableMailing)
+                _mailboxes?.CheckCurrentMailboxSafety();   // shared runtime backstop (see MailboxService)
         }
 
     }

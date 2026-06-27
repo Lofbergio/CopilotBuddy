@@ -136,7 +136,9 @@ namespace Bots.VibeGrinder.Selection
             float r = radius <= 1f ? 1f : radius;
             foreach (MobSpawn h in hazards)
             {
-                float dist = center.Distance2D(h.Point);
+                // 3D: a mob in a cave directly below/above (XY≈0) is not a surface hazard. Matches
+                // how Densify measures segment length, and avoids over-weighting layered terrain.
+                float dist = center.Distance(h.Point);
                 if (dist >= r)
                     continue;
                 total += HazardWeight(h.Rank) * (1f - dist / r);
@@ -176,7 +178,9 @@ namespace Bots.VibeGrinder.Selection
                 WoWPoint a = path[i];
                 WoWPoint b = path[i + 1];
                 float segLen = a.Distance(b);
-                int steps = segLen <= stepYards ? 1 : (int)(segLen / stepYards);
+                // Ceiling, not floor: a 1.9×step segment must sample its interior, not just the start
+                // (floor gave 1 step → an unsampled mid-segment gap wide enough to hide a corridor mob).
+                int steps = System.Math.Max(1, (int)System.Math.Ceiling(segLen / stepYards));
                 for (int s = 0; s < steps; s++)
                 {
                     float t = (float)s / steps;

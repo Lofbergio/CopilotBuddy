@@ -51,7 +51,8 @@ namespace Bots.VibeGrinder.Selection
         private GrindSpot Search(uint mapId, WoWPoint playerLoc, int playerLevel, List<WoWPoint> blocked, double caution)
         {
             bool scarce = playerLevel <= S.ScarcityLevelCeiling;
-            int minMobs = scarce ? Math.Max(3, S.MinMobsPerSpot / 2) : S.MinMobsPerSpot;
+            // Scarce: halve the density requirement (floor of 2 — a lone spawn isn't a "spot").
+            int minMobs = scarce ? Math.Max(2, S.MinMobsPerSpot / 2) : S.MinMobsPerSpot;
 
             // Combat-safe level window: ±2. +3 mobs are brutal for an unattended low-level character
             // (high miss/crit-against and heavy incoming damage); mobs >2 below grey out fast.
@@ -146,7 +147,7 @@ namespace Bots.VibeGrinder.Selection
             // Phase 2 — rank by the dense-and-near score (proximity decay keeps it local), then take
             // the best reachable, non-Dangerous spot. Bounded budget caps the pathfinds.
             var ranked = candidates.OrderByDescending(c => c.Score).ToList();
-            int budget = Math.Min(ranked.Count, Math.Max(S.TopCandidatesForPathCheck, 25));
+            int budget = Math.Min(ranked.Count, S.TopCandidatesForPathCheck);
 
             GrindSpot bestSafe = null;
             GrindSpot bestRisky = null;
@@ -265,34 +266,57 @@ namespace Bots.VibeGrinder.Selection
             return worst;
         }
 
-        /// <summary>Greedy clustering (same approach as CreatureSpawnQueries), keeping member lists.</summary>
+        /// <summary>
+        /// Greedy clustering, seed-based (a spawn joins if within radius of the seed), keeping member
+        /// lists. Spatial-hashed into radius-sized cells so it's O(n) instead of O(n²): a continent-wide
+        /// level band can return thousands of spawns, and all-pairs there froze the worker thread for
+        /// seconds on every selection/relocation. Cells are radius-sized, so every spawn within radius
+        /// of a seed lies in the seed cell or one of its 8 neighbours — same result as the old scan.
+        /// </summary>
         private static List<Cluster> ClusterSpawns(List<MobSpawn> spawns, float radius)
         {
             var clusters = new List<Cluster>();
-            var used = new bool[spawns.Count];
+            int n = spawns.Count;
+            var used = new bool[n];
             float r2 = radius * radius;
+            float cell = radius <= 1f ? 1f : radius;
 
-            for (int i = 0; i < spawns.Count; i++)
+            var grid = new Dictionary<(int, int), List<int>>(n);
+            for (int i = 0; i < n; i++)
+            {
+                var key = ((int)Math.Floor(spawns[i].Point.X / cell), (int)Math.Floor(spawns[i].Point.Y / cell));
+                if (!grid.TryGetValue(key, out List<int> list)) { list = new List<int>(); grid[key] = list; }
+                list.Add(i);
+            }
+
+            for (int i = 0; i < n; i++)
             {
                 if (used[i]) continue;
                 var cluster = new Cluster();
                 cluster.Members.Add(spawns[i]);
                 used[i] = true;
 
-                for (int j = i + 1; j < spawns.Count; j++)
-                {
-                    if (used[j]) continue;
-                    if (spawns[i].Point.DistanceSqr(spawns[j].Point) <= r2)
+                int cx = (int)Math.Floor(spawns[i].Point.X / cell);
+                int cy = (int)Math.Floor(spawns[i].Point.Y / cell);
+                for (int gx = cx - 1; gx <= cx + 1; gx++)
+                    for (int gy = cy - 1; gy <= cy + 1; gy++)
                     {
-                        cluster.Members.Add(spawns[j]);
-                        used[j] = true;
+                        if (!grid.TryGetValue((gx, gy), out List<int> bucket)) continue;
+                        foreach (int j in bucket)
+                        {
+                            if (used[j]) continue;
+                            if (spawns[i].Point.DistanceSqr(spawns[j].Point) <= r2)
+                            {
+                                cluster.Members.Add(spawns[j]);
+                                used[j] = true;
+                            }
+                        }
                     }
-                }
 
                 float sx = 0, sy = 0, sz = 0;
                 foreach (MobSpawn m in cluster.Members) { sx += m.Point.X; sy += m.Point.Y; sz += m.Point.Z; }
-                int n = cluster.Members.Count;
-                cluster.Centroid = new WoWPoint(sx / n, sy / n, sz / n);
+                int c = cluster.Members.Count;
+                cluster.Centroid = new WoWPoint(sx / c, sy / c, sz / c);
                 clusters.Add(cluster);
             }
             return clusters;

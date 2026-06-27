@@ -61,7 +61,10 @@ namespace Bots.VibeGrinder.Supervision
         public List<WoWPoint> ActiveBlacklist()
         {
             DateTime now = DateTime.UtcNow;
-            return _blacklist.Where(kv => kv.Value > now).Select(kv => kv.Key).ToList();
+            // Evict expired entries so the dictionary doesn't grow unbounded over a long session.
+            foreach (WoWPoint key in _blacklist.Where(kv => kv.Value <= now).Select(kv => kv.Key).ToList())
+                _blacklist.Remove(key);
+            return _blacklist.Keys.ToList();
         }
 
         public void Reset()
@@ -87,6 +90,11 @@ namespace Bots.VibeGrinder.Supervision
             _current = spot;
             _intruderSince.Clear();
             _kills.Clear();
+            // Clear death/streak counters too: a fresh spot must be judged on its own. Leaving
+            // _deaths set re-tripped the death-loop at the new spot before it had been tried; leaving
+            // _cleanKills set credited the new spot for a streak earned at the old one.
+            _deaths.Clear();
+            _cleanKills = 0;
             _emptySince = DateTime.MaxValue;
             _throttle.Restart();
             _sinceInstall.Restart();
@@ -118,11 +126,18 @@ namespace Bots.VibeGrinder.Supervision
             }
 
             // Track the peak attackers-on-us so a death can be classed pack vs honest 1v1 — at the
-            // death tick mobs have already dropped target, so we sample the run-up (last ~5s).
+            // death tick mobs have already dropped target, so we sample the run-up (last ~5s). Only
+            // raise on a new high; the 5s branch lets a stale peak age out but must NOT lower the
+            // peak just because a mob in the current pull died (that masked real pack deaths).
             if (!me.IsDead)
             {
                 int attackers = AttackersOnMe(me);
-                if (attackers >= _attackerPeak || (DateTime.UtcNow - _attackerPeakAt).TotalSeconds > 5)
+                if (attackers > _attackerPeak)
+                {
+                    _attackerPeak = attackers;
+                    _attackerPeakAt = DateTime.UtcNow;
+                }
+                else if ((DateTime.UtcNow - _attackerPeakAt).TotalSeconds > 5)
                 {
                     _attackerPeak = attackers;
                     _attackerPeakAt = DateTime.UtcNow;
@@ -215,7 +230,13 @@ namespace Bots.VibeGrinder.Supervision
                 return Relocate("spot depleted") ? RunStatus.Success : RunStatus.Failure;
 
             if (S.EnableDeathLoopRelocate && _deaths.Count >= S.DeathLoopCount)
-                return Relocate("death loop") ? RunStatus.Success : RunStatus.Failure;
+            {
+                bool moved = Relocate("death loop");
+                // Acknowledge the signal either way: if nothing better exists we stay, but clearing
+                // the window stops a per-interval "no better spot" log spin until it ages out.
+                _deaths.Clear();
+                return moved ? RunStatus.Success : RunStatus.Failure;
+            }
 
             return RunStatus.Failure;
         }
@@ -298,9 +319,7 @@ namespace Bots.VibeGrinder.Supervision
             _blacklist[_current.Centroid] = DateTime.UtcNow.AddMinutes(S.BlacklistMinutes);
             Logging.Write("[VibeGrinder] Relocating ({0}) → {1}", reason, next);
 
-            if (_synth.MapChanged(next.Map))
-                _synth.EnsureProfile();
-            _synth.Install(next, me.Level);
+            _synth.Install(next, me.Level);   // Install() calls EnsureProfile() itself (idempotent)
             OnInstalled(next);
             // A new area is a fresh layout — ease the fear earned at the abandoned spot.
             EaseCaution(S.CrowdCautionEase, "switched areas");

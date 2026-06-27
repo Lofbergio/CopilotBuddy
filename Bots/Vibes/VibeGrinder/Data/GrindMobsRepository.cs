@@ -54,6 +54,20 @@ namespace Bots.VibeGrinder.Data
             }
         }
 
+        /// <summary>Close the shared connection so a later Start re-opens cleanly and no handle leaks
+        /// across stop/restart. Call from VibeGrinder.Stop().</summary>
+        public static void Shutdown()
+        {
+            if (_connection != null)
+            {
+                try { _connection.Close(); _connection.Dispose(); }
+                catch { /* best-effort */ }
+                _connection = null;
+            }
+            _initialized = false;
+            _isAvailable = false;
+        }
+
         /// <summary>
         /// Eligible grind targets on a map: normal rank, level band intersects [lvlMin,lvlMax],
         /// non-critter, not a service NPC, not flagged immune/non-attackable. Faction is filtered
@@ -162,7 +176,7 @@ WHERE s.map_id = @map
   AND m.type <> @critter
   AND m.npcflag = 0
   AND (m.unit_flags & @immune) = 0
-GROUP BY m.entry";
+GROUP BY m.entry, m.max_level, m.faction, m.type";
 
             long levelSum = 0, count = 0;
             try
