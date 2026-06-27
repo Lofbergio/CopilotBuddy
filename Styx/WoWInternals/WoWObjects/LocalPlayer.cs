@@ -1395,9 +1395,11 @@ namespace Styx.WoWInternals.WoWObjects
         }
 
         /// <summary>
-        /// Gets the lowest durability percentage among equipped items (0.0 to 1.0).
-        /// HB 4.3.4: iterates Equipped.PhysicalItems, finds min DurabilityPercent.
-        /// item.DurabilityPercent already returns 0.0–1.0 (ratio), so no extra division.
+        /// Gets the lowest durability ratio (0.0–1.0) among equipped items that CAN be damaged.
+        /// WoWItem.DurabilityPercent is 0–100 (and 100 for no-durability items), so divide by 100 and
+        /// skip MaxDurability==0 items (rings/trinkets/neck/shirt/tabard). The old code compared the
+        /// 0–100 value against a 0–1 seed — a unit mismatch that made this only ever drop below 1.0 when
+        /// an item was under 1% durability, so the bot under-repaired (waited until gear was nearly broken).
         /// </summary>
         public double LowestDurabilityPercent
         {
@@ -1408,10 +1410,13 @@ namespace Styx.WoWInternals.WoWObjects
                     double lowest = 1.0;
                     foreach (var item in Inventory.Equipped.PhysicalItems)
                     {
-                        if (item.DurabilityPercent < lowest)
-                            lowest = item.DurabilityPercent;
+                        if (item == null || item.MaxDurability == 0)
+                            continue; // can't be damaged/repaired
+                        double ratio = item.DurabilityPercent / 100.0;
+                        if (ratio < lowest)
+                            lowest = ratio;
                     }
-                    return lowest; // 0.0–1.0: item.DurabilityPercent is already a ratio
+                    return lowest;
                 }
                 catch (Exception ex)
                 {

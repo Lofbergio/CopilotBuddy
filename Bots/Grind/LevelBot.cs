@@ -1002,7 +1002,22 @@ namespace Bots.Grind
                                                 new Sequence(
                                                     new ActionDebugString("Repairing items"),
                                                     new ActionSetActivity("Repairing Items"),
-                                                    new TreeSharp.Action(ctx => Vendors.RepairAllItems()),
+                                                    new TreeSharp.Action(ctx =>
+                                                    {
+                                                        // Frame is OPEN here, so GetRepairAllCost() is accurate. NeedToRepair runs it
+                                                        // while grinding (frame CLOSED → returns 0), so _lastRepairCost was stuck at 0 and
+                                                        // the affordability guard never fired → endless repair loop when broke. Capture
+                                                        // the real cost here and only repair if we can actually afford it.
+                                                        var cost = StyxWoW.Me.GetEstimatedRepairCost();
+                                                        if (cost.TotalCoppers > 0)
+                                                            _lastRepairCost = (ulong)cost.TotalCoppers;
+                                                        if (StyxWoW.Me.Coinage >= _lastRepairCost)
+                                                            Vendors.RepairAllItems();
+                                                        else
+                                                            Logging.Write(System.Drawing.Color.Orange,
+                                                                "Can't afford repair ({0}c, have {1}c) — backing off to grind for money.",
+                                                                _lastRepairCost, StyxWoW.Me.Coinage);
+                                                    }),
                                                     new ActionSleep(2000)
                                                 )
                                             ),
