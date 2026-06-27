@@ -112,7 +112,15 @@ namespace Bots.VibeGrinder.Selection
                 float survFactor = packExcess > 0
                     ? 1f / (1f + S.SpotCrowdPenalty * packExcess * crowdWeight) : 1f;
 
-                float baseScore = c.Members.Count * purity * proximityFactor / (1f + threat) * survFactor;
+                // Level quality: penalise spots dragged down by low/gray mobs. Uses the population-weighted
+                // average level of nearby ATTACKABLE mobs (not just the band-eligible cluster), so a couple
+                // of band-edge anchors surrounded by lowbies can't win on density alone. Quadratic falloff
+                // the further the local average sits below the player.
+                float avgLevel = GrindMobsRepository.AverageAttackableLevelNear(mapId, c.Centroid, S.GrindRadius, _factions, ImmuneUnitFlagMask);
+                float below = avgLevel > 0f ? Math.Max(0f, playerLevel - avgLevel) : 0f;
+                float levelFactor = 1f / (1f + S.LowLevelSpotPenalty * below * below);
+
+                float baseScore = c.Members.Count * purity * proximityFactor / (1f + threat) * survFactor * levelFactor;
 
                 candidates.Add(new Scored
                 {
@@ -122,6 +130,7 @@ namespace Bots.VibeGrinder.Selection
                     Threat = threat,
                     GuardPack = guardPack,
                     HostilePack = hostilePack,
+                    AvgLevel = avgLevel,
                 });
             }
 
@@ -170,8 +179,8 @@ namespace Bots.VibeGrinder.Selection
                     cls = SpotClass.Dangerous;
 
                 Logging.WriteDebug(
-                    "[VibeGrinder]  cand#{0} score={1:F1} threat={2:F1} guardPack={3} hostilePack={4} aggroBubble={5} pathDanger={6:F1} contested={7} mobs={8} dist={9:F0} -> {10} @ {11}",
-                    i, sc.Score, sc.Threat, sc.GuardPack, sc.HostilePack, aggroBubble, pathDanger, contested, sc.Cluster.Members.Count,
+                    "[VibeGrinder]  cand#{0} score={1:F1} avgLvl={2:F1} threat={3:F1} guardPack={4} hostilePack={5} aggroBubble={6} pathDanger={7:F1} contested={8} mobs={9} dist={10:F0} -> {11} @ {12}",
+                    i, sc.Score, sc.AvgLevel, sc.Threat, sc.GuardPack, sc.HostilePack, aggroBubble, pathDanger, contested, sc.Cluster.Members.Count,
                     playerLoc.Distance2D(sc.Cluster.Centroid), cls, sc.Cluster.Centroid);
 
                 if (cls == SpotClass.Dangerous) { dangerousDropped++; continue; }
@@ -229,6 +238,7 @@ namespace Bots.VibeGrinder.Selection
             public float Threat;
             public bool GuardPack;
             public int HostilePack;
+            public float AvgLevel;
         }
 
         /// <summary>

@@ -142,6 +142,61 @@ WHERE map_id = @map AND x BETWEEN @minX AND @maxX AND y BETWEEN @minY AND @maxY"
         }
 
         /// <summary>
+        /// Population-weighted average max_level of ATTACKABLE mobs in a box around a centroid,
+        /// ignoring the grind band — so a couple of band-edge anchors surrounded by gray lowbies
+        /// produce a low average and the spot scores down. Returns 0 if none / DB absent.
+        /// </summary>
+        public static float AverageAttackableLevelNear(uint mapId, WoWPoint center, float radius,
+            FactionResolver factions, long immuneUnitFlagMask)
+        {
+            EnsureInitialized();
+            if (!_isAvailable || factions == null) return 0f;
+
+            const string sql = @"
+SELECT m.max_level, m.faction, m.type, COUNT(*) AS cnt
+FROM spawns s JOIN mobs m ON m.entry = s.entry
+WHERE s.map_id = @map
+  AND s.x BETWEEN @minX AND @maxX
+  AND s.y BETWEEN @minY AND @maxY
+  AND m.rank = 0
+  AND m.type <> @critter
+  AND m.npcflag = 0
+  AND (m.unit_flags & @immune) = 0
+GROUP BY m.entry";
+
+            long levelSum = 0, count = 0;
+            try
+            {
+                using var cmd = new SQLiteCommand(sql, _connection);
+                cmd.Parameters.AddWithValue("@map", (int)mapId);
+                cmd.Parameters.AddWithValue("@minX", center.X - radius);
+                cmd.Parameters.AddWithValue("@maxX", center.X + radius);
+                cmd.Parameters.AddWithValue("@minY", center.Y - radius);
+                cmd.Parameters.AddWithValue("@maxY", center.Y + radius);
+                cmd.Parameters.AddWithValue("@critter", CritterType);
+                cmd.Parameters.AddWithValue("@immune", immuneUnitFlagMask);
+
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    int maxLevel = reader.GetInt32(0);
+                    int faction = reader.GetInt32(1);
+                    int type = reader.GetInt32(2);
+                    int cnt = reader.GetInt32(3);
+                    if (!factions.IsAttackable(faction, type)) continue;
+                    levelSum += (long)maxLevel * cnt;
+                    count += cnt;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.WriteDebug("[GrindMobs] AverageAttackableLevelNear error: {0}", ex.Message);
+                return 0f;
+            }
+            return count > 0 ? (float)levelSum / count : 0f;
+        }
+
+        /// <summary>
         /// Hazard spawns within a bounding box: elites/rares (rank &gt;= 1) OR mobs above the
         /// player's safe level (max_level &gt; level + dangerMargin). Used by DangerEvaluator.
         /// </summary>

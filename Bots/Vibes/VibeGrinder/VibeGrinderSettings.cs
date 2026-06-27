@@ -33,6 +33,10 @@ namespace Bots.VibeGrinder
         [Category("Spot"), Description("How many levels above the character a target mob may be.")]
         public int LevelBandAbove { get; set; }
 
+        [Setting, Styx.Helpers.DefaultValue(0.4f)]
+        [Category("Spot"), Description("How hard to penalise spots whose nearby attackable mobs average BELOW your level (quadratic). Stops the bot anchoring on a couple of band-edge mobs in a sea of gray lowbies. 0 disables; higher = avoid low spots harder.")]
+        public float LowLevelSpotPenalty { get; set; }
+
         // ---- Spot geometry ----
         [Setting, Styx.Helpers.DefaultValue(2500f)]
         [Category("Spot"), Description("Max distance (yd) the bot will travel to a spot. Same-map only.")]
