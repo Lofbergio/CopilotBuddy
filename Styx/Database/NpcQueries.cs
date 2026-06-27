@@ -32,8 +32,12 @@ namespace Styx.Database
         private static bool _initialized = false;
 
         // Navigation caches - same as HB 4.3.4 dictionary_0 / dictionary_1
-        private static readonly Dictionary<NpcResult, bool> _trainerNavCache = new Dictionary<NpcResult, bool>();
-        private static readonly Dictionary<NpcResult, bool> _npcNavCache = new Dictionary<NpcResult, bool>();
+        // Keyed by NPC entry, NOT NpcResult: NpcResult is a class with no Equals/GetHashCode, so a
+        // Dictionary<NpcResult,bool> used reference equality — every query builds fresh NpcResult objects,
+        // so the cache NEVER hit and CanNavigateFully (a full Detour pathfind) ran for every candidate on
+        // every call (×4 vendor types per roam tick → severe FPS drop while roaming). Entry-keyed = real cache.
+        private static readonly Dictionary<int, bool> _trainerNavCache = new Dictionary<int, bool>();
+        private static readonly Dictionary<int, bool> _npcNavCache = new Dictionary<int, bool>();
 
         #endregion
 
@@ -137,14 +141,14 @@ namespace Styx.Database
                     continue; // [DND] placeholder/disabled NPC, not a real trainer
                 if ((result.NpcFlags & 32U) != 0U && myFaction.RelationTo(new WoWFaction(result.Faction)) >= WoWUnitReaction.Neutral)
                 {
-                    if (_trainerNavCache.TryGetValue(result, out bool cached))
+                    if (_trainerNavCache.TryGetValue(result.Entry, out bool cached))
                     {
                         if (!cached) continue;
                     }
                     else
                     {
                         bool canNav = Navigator.CanNavigateFully(location, result.Location);
-                        _trainerNavCache.Add(result, canNav);
+                        _trainerNavCache[result.Entry] = canNav;
                         if (!canNav) continue;
                     }
                     return result;
@@ -205,14 +209,14 @@ namespace Styx.Database
                 if (((npcFlags & UnitNPCFlags.ClassTrainer) == UnitNPCFlags.None || result.TrainerClass == (int)myClass) &&
                     myFaction.RelationTo(new WoWFaction(result.Faction)) >= WoWUnitReaction.Neutral)
                 {
-                    if (_npcNavCache.TryGetValue(result, out bool cached))
+                    if (_npcNavCache.TryGetValue(result.Entry, out bool cached))
                     {
                         if (!cached) continue;
                     }
                     else
                     {
                         bool canNav = Navigator.CanNavigateFully(location, result.Location);
-                        _npcNavCache.Add(result, canNav);
+                        _npcNavCache[result.Entry] = canNav;
                         if (!canNav) continue;
                     }
                     return result;
