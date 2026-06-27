@@ -66,11 +66,41 @@ namespace Styx.Logic.Inventory.Frames.Trainer
 		}
 
 		/// <summary>
-		/// Buys all available trainer services.
+		/// Buys every available + affordable trainer service.
+		/// Returns the count bought and the count of available services skipped purely for cost
+		/// (so the caller can decide whether to retry after earning money).
 		/// </summary>
-		public bool BuyAll()
+		public (int Bought, int UnaffordableRemaining) BuyAll()
 		{
-			return Lua.GetReturnVal<bool>("BuyTrainerService(0); return GetNumTrainerServices();", 0);
+			// 3.3.5a BuyTrainerService takes a 1-based index — there is no "0 = buy all", so the old
+			// BuyTrainerService(0) was a no-op. Filter to available services and buy each we can afford.
+			const string lua =
+@"SetTrainerServiceTypeFilter('available', 1)
+SetTrainerServiceTypeFilter('unavailable', 0)
+SetTrainerServiceTypeFilter('used', 0)
+local bought, unaffordable = 0, 0
+local money = GetMoney()
+for i = GetNumTrainerServices(), 1, -1 do
+  local _, _, category = GetTrainerServiceInfo(i)
+  if category == 'available' then
+    if GetTrainerServiceCost(i) <= money then
+      BuyTrainerService(i)
+      bought = bought + 1
+    else
+      unaffordable = unaffordable + 1
+    end
+  end
+end
+return bought, unaffordable";
+
+			var vals = Lua.GetReturnValues(lua);
+			int bought = 0, unaffordable = 0;
+			if (vals != null && vals.Count >= 2)
+			{
+				int.TryParse(vals[0], out bought);
+				int.TryParse(vals[1], out unaffordable);
+			}
+			return (bought, unaffordable);
 		}
 	}
 }

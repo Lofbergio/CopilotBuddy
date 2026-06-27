@@ -88,10 +88,18 @@ namespace Styx.Logic
 		/// </summary>
 		public static void TrainSkills()
 		{
-			_trainerFrame.BuyAll();
-			NeedClassTraining = false;
+			var result = _trainerFrame.BuyAll();
+
+			// Only consider training done when nothing affordable-and-available remains. If spells were
+			// skipped purely for cost, keep NeedClassTraining set so NeedToTrain() re-fires after the next
+			// sell run earns money (i.e. training is re-evaluated on every sell run, for free).
+			if (result.UnaffordableRemaining == 0)
+				NeedClassTraining = false;
+			else
+				Logging.Write("Could not afford {0} spell(s) — will retry training after earning more money.", result.UnaffordableRemaining);
+
 			ForceTrainer = false;
-			
+
 			// Best-effort refresh. BuyTrainerService(0) is async — the server response
 			// (and the WoW client's spellbook update) arrives ~30-50ms later. If this
 			// call short-circuits because NumKnownSpells hasn't changed yet, the
