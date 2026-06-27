@@ -28,22 +28,26 @@ namespace Bots.VibeGrinder.Selection
             var hostile = new HashSet<int>();
             var neutral = new HashSet<int>();
             var me = StyxWoW.Me;
-            if (me != null)
+            // Compare via FactionTemplate.dbc, the MOB's reaction toward the player ("does it aggro us").
+            // NOT WoWFaction.RelationTo: that path took the player's faction from me.FactionTemplate.Faction,
+            // which is WoWFaction.FromId(..., isTemplate:false) and so carries NO _template — and
+            // CompareFactions returns Neutral whenever either side's template FactionId is 0. Net effect:
+            // EVERY mob read as Neutral (the log's "0 hostile factions"), blinding the whole add/crowd/danger
+            // model so it picked dense aggressive camps as "safe". WoWFactionTemplate.GetReactionTowards is the
+            // complete impl and both templates here are valid. (Live combat was always fine — native reaction.)
+            WoWFactionTemplate myTemplate = me?.FactionTemplate;
+            if (me != null && myTemplate != null)
             {
-                WoWFaction myFaction = me.FactionTemplate.Faction;
                 foreach (int faction in GrindMobsRepository.DistinctFactionsOnMap(mapId))
                 {
                     if (faction <= 0)
                         continue;
                     try
                     {
-                        // The MOB's reaction toward the player (does it aggro us) — NOT the player's toward
-                        // the mob. CompareFactions only checks A's enemy mask, and aggressive-but-asymmetric
-                        // factions like "Monster" (14, e.g. Flatland Cougar) encode their hostility in THEIR
-                        // enemy mask. Computing it the wrong way round read every such mob as Neutral, so the
-                        // whole hostile-based add/crowd/danger model went blind and picked dense hostile camps
-                        // as "safe". (Live combat was fine — it uses the native reaction.)
-                        WoWUnitReaction r = new WoWFaction((uint)faction).RelationTo(myFaction);
+                        WoWFactionTemplate mobTemplate = WoWFactionTemplate.FromId((uint)faction);
+                        if (mobTemplate == null)
+                            continue;
+                        WoWUnitReaction r = mobTemplate.GetReactionTowards(myTemplate);
                         if (r < WoWUnitReaction.Neutral)
                             hostile.Add(faction);          // red/orange — aggros on sight; counts as add-risk
                         else if (r == WoWUnitReaction.Neutral)

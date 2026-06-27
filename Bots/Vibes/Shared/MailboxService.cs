@@ -35,12 +35,12 @@ namespace Bots.Vibes.Shared
         public List<Mailbox> LoadSafeMailboxes(uint mapId)
         {
             var result = new List<Mailbox>();
-            WoWFaction myFaction = StyxWoW.Me?.FactionTemplate.Faction;
+            WoWFactionTemplate myTemplate = StyxWoW.Me?.FactionTemplate;
             int skipped = 0;
             foreach (MailboxRecord mb in MailboxQueries.GetMailboxesWithFactionsOnMap(mapId))
             {
                 if (_runtimeUnsafe.Contains(mb.Location)
-                    || (myFaction != null && IsEnemyTerritory(myFaction, mb.NearbyFactions)))
+                    || (myTemplate != null && IsEnemyTerritory(myTemplate, mb.NearbyFactions)))
                 {
                     skipped++;
                     continue;
@@ -113,7 +113,7 @@ namespace Bots.Vibes.Shared
         /// reputation), so reputation-gated hostility — Aldor/Scryer guards turning on the
         /// opposing-rep player — is invisible here; the runtime backstop covers that.
         /// </summary>
-        private static bool IsEnemyTerritory(WoWFaction myFaction, List<int> nearbyFactions)
+        private static bool IsEnemyTerritory(WoWFactionTemplate myTemplate, List<int> nearbyFactions)
         {
             bool hostile = false, friendly = false;
             foreach (int faction in nearbyFactions)
@@ -121,12 +121,14 @@ namespace Bots.Vibes.Shared
                 if (faction <= 0) continue;
                 try
                 {
-                    // Guard's reaction toward us (does it attack), not ours toward it — see FactionResolver
-                    // for why the direction matters (asymmetric "Monster"-type factions).
-                    var guard = new WoWFaction((uint)faction);
-                    WoWUnitReaction r = guard.RelationTo(myFaction);
-                    if (r < WoWUnitReaction.Neutral) hostile = true;
-                    else if (myFaction.RelationTo(guard) > WoWUnitReaction.Neutral) friendly = true;   // our own faction's guards are here
+                    // Compare via FactionTemplate.dbc (the working path — see FactionResolver: WoWFaction
+                    // from me.FactionTemplate.Faction has no template, so WoWFaction.RelationTo always
+                    // returned Neutral and no territory was ever flagged enemy). Guard's reaction toward us
+                    // = does it attack; ours toward it (Friendly) = our own faction's guards are present.
+                    var guard = WoWFactionTemplate.FromId((uint)faction);
+                    if (guard == null) continue;
+                    if (guard.GetReactionTowards(myTemplate) < WoWUnitReaction.Neutral) hostile = true;
+                    else if (myTemplate.GetReactionTowards(guard) > WoWUnitReaction.Neutral) friendly = true;
                 }
                 catch
                 {
