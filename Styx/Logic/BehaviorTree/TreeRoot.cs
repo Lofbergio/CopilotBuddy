@@ -258,6 +258,13 @@ namespace Styx.Logic.BehaviorTree
 			}
 		}
 
+		// Tracks one continuous "not in world" stretch (DC / client crash / stuck loading); reset the
+		// moment we're back in world. Drives the log throttle (here) and the auto-stop (RunTickBody).
+		private static readonly Stopwatch _notInWorld = new Stopwatch();
+		private static int _notInWorldLastLogSec;
+		// A real outage won't self-resolve (no relog logic), so stop rather than spin idle for hours.
+		private const double NotInWorldStopMinutes = 5.0;
+
 		/// <summary>
 		/// HB 6.2.3 Class1150.method_0: InGame check.
 		/// Returns true to SKIP the bot tick (not in game).
@@ -265,8 +272,28 @@ namespace Styx.Logic.BehaviorTree
 		private static async Task<bool> InGameCheckAsync()
 		{
 			if (StyxWoW.IsInWorld)
+			{
+				_notInWorld.Reset();
 				return false; // in game → don't skip
-			Logging.Write("Not in game");
+			}
+
+			// Throttle: announce once, then every ~60s with elapsed — never 10×/sec for hours (one
+			// overnight disconnect produced a 160k-line log). RunTickBody stops the bot if it persists.
+			if (!_notInWorld.IsRunning)
+			{
+				_notInWorld.Restart();
+				_notInWorldLastLogSec = 0;
+				Logging.Write("Not in game (loading, zoning, or disconnected) — bot ticks paused.");
+			}
+			else
+			{
+				int sec = (int)_notInWorld.Elapsed.TotalSeconds;
+				if (sec - _notInWorldLastLogSec >= 60)
+				{
+					_notInWorldLastLogSec = sec;
+					Logging.Write("Still not in game after {0}s.", sec);
+				}
+			}
 			return true; // not in game → skip tick
 		}
 
@@ -410,6 +437,17 @@ namespace Styx.Logic.BehaviorTree
 			{
 				Logging.Write("WoW process has exited. Stopping bot.");
 				Stop("WoW process exited");
+				return;
+			}
+
+			// Sustained "not in game" (disconnect / client crash / stuck loading) won't self-resolve — we
+			// have no relog logic — so stop cleanly instead of spinning idle for hours. Brief gaps
+			// (zoning/taxi/loading) reset the timer (InGameCheckAsync). Mirrors the process-exit stop above.
+			if (_notInWorld.Elapsed.TotalMinutes >= NotInWorldStopMinutes)
+			{
+				Logging.Write(Colors.Orange, "Not in game for {0:F0}+ min (likely disconnected/crashed). Stopping bot — relog, then restart it.", NotInWorldStopMinutes);
+				_notInWorld.Reset();
+				Stop("Not in game too long (disconnected)");
 				return;
 			}
 
