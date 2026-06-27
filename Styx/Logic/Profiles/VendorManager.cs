@@ -137,11 +137,19 @@ namespace Styx.Logic.Profiles
                     {
                         try
                         {
+                            // Honor the blacklist: when the auto-resolved NPC can't be reached/interacted
+                            // (e.g. a [DND] pedestal wrongly flagged as a vendor in data.bin), the vendor
+                            // behaviour blacklists it — without skipping it here the query would re-return the
+                            // same NPC every tick → infinite "could not find vendor" loop.
+                            HashSet<int> excluded = Blacklist != null && Blacklist.Count > 0
+                                ? new HashSet<int>(Blacklist.Select(v => v.Entry))
+                                : null;
                             NpcResult nearestNpc = NpcQueries.GetNearestNpc(
                                 StyxWoW.Me.FactionTemplate.Faction,
                                 StyxWoW.Me.MapId,
                                 StyxWoW.Me.Location,
-                                type.AsNpcFlag());
+                                type.AsNpcFlag(),
+                                excluded);
                             if (nearestNpc != null)
                             {
                                 return new Vendor(nearestNpc.Entry, nearestNpc.Name, type, nearestNpc.Location);

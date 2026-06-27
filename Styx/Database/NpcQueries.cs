@@ -110,7 +110,7 @@ namespace Styx.Database
         /// <param name="searchLocation">The search location.</param>
         /// <param name="searchClass">The class to search for.</param>
         /// <returns>The nearest trainer, or null if not found.</returns>
-        public static NpcResult GetNearestTrainer(WoWFaction myFaction, uint mapId, WoWPoint searchLocation, WoWClass searchClass)
+        public static NpcResult GetNearestTrainer(WoWFaction myFaction, uint mapId, WoWPoint searchLocation, WoWClass searchClass, HashSet<int> excludeEntries = null)
         {
             EnsureInitialized();
             if (_getNearestTrainerCmd == null) return null;
@@ -131,6 +131,10 @@ namespace Styx.Database
             while (reader.Read())
             {
                 NpcResult result = new NpcResult(reader);
+                if (excludeEntries != null && excludeEntries.Contains(result.Entry))
+                    continue; // blacklisted (e.g. couldn't be reached/interacted last time)
+                if (!string.IsNullOrEmpty(result.Name) && result.Name.IndexOf("[DND]", StringComparison.OrdinalIgnoreCase) >= 0)
+                    continue; // [DND] placeholder/disabled NPC, not a real trainer
                 if ((result.NpcFlags & 32U) != 0U && myFaction.RelationTo(new WoWFaction(result.Faction)) >= WoWUnitReaction.Neutral)
                 {
                     if (_trainerNavCache.TryGetValue(result, out bool cached))
@@ -157,7 +161,7 @@ namespace Styx.Database
         /// <param name="searchLocation">The search location.</param>
         /// <param name="npcFlags">The NPC flags to search for.</param>
         /// <returns>The nearest NPC, or null if not found.</returns>
-        public static NpcResult GetNearestNpc(WoWFaction myFaction, uint mapId, WoWPoint searchLocation, UnitNPCFlags npcFlags)
+        public static NpcResult GetNearestNpc(WoWFaction myFaction, uint mapId, WoWPoint searchLocation, UnitNPCFlags npcFlags, HashSet<int> excludeEntries = null)
         {
             EnsureInitialized();
             if (_getNearestNpcCmd == null) return null;
@@ -167,7 +171,7 @@ namespace Styx.Database
             // If looking for class trainer, use specialized query
             if ((npcFlags & UnitNPCFlags.ClassTrainer) != UnitNPCFlags.None)
             {
-                return GetNearestTrainer(myFaction, mapId, searchLocation, myClass);
+                return GetNearestTrainer(myFaction, mapId, searchLocation, myClass, excludeEntries);
             }
 
             using var reader = Connection.ExecuteReader(_getNearestNpcCmd,
@@ -184,7 +188,15 @@ namespace Styx.Database
             while (reader.Read())
             {
                 NpcResult result = new NpcResult(reader);
-                
+
+                if (excludeEntries != null && excludeEntries.Contains(result.Entry))
+                    continue; // blacklisted (e.g. a bad/unspawned NPC we couldn't interact with last time)
+
+                // [DND] = "Do Not Disturb" placeholder/disabled NPCs (e.g. tournament pedestals). They carry
+                // junk npcflags and aren't spawned/interactable — never a real vendor.
+                if (!string.IsNullOrEmpty(result.Name) && result.Name.IndexOf("[DND]", StringComparison.OrdinalIgnoreCase) >= 0)
+                    continue;
+
                 // Skip NPCs with invalid faction
                 if (result.Faction == 0)
                     continue;
