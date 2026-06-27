@@ -75,10 +75,6 @@ namespace Bots.Grind
         private static ulong _combatGuid;
         private static double _combatLastHpPct;
         private static DateTime _combatHpDropAt = DateTime.MinValue;
-        // Corpse-run progress watchdog: if a ghost can't get closer to its corpse (partial-path / blocked),
-        // fall back to the spirit healer rather than running at an unreachable corpse forever.
-        private static float _corpseMoveLastDist;
-        private static DateTime _corpseMoveProgressAt = DateTime.MinValue;
 
         // Root behavior cache
         private PrioritySelector _rootBehavior;
@@ -372,24 +368,6 @@ namespace Bots.Grind
                         // HB 4.3.4 smethod_85: Wait up to 10 sec for server to send CorpsePoint
                         new Wait(10, ctx => StyxWoW.Me.CorpsePoint != WoWPoint.Empty, new ActionAlwaysSucceed()),
                         new ActionSetActivity("Moving to corpse"),
-                        // Corpse-run stall → spirit healer. A reachable run keeps closing distance; a
-                        // partial-path/unreachable corpse plateaus. Progress-based, so legit long runs are safe.
-                        new TreeSharp.Action(ctx =>
-                        {
-                            float d = StyxWoW.Me.Location.Distance(StyxWoW.Me.CorpsePoint);
-                            if (_corpseMoveProgressAt == DateTime.MinValue || d < _corpseMoveLastDist - 3f)
-                            {
-                                _corpseMoveLastDist = d;
-                                _corpseMoveProgressAt = DateTime.UtcNow;
-                            }
-                            else if ((DateTime.UtcNow - _corpseMoveProgressAt).TotalSeconds > 30)
-                            {
-                                Logging.Write(System.Drawing.Color.Orange,
-                                    "[LB] No progress toward corpse in 30s (unreachable?) — using the spirit healer.");
-                                ShouldUseSpiritHealer = true;
-                            }
-                            return RunStatus.Success;
-                        }),
                         // HB 4.3.4 smethod_86/87/88: fly if !diedIndoors && (Mounted || CanFly), else walk
                         new PrioritySelector(
                             new Decorator(
@@ -450,7 +428,6 @@ namespace Bots.Grind
                                     Lua.DoString("AcceptXPLoss()");
                                     ShouldUseSpiritHealer = false;
                                     _deathCount = 0;
-                                    _corpseMoveProgressAt = DateTime.MinValue;
                                 })
                             )
                         )
@@ -472,7 +449,7 @@ namespace Bots.Grind
                     new DecoratorContinue(
                         ctx => StyxWoW.Me.IsAlive && !StyxWoW.Me.IsGhost,
                         new Sequence(
-                            new TreeSharp.Action(ctx => { _corpseWaitStopwatch.Reset(); _corpseMoveProgressAt = DateTime.MinValue; }),
+                            new TreeSharp.Action(ctx => _corpseWaitStopwatch.Reset()),
                             new ActionClearPoi("Resurrected"),
                             new ActionAlwaysFail()
                         )
@@ -501,17 +478,6 @@ namespace Bots.Grind
                             new TreeSharp.Action(ctx => GrabCorpse()),
                             new TreeSharp.Action(ctx => _corpseWaitStopwatch.Reset()),
                             new WaitContinue(5, ctx => StyxWoW.Me.IsAlive, null),
-                            // If the grab didn't take (ghost not actually on the corpse), escalate to the
-                            // spirit healer instead of re-running the 40s timer forever.
-                            new DecoratorContinue(
-                                ctx => StyxWoW.Me.IsGhost,
-                                new TreeSharp.Action(ctx =>
-                                {
-                                    Logging.Write(System.Drawing.Color.Orange,
-                                        "[LB] Corpse grab didn't resurrect us — using the spirit healer.");
-                                    ShouldUseSpiritHealer = true;
-                                })
-                            ),
                             new ActionClearPoi("Res timer expired. Grabbed our corpse.")
                         )
                     ),
