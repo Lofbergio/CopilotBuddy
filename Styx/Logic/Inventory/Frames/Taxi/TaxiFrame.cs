@@ -40,6 +40,7 @@ namespace Styx.Logic.Inventory.Frames.Taxi
         {
             Current,
             Reachable,
+            Distant,   // known node not directly reachable from here — TaxiNodeGetType can return "DISTANT"
             None,
         }
 
@@ -69,7 +70,12 @@ namespace Styx.Logic.Inventory.Frames.Taxi
                 get
                 {
                     if (!_type.HasValue)
-                        _type = (NodeType)Enum.Parse(typeof(NodeType), Lua.GetReturnVal<string>($"return TaxiNodeGetType({Slot})", 0U), true);
+                    {
+                        // Safe-parse: WotLK TaxiNodeGetType returns CURRENT/REACHABLE/DISTANT/NONE — an
+                        // unknown value must not throw (would kill the whole TAXIMAP_OPENED handler).
+                        string raw = Lua.GetReturnVal<string>($"return TaxiNodeGetType({Slot})", 0U);
+                        _type = Enum.TryParse(raw, true, out NodeType parsed) ? parsed : NodeType.None;
+                    }
                     return _type.Value;
                 }
             }
