@@ -1,3 +1,6 @@
+using System;
+using System.Globalization;
+using System.Xml.Linq;
 using Bots.VibeGrinder.Selection;
 using Bots.Vibes.Shared;
 using Styx;
@@ -35,9 +38,36 @@ namespace Bots.VibeGrinder.Synthesis
             if (_profile != null)
                 return;
 
-            _profile = new Profile { Name = "VibeGrinder (synthetic)" };
+            // Operational thresholds live in the bot settings (VibeGrinderSettings), not the profile.
+            // NeedToSell/NeedToRepair read them off the profile though, so project them onto the synthetic
+            // profile through the normal profile-config (XML) path — no core Profile setters. Without this the
+            // profile keeps its defaults (MinFreeBagSlots 0 = sell only at 100%-full bags → never funds training).
+            // SellWhiteJunk (opt-in, default OFF) lets the vendor sweep clear low-value white junk (cooking
+            // meat). It's gated behind the setting because selling whites is only safe with the VendorGuard
+            // plugin enabled — off by default means greys-only selling, which never touches your gear/cloth.
+            var vg = VibeGrinderSettings.Instance;
+            // MinDurability is a 0–1 fraction. The Styx settings round-trip can reload a saved "0,35" as 35
+            // (comma read as a thousands separator), which would make the bot think it ALWAYS needs repair
+            // (LowestDurabilityPercent 1.0 <= 35). Normalize any out-of-range value back into [0,1].
+            float minDur = vg.MinDurability;
+            if (minDur > 1f) minDur /= 100f;
+            minDur = Math.Clamp(minDur, 0f, 1f);
+            var xml = new XElement("HBProfile",
+                new XElement("MinFreeBagSlots", vg.MinFreeBagSlots),
+                new XElement("MinDurability", minDur.ToString(CultureInfo.InvariantCulture)),
+                new XElement("SellWhite", vg.SellWhiteJunk));
+            _profile = new Profile(xml, null) { Name = "VibeGrinder (synthetic)" };
             // Empty VendorManager + this flag => vendor tree auto-resolves sell/repair/food from data.bin.
             CharacterSettings.Instance.FindVendorsAutomatically = true;
+
+            // Unattended grinder must restock consumables. Default 0 => never buys food/water, so a mana class
+            // sit-regens for minutes when OOM (which despawns nearby loot). Seed sane amounts only if the user
+            // hasn't set their own. (BuyItems only buys drink for mana classes, so this is safe for all.)
+            if (CharacterSettings.Instance.FoodAmount == 0)
+                CharacterSettings.Instance.FoodAmount = 20;
+            if (CharacterSettings.Instance.DrinkAmount == 0)
+                CharacterSettings.Instance.DrinkAmount = 20;
+
             ProfileManager.UseSyntheticProfile(_profile);
         }
 

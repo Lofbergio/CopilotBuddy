@@ -25,7 +25,7 @@ namespace Bots.VibeGrinder
         }
 
         // ---- Level band ----
-        [Setting, Styx.Helpers.DefaultValue(3)]
+        [Setting, Styx.Helpers.DefaultValue(2)]
         [Category("Spot"), Description("How many levels below the character a target mob may be.")]
         public int LevelBandBelow { get; set; }
 
@@ -153,6 +153,10 @@ namespace Bots.VibeGrinder
         [Setting, Styx.Helpers.DefaultValue(0.35f)]
         [Category("Survival"), Description("Durability fraction (0-1) before a repair run.")]
         public float MinDurability { get; set; }
+
+        [Setting, Styx.Helpers.DefaultValue(false)]
+        [Category("Survival"), Description("Sell WHITE items (e.g. cooking meat) at vendors to clear bag junk. OFF by default (greys only). If you turn this ON, also enable the VendorGuard plugin — otherwise white cloth / BoE gear gets vendored too.")]
+        public bool SellWhiteJunk { get; set; }
 
         [Setting, Styx.Helpers.DefaultValue(false)]
         [Category("Survival"), Description("Allow flight-path travel between continents (off for overnight).")]
