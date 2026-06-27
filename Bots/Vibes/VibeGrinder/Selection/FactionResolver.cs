@@ -37,11 +37,17 @@ namespace Bots.VibeGrinder.Selection
                         continue;
                     try
                     {
-                        WoWUnitReaction r = myFaction.RelationTo(new WoWFaction((uint)faction));
+                        // The MOB's reaction toward the player (does it aggro us) — NOT the player's toward
+                        // the mob. CompareFactions only checks A's enemy mask, and aggressive-but-asymmetric
+                        // factions like "Monster" (14, e.g. Flatland Cougar) encode their hostility in THEIR
+                        // enemy mask. Computing it the wrong way round read every such mob as Neutral, so the
+                        // whole hostile-based add/crowd/danger model went blind and picked dense hostile camps
+                        // as "safe". (Live combat was fine — it uses the native reaction.)
+                        WoWUnitReaction r = new WoWFaction((uint)faction).RelationTo(myFaction);
                         if (r < WoWUnitReaction.Neutral)
-                            hostile.Add(faction);          // red/orange — always grindable
+                            hostile.Add(faction);          // red/orange — aggros on sight; counts as add-risk
                         else if (r == WoWUnitReaction.Neutral)
-                            neutral.Add(faction);          // yellow — grindable only if non-humanoid
+                            neutral.Add(faction);          // yellow — passive; grindable only if non-humanoid
                     }
                     catch
                     {

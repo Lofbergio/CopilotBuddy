@@ -121,9 +121,12 @@ namespace Bots.Vibes.Shared
                 if (faction <= 0) continue;
                 try
                 {
-                    WoWUnitReaction r = myFaction.RelationTo(new WoWFaction((uint)faction));
+                    // Guard's reaction toward us (does it attack), not ours toward it — see FactionResolver
+                    // for why the direction matters (asymmetric "Monster"-type factions).
+                    var guard = new WoWFaction((uint)faction);
+                    WoWUnitReaction r = guard.RelationTo(myFaction);
                     if (r < WoWUnitReaction.Neutral) hostile = true;
-                    else if (r > WoWUnitReaction.Neutral) friendly = true;   // our own faction's guards are here
+                    else if (myFaction.RelationTo(guard) > WoWUnitReaction.Neutral) friendly = true;   // our own faction's guards are here
                 }
                 catch
                 {
