@@ -1417,6 +1417,13 @@ namespace Bots.Grind
             HashSet<uint> validFactions = new HashSet<uint>();
             GrindArea grindArea = StyxWoW.AreaManager?.CurrentGrindArea;
 
+            // Grind-area level band. Default is [0, int.MaxValue] (no limit) so HB profiles that don't set
+            // it are unaffected; VibeGrinder sets it, so we don't kill grossly under/over-level mobs of the
+            // same faction (e.g. gray level 5-6 Prairie Wolves at a level-9 beast spot — faction matched but
+            // way below band). Previously targeting was faction-only and ignored level entirely.
+            int bandMin = grindArea?.TargetMinLevel ?? 0;
+            int bandMax = grindArea?.TargetMaxLevel ?? int.MaxValue;
+
             if (grindArea != null && grindArea.Factions.Count > 0)
             {
                 foreach (uint faction in grindArea.Factions)
@@ -1434,7 +1441,8 @@ namespace Bots.Grind
                 {
                     if (!currentProfile.AvoidMobs.Contains(unit.Entry) &&
                         !IsTooNearBlackspot(currentProfile.Blackspots, unit.Location) &&
-                        validFactions.Contains(unit.FactionId))
+                        validFactions.Contains(unit.FactionId) &&
+                        unit.Level >= bandMin && unit.Level <= bandMax)
                     {
                         outgoingUnits.Add(obj);
                     }
