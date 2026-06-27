@@ -593,17 +593,21 @@ namespace Bots.Grind
                 if (path == null || path.Length == 0)
                     continue;
 
-                // Check path endpoint is close to candidate (within PathPrecision + Z tolerance)
+                // The candidate Z is the corpse height + 2.132 (raised for the LOS raycast), so the old
+                // |pathEnd.Z - candidate.Z| >= 3 check rejected almost everything: 2.132 of the 3yd tolerance
+                // was eaten by the raise, so any spot even ~1yd below the corpse was discarded → on real
+                // (non-flat) terrain it found nothing and rezzed on the mobs. Use the reachable ground point
+                // (pathEnd) as the res spot and only require the path to actually reach the candidate's XY
+                // (i.e. didn't stop short at a cliff/wall).
                 WoWPoint pathEnd = path[path.Length - 1];
-                if (pathEnd.Distance2DSqr(candidate) > Navigator.PathPrecision * Navigator.PathPrecision ||
-                    Math.Abs(pathEnd.Z - candidate.Z) >= 3f)
+                if (pathEnd.Distance2DSqr(candidate) > Navigator.PathPrecision * Navigator.PathPrecision)
                     continue;
 
                 // Score: distance from nearest hostile (higher = safer)
-                float distFromHostile = GetDistanceToNearestHostile(candidate, hostilePositions);
+                float distFromHostile = GetDistanceToNearestHostile(pathEnd, hostilePositions);
                 if (distFromHostile > bestDistance)
                 {
-                    bestPoint = candidate;
+                    bestPoint = pathEnd;
                     bestDistance = distFromHostile;
                 }
             }
