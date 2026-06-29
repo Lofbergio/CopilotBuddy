@@ -173,10 +173,14 @@ namespace Bots.VibeGrinder
         [Browsable(false)] public int PathHostileLevelMargin => 2;
         [Browsable(false)] public int PathGauntletTolerance => 2;
         // Safe-rest: before sitting to eat/drink, back off if a hostile is within SafeRestDangerRange.
-        // Triggers only once HP/mana is low enough that a rest is imminent.
-        [Browsable(false)] public int SafeRestHealthPct => 55;
-        [Browsable(false)] public int SafeRestManaPct => 45;
+        // The HP/mana trigger comes from RestGovernor (mirrors Singular's live MinHealth/MinMana), so
+        // SafeRest fires on exactly the band the routine actually rests at — see SafeRestReposition.
         [Browsable(false)] public float SafeRestDangerRange => 30f;
+
+        // Cap PullDistance so the bot walks into the routine's cast range before engaging, instead of
+        // stalling on a distant/stationary mob that's "in pull range" but out of cast range (27 ≈ 3yd
+        // inside a 30yd caster cast range; clamps DOWN only, so a deliberate melee value is untouched).
+        [Browsable(false)] public int MaxPullDistance => 27;
 
         // ---- Supervisor timings ----
         [Browsable(false)] public int SupervisorIntervalSec => 15;
@@ -185,12 +189,25 @@ namespace Bots.VibeGrinder
         [Browsable(false)] public int EmptyTargetSeconds => 45;
         [Browsable(false)] public int DeathLoopCount => 3;
         [Browsable(false)] public int DeathLoopWindowMin => 5;
+        // Freeze watchdog: a body that hasn't moved AND hasn't killed for this long (while alive, out
+        // of combat, not eating/drinking, not on a vendor trek) is wedged — break it. Depletion only
+        // catches an EMPTY target list; this catches "valid target present, even in range, but the
+        // tree never pulls" (e.g. Singular Rest gating Pull when there's no drink to recover mana).
+        // 180s clears a legit low-level no-drink rest (mana fills in <1min, then a kill resets the clock)
+        // while an unbounded freeze trips. Runs from Pulse() so it's immune to tree-branch starvation.
+        [Browsable(false)] public int StallSeconds => 180;
+        [Browsable(false)] public float StallMoveEpsilon => 5f;   // moved less than this = "not moving" (yd)
+        // Diagnostic fires this early (and once per stationary episode) to capture the short-lived
+        // "standing with a valid target, not pulling" symptom before it resolves; the relocate break
+        // still waits for StallSeconds. Set well above a normal pull wind-up / loot pause.
+        [Browsable(false)] public int StallDiagSeconds => 12;
 
         // ---- Supervisor triggers (derived from Relocate mode) ----
         [Browsable(false)] public bool EnableIntrusionRelocate => Relocate == RelocateMode.Auto;
         [Browsable(false)] public bool EnableLevelDriftRelocate => Relocate == RelocateMode.Auto;
         [Browsable(false)] public bool EnableDepletionRelocate => Relocate == RelocateMode.Auto;
         [Browsable(false)] public bool EnableDeathLoopRelocate => Relocate != RelocateMode.Off;
+        [Browsable(false)] public bool EnableStallRelocate => Relocate != RelocateMode.Off;
 
         // ---- Add-avoidance tuning (derived from AddAvoidanceMode) ----
         [Browsable(false)] public float PullCrowdRadius => AddAvoidanceMode == AddAvoidance.Off ? 0f : 12f;
@@ -201,6 +218,24 @@ namespace Bots.VibeGrinder
             AddAvoidance.Aggressive => 120f,
             _ => 60f,
         };
+        // Don't OPEN on a neutral that has a hostile within this radius — engaging it means walking into
+        // the hostile bubble (or AoE drags them in). Wider than PullCrowdRadius: it's the approach/aggro
+        // bubble, not the touching radius. The veto is large enough to bury the neutral below any clean
+        // target so we only pull it when genuinely isolated.
+        [Browsable(false)] public float NeutralHostileAvoidRadius => 22f;
+        [Browsable(false)] public float NeutralNearHostileVeto => 1000f;
+        // Cap on the hostile-crowd pull penalty: base score loses 2/yd, so 40 ≈ 20yd. Keeps add-avoidance a
+        // tiebreaker among similarly-close mobs and stops it ever picking a farther mob over a nearer threat.
+        [Browsable(false)] public float PullCrowdPenaltyCap => 40f;
+        // HARD VETO: refuse to OPEN on a mob with this many hostile neighbours within PullCrowdRadius (a real
+        // camp). The capped penalty above is only a tiebreaker and can't refuse a camp; this removes camped
+        // mobs from the candidate list while squishy so we relocate rather than feed into a 4-mob bonfire camp.
+        [Browsable(false)] public int PullPackVetoCount => 3;
+        // Engagement commitment (ApplyPullCommitment): once we pick a mob to pull, add this to its score so
+        // it stays FirstUnit and the pull sees it through instead of re-deciding every tick. Huge = absolute
+        // pin. Drop the commitment after PullCommitMaxSeconds without engaging (unreachable → blacklist).
+        [Browsable(false)] public float PullCommitBoost => 100000f;
+        [Browsable(false)] public int PullCommitMaxSeconds => 20;
         [Browsable(false)] public int PullCrowdFullLevel => 15;
         [Browsable(false)] public int PullCrowdLevelCeiling => AddAvoidanceMode == AddAvoidance.Aggressive ? 70 : 50;
         [Browsable(false)] public int PackDeathAttackers => 2;

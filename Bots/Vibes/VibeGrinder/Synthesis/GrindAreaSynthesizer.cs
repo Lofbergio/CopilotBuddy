@@ -25,6 +25,7 @@ namespace Bots.VibeGrinder.Synthesis
         // Originals of the global CharacterSettings we seed, so Stop() can restore them (don't
         // permanently overwrite a user's deliberate 0 = "never buy consumables").
         private int _origFoodAmount = -1, _origDrinkAmount = -1;
+        private int _origPullDistance = -1;
         private bool? _origRessAtSpiritHealers;
 
         public GrindAreaSynthesizer(MailboxService mailboxes)
@@ -81,6 +82,17 @@ namespace Bots.VibeGrinder.Synthesis
                 CharacterSettings.Instance.FoodAmount = 20;
             if (CharacterSettings.Instance.DrinkAmount == 0)
                 CharacterSettings.Instance.DrinkAmount = 20;
+
+            // Pull-range dead band: LevelBot only walks to a target while dist >= PullDistance, then hands
+            // off to the routine to engage. If PullDistance (default 45/48) exceeds the routine's cast range
+            // (~30yd for a low-level caster), a mob at 30-48yd reads as "in pull range" so nobody walks
+            // closer, but the routine can't cast that far and won't move pre-combat → the bot stares at a
+            // distant/stationary mob (e.g. a Kolkar Stormer) forever. Cap it DOWN (never raise a deliberate
+            // melee value) so the walk-in always closes the gap before the routine casts. Restored on Stop.
+            _origPullDistance = CharacterSettings.Instance.PullDistance;
+            int pullCap = VibeGrinderSettings.Instance.MaxPullDistance;
+            if (CharacterSettings.Instance.PullDistance > pullCap)
+                CharacterSettings.Instance.PullDistance = pullCap;
 
             // Unattended corpse-camp escape. With this OFF (the default) LevelBot's 3-strike camp
             // protection is dead code, so a corpse camped by a hostile pack spins forever: it can't res
@@ -159,6 +171,7 @@ namespace Bots.VibeGrinder.Synthesis
         {
             if (_origFoodAmount >= 0) { CharacterSettings.Instance.FoodAmount = _origFoodAmount; _origFoodAmount = -1; }
             if (_origDrinkAmount >= 0) { CharacterSettings.Instance.DrinkAmount = _origDrinkAmount; _origDrinkAmount = -1; }
+            if (_origPullDistance >= 0) { CharacterSettings.Instance.PullDistance = _origPullDistance; _origPullDistance = -1; }
             if (_origRessAtSpiritHealers.HasValue) { CharacterSettings.Instance.RessAtSpiritHealers = _origRessAtSpiritHealers.Value; _origRessAtSpiritHealers = null; }
         }
     }
