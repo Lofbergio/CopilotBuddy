@@ -335,6 +335,17 @@ namespace Styx.Logic
 		/// - Ghost Wolf: 2s cast, no explicit combat ban but interrupted by damage in combat.
 		/// - Travel Form: instant cast, usable in combat (no cast to interrupt).
 		/// </summary>
+		// A 2s Ghost Wolf is wasted when a fight is seconds away (see the gate in TryUseShapeshiftSpeedBuff).
+		private const float GhostWolfSkipNearHostile = 45f;
+		private static bool NearbyHostile(LocalPlayer me, float range)
+		{
+			float r2 = range * range;
+			foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
+				if (u != null && !u.Dead && u.IsHostile && me.Location.DistanceSqr(u.Location) <= r2)
+					return true;
+			return false;
+		}
+
 		private static bool TryUseShapeshiftSpeedBuff(LocalPlayer me)
 		{
 			// Both spells are outdoors-only in WotLK 3.3.5a.
@@ -369,6 +380,12 @@ namespace Styx.Logic
 				{
 					if (me.HasAura("Ghost Wolf"))
 						return true;            // already up — don't re-cast it every travel tick
+
+					// Imminent-combat gate: a hostile this close means we will be in combat before a 2s Ghost
+					// Wolf pays off (it just gets cancelled) - a wasted cast that looks bot-like. Run on foot;
+					// we engage shortly. (Instant Ghost Wolf / Travel Form skip this.)
+					if (NearbyHostile(me, GhostWolfSkipNearHostile))
+						return false;
 
 					// A cast-time Ghost Wolf silently fails if started while moving OR on GCD, and MountUp
 					// re-tries it every travel tick (the 3x-retry spam). Two failure modes seen:

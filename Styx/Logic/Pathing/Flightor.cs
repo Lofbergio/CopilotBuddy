@@ -196,8 +196,11 @@ namespace Styx.Logic.Pathing
                 // for faster patrol before falling back to on-foot navigation.
                 // ShouldWalk returns true here because !CanFly, not because distance is short,
                 // so mounting is appropriate.  Mount.MountUp() is a no-op when cooldown is active.
-                if (!CanFly && !StyxWoW.Me.Mounted)
-                    Mount.MountUp();
+                // Gate on ShouldMount(destination): without it this path mounts on EVERY ground move
+                // regardless of distance — the "Ghost Wolf to loot a corpse 5 yards away" dumbness, since
+                // the no-arg MountUp() skips the distance check Navigator.MoveTo already applies.
+                if (!CanFly && !StyxWoW.Me.Mounted && Mount.ShouldMount(destination))
+                    Mount.MountUp(() => destination);
                 Navigator.MoveTo(destination);
                 return;
             }
