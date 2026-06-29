@@ -49,6 +49,7 @@ namespace VibeQuester
         // Faction-safe mailing (shared with VibeGrinder). Off unless EnableMailing.
         private readonly MailboxService _mailboxes = new MailboxService();
         private readonly ConsumableProtection _consumables = new ConsumableProtection();
+        private readonly RestGovernor _restGovernor = new RestGovernor(seedRestock: true);   // rest thresholds + restock seeding
         private Profile _mailboxedProfile;          // last profile we populated mailboxes for
         private uint _mailboxedMap = uint.MaxValue;  // map we populated them for
         private bool _diedHookSubscribed;
@@ -306,6 +307,9 @@ namespace VibeQuester
 
             // Refresh every tick: TreeRoot.Start() spins up a new worker thread on each restart.
             _workerThreadId = Environment.CurrentManagedThreadId;
+
+            if (StyxWoW.IsInGame && StyxWoW.Me != null)
+                _restGovernor.Pulse(StyxWoW.Me);   // governs Singular MinHealth/MinMana (folds in QuestGovernor)
 
             // Faction-safe mailing: keep the loaded profile's mailboxes populated + consumables
             // protected, and run the live backstop near a mailbox. The engine's mail behaviour does
