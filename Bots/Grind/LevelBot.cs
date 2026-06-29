@@ -1262,13 +1262,33 @@ namespace Bots.Grind
             );
         }
 
+        // Throttled decision-reasoning log: re-emits a given decision only when its message CHANGES or after 8s,
+        // so the per-tick Need*/vendor gates can show WHY they decided without spamming the log every frame.
+        private static readonly Dictionary<string, (string msg, DateTime when)> _decisionLast =
+            new Dictionary<string, (string, DateTime)>();
+        private static void LogDecision(string key, string msg)
+        {
+            if (_decisionLast.TryGetValue(key, out var prev) && prev.msg == msg && (DateTime.Now - prev.when).TotalSeconds < 8.0)
+                return;
+            _decisionLast[key] = (msg, DateTime.Now);
+            Logging.WriteDebug(msg);
+        }
+
         private static bool NeedToSell()
         {
             if (StyxWoW.Me == null) return false;
             // HB 4.3.4 smethod_11 — no FindVendorsAutomatically check
             if (ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Sell) == null)
+            {
+                LogDecision("sell", "[NeedToSell] no — no sell vendor known for this area");
                 return false;
-            return Vendors.ForceSell || StyxWoW.Me.FreeNormalBagSlots <= ProfileManager.CurrentProfile.MinFreeBagSlots;
+            }
+            uint free = StyxWoW.Me.FreeNormalBagSlots;
+            int min = ProfileManager.CurrentProfile.MinFreeBagSlots;
+            bool need = Vendors.ForceSell || free <= min;
+            LogDecision("sell", string.Format("[NeedToSell] {0} — freeNormalBags {1} <= min {2}:{3} (force={4})",
+                need ? "YES" : "no", free, min, free <= min, Vendors.ForceSell));
+            return need;
         }
 
         private static bool NeedToTrain()
@@ -1277,8 +1297,14 @@ namespace Bots.Grind
             if (!CharacterSettings.Instance.TrainNewSkills && !Vendors.ForceTrainer)
                 return false;
             if (ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Train) == null)
+            {
+                LogDecision("train", "[NeedToTrain] no — no trainer vendor known for this area");
                 return false;
-            return Vendors.ForceTrainer || Vendors.NeedClassTraining;
+            }
+            bool need = Vendors.ForceTrainer || Vendors.NeedClassTraining;
+            LogDecision("train", string.Format("[NeedToTrain] {0} — needClassTraining={1} (force={2})",
+                need ? "YES" : "no", Vendors.NeedClassTraining, Vendors.ForceTrainer));
+            return need;
         }
 
         private static bool NeedToRepair()
@@ -1288,7 +1314,10 @@ namespace Bots.Grind
             if (Vendors.RepairDisabled)
                 return false;
             if (ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Repair) == null)
+            {
+                LogDecision("repair", "[NeedToRepair] no — no repair vendor known for this area");
                 return false;
+            }
 
             // HB 4.3.4: update repair cost periodically
             if (_repairCostTimer.IsFinished)
@@ -1309,10 +1338,17 @@ namespace Bots.Grind
                     Logging.Write(System.Drawing.Color.Red, "WARNING! You have no money to repair! Cancelling forced repair run.");
                     Vendors.ForceRepair = false;
                 }
+                LogDecision("repair", string.Format("[NeedToRepair] no — can't afford repair (cost {0}c > have {1}c)",
+                    _lastRepairCost, StyxWoW.Me.Coinage));
                 return false;
             }
 
-            return Vendors.ForceRepair || StyxWoW.Me.LowestDurabilityPercent <= ProfileManager.CurrentProfile.MinDurability;
+            double dura = StyxWoW.Me.LowestDurabilityPercent;
+            double minDura = ProfileManager.CurrentProfile.MinDurability;
+            bool need = Vendors.ForceRepair || dura <= minDura;
+            LogDecision("repair", string.Format("[NeedToRepair] {0} — lowestDurability {1:F0}% <= min {2}%:{3} (force={4})",
+                need ? "YES" : "no", dura, minDura, dura <= minDura, Vendors.ForceRepair));
+            return need;
         }
 
         /// <summary>
@@ -1330,35 +1366,33 @@ namespace Bots.Grind
                     Logging.Write(System.Drawing.Color.Red, "WARNING! You have no money to restock! Cancelling forced restock run.");
                     Vendors.ForceBuy = false;
                 }
+                LogDecision("buy", "[NeedToBuy] no - under 1g, cannot restock");
                 return false;
             }
 
             if (Vendors.ForceBuy)
+            {
+                LogDecision("buy", "[NeedToBuy] YES - forced restock");
                 return true;
+            }
 
-            // HB 4.3.4: Check if food vendor exists (from profile or NPC database)
             var foodVendor = ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Food);
             if (foodVendor == null)
+            {
+                LogDecision("buy", "[NeedToBuy] no - no food vendor known for this area");
                 return false;
+            }
 
-            // HB 4.3.4: Check if need drink (mana users only)
             bool usesMana = StyxWoW.Me.PowerType == WoWPowerType.Mana || StyxWoW.Me.Class == WoWClass.Druid;
-            if (usesMana && Consumable.GetBestDrink(false) == null && CharacterSettings.Instance.DrinkAmount > 0)
-            {
-                Logging.WriteDebug("[NeedToBuy] Need drink: DrinkAmount={0}, Vendor={1}", 
-                    CharacterSettings.Instance.DrinkAmount, foodVendor.Name);
-                return true;
-            }
-            
-            // HB 4.3.4: Check if need food
-            if (Consumable.GetBestFood(false) == null && CharacterSettings.Instance.FoodAmount > 0)
-            {
-                Logging.WriteDebug("[NeedToBuy] Need food: FoodAmount={0}, Vendor={1}", 
-                    CharacterSettings.Instance.FoodAmount, foodVendor.Name);
-                return true;
-            }
-
-            return false;
+            // Buy only when a category is EMPTY (GetBest == null) - i.e. you ran out, not merely low.
+            bool needDrink = usesMana && Consumable.GetBestDrink(false) == null && CharacterSettings.Instance.DrinkAmount > 0;
+            bool needFood = Consumable.GetBestFood(false) == null && CharacterSettings.Instance.FoodAmount > 0;
+            bool need = needDrink || needFood;
+            LogDecision("buy", string.Format(
+                "[NeedToBuy] {0} - needDrink={1} (have {2}/want {3}), needFood={4} (have {5}/want {6}), vendor={7}",
+                need ? "YES" : "no", needDrink, Consumable.GetDrinkCount(), CharacterSettings.Instance.DrinkAmount,
+                needFood, Consumable.GetFoodCount(), CharacterSettings.Instance.FoodAmount, foodVendor.Name));
+            return need;
         }
 
         private static bool NeedToMail()
@@ -1368,15 +1402,32 @@ namespace Bots.Grind
 
             if (string.IsNullOrEmpty(CharacterSettings.Instance.MailRecipient) ||
                 currentProfile == null ||
-                ProfileManager.CurrentProfile?.MailboxManager == null)
+                currentProfile.MailboxManager == null)
+            {
+                LogDecision("mail", "[NeedToMail] no — MailRecipient unset or no MailboxManager on the profile");
                 return false;
+            }
 
-            Mailbox closestMailbox = ProfileManager.CurrentProfile.MailboxManager.GetClosestMailbox();
+            Mailbox closestMailbox = currentProfile.MailboxManager.GetClosestMailbox();
             if (closestMailbox == null)
+            {
+                LogDecision("mail", "[NeedToMail] no — no mailbox loaded for this map");
                 return false;
+            }
 
-            return me.Level >= currentProfile.MinMailLevel &&
-                   (closestMailbox.Location.Distance(me.Location) < 200.0 || StyxWoW.Me.FreeBagSlots < 30);
+            // Two ways to qualify (both hardcoded HB thresholds, not settings): a mailbox within 200yd, or bags
+            // under 30 free. In normal grinding neither holds (you sell trash so bags stay >30 free, and vendors
+            // aren't usually within 200yd of a mailbox) — which is why mail runs ~never fire. See Loot/CLAUDE.md.
+            double dist = closestMailbox.Location.Distance(me.Location);
+            uint freeBags = me.FreeBagSlots;
+            bool levelOk = me.Level >= currentProfile.MinMailLevel;
+            bool near = dist < 200.0;
+            bool bagsFull = freeBags < 30;
+            bool need = levelOk && (near || bagsFull);
+            LogDecision("mail", string.Format(
+                "[NeedToMail] {0} — level {1}>=min{2}:{3} AND (closestMailbox {4:F0}yd<200:{5} OR freeBags {6}<30:{7})",
+                need ? "YES" : "no", me.Level, currentProfile.MinMailLevel, levelOk, dist, near, freeBags, bagsFull));
+            return need;
         }
 
         private static bool IsVendorFrameOpen()
