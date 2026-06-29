@@ -51,6 +51,7 @@ namespace Bots.VibeGrinder
         private bool _restParked;               // positioning decision made for this rest — stop re-picking (see SafeRestReposition)
         private const int RestHysteresisPct = 12;  // resume at Min*+this (modest hysteresis), NOT a flat 85% top-off
         private const int RestMaxSeconds = 45;  // safety cap: if not recovered by now, give up resting and resume
+        private const int TrivialLevelGap = 5;  // a mob this many levels below us is ~grey/trivial — not worth a transit peel
 
         public override string Name => "VibeGrinder";
 
@@ -232,10 +233,30 @@ namespace Bots.VibeGrinder
             //    TransitPeel relies on the resulting isolation ordering).
             ApplyCrowdAndNeutralWeighting(units, me);
 
-            // 2. Commitment pins that choice so we actually pull it through, instead of re-deciding every
-            //    tick. Grind pull only — during a vendor run TransitPeel owns the transit target.
-            if (!OnVendorRun())
+            // 2. Commitment pins our chosen pull so we see it through instead of re-deciding every tick.
+            //    TransitPeel (vendor-run pull) commits to an in-range mob (_peelGuid); pin THAT as FirstUnit so
+            //    LevelBot's "POI is not the best pull target" can't override it with a far, UNPULLABLE FirstUnit
+            //    and deadlock the Kill vs Repair POIs against each other (the doorstep thrash). Gate on the LIVE,
+            //    in-range peel — NOT OnVendorRun(): OnVendorRun is derived from BotPoi.Type, which thrashes during
+            //    the war, so an OnVendorRun-gated pin flickers every tick and never wins. A stale/out-of-range
+            //    peel falls through to the normal grind commitment.
+            WoWUnit peel = _peelGuid != 0 ? FindCandidate(units, _peelGuid) : null;
+            if (peel != null && !peel.Dead && peel.Distance <= Targeting.PullDistance * 1.5)
+                PinGuid(units, _peelGuid);
+            else if (!OnVendorRun())
                 ApplyPullCommitment(units, me);
+        }
+
+        // Pin one mob to the top of the score so it stays FirstUnit (PullCommitBoost). No-op if guid==0 or absent.
+        private static void PinGuid(System.Collections.Generic.List<Targeting.TargetPriority> units, ulong guid)
+        {
+            if (guid == 0) return;
+            for (int i = 0; i < units.Count; i++)
+                if (units[i].Object != null && units[i].Object.Guid == guid)
+                {
+                    units[i].Score += VibeGrinderSettings.Instance.PullCommitBoost;
+                    break;
+                }
         }
 
         /// <summary>
@@ -378,7 +399,12 @@ namespace Bots.VibeGrinder
                 if (valid)
                 {
                     double d = held.Location.Distance(me.Location);
-                    if (d < _committedLastDist - 0.5)   // closing the gap = progress; reset the give-up clock
+                    // Progress = closing the gap OR having reached pull/cast range. Once we're in range the
+                    // APPROACH has succeeded and engaging is the routine's job — a ranged attacker stops closing
+                    // here to cast. Without the range clause the give-up clock reads "no progress" while we stand
+                    // pulling, blacklists the very mob we're pulling, and re-acquires another (the "pulled one,
+                    // switched and pulled the second too" double-pull). Combat then short-circuits this method.
+                    if (d <= s.MaxPullDistance || d < _committedLastDist - 0.5)
                         _committedTimer.Restart();
                     _committedLastDist = d;
 
@@ -419,13 +445,18 @@ namespace Bots.VibeGrinder
                 {
                     var c = units[i];
                     if (c.Object == null || c.Score < buryFloor) continue;
+                    WoWUnit cu = c.Object.ToUnit();
+                    if (cu == null || cu.Dead) continue;   // a just-killed corpse lingers a frame in the list — don't re-commit to it
                     double d = c.Object.Distance;
                     if (d < nearest) { nearest = d; pick = c; }
                 }
                 if (pick == null)
                     for (int i = 0; i < units.Count; i++)
-                        if (units[i].Object != null && (pick == null || units[i].Score > pick.Score))
-                            pick = units[i];
+                    {
+                        WoWUnit cu = units[i].Object?.ToUnit();
+                        if (cu == null || cu.Dead) continue;
+                        if (pick == null || units[i].Score > pick.Score) pick = units[i];
+                    }
 
                 if (pick != null)
                 {
@@ -566,12 +597,20 @@ namespace Bots.VibeGrinder
                 return;
             }
 
+            // While actively eating/drinking, RIDE the consumable to ~full before standing up — a food/drink is
+            // one item per use, so bailing at the done-band wastes the rest of its channel AND the item (you
+            // drank a whole Melon Juice for +22% and threw the rest away). Gated on an actual Food/Drink aura, so
+            // the no-water case is untouched (no aura → normal done-band, no freeze). This also matches the
+            // routine's own stay-seated band so VibeGrinder and the routine don't fight over standing up.
+            bool consuming = (me.HasAura("Drink") && me.ManaPercent < 95)
+                             || (me.HasAura("Food") && me.HealthPercent < 95);
+
             // Resume at a modest hysteresis above the enter band — NOT the old flat 85% top-off (RestDonePct),
             // which froze a no-water caster for the full cap every rest (mana crawled 67->85 on regen while
             // Roam was blocked — the 11:13 stall). Caps below keep a high-caution band from chasing near-full.
             int doneHp = System.Math.Min(95, minHp + RestHysteresisPct);
             int doneMana = System.Math.Min(90, minMana + RestHysteresisPct);
-            bool recovered = me.HealthPercent >= doneHp && (!manaGoverns || me.ManaPercent >= doneMana);
+            bool recovered = !consuming && me.HealthPercent >= doneHp && (!manaGoverns || me.ManaPercent >= doneMana);
             if (recovered) EndRest("recovered");
             else if (_safeRest.Elapsed.TotalSeconds > RestMaxSeconds) EndRest("cap");
         }
@@ -737,6 +776,7 @@ namespace Bots.VibeGrinder
             {
                 if (u == null || u.Dead) continue;
                 if (u.MyReaction > WoWUnitReaction.Hostile) continue;   // hostiles only — neutrals won't body-pull
+                if (me.Level - u.Level >= TrivialLevelGap) continue;    // grey/trivial mob — no threat, don't detour to single-pull it on a vendor run
                 if (u.Distance > pull || !u.InLineOfSpellSight) continue;
                 // Target it: CanPull()/Singular key off CurrentTarget, and CombatBehavior only calls
                 // Target() when switching off a different POI — ours already is FirstUnit, so without this
