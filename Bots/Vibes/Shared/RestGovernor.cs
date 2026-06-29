@@ -173,14 +173,16 @@ namespace Bots.Vibes.Shared
             if (PetClass.Contains(cls)) health -= 10;
             health = Math.Clamp(health + caution, 45, 82);   // cap < old 90: never gate on near-full HP
 
-            // Mana: zero for rage/energy/rune classes (never rest for mana). Casters drink up to enter fights
-            // with a full bar (high at low level, easing toward cap); self-healers a touch higher.
+            // Mana: zero for rage/energy/rune classes (never rest for mana). Drink only when genuinely DRAINED,
+            // not to top off — a melee-capable caster grinds fine at low mana (auto-attack + cheap instants, plus
+            // the routine's own in-combat conserve), so topping off at half a bar just burns drinks. ~33% at mid
+            // level, easing toward cap; NO self-heal bonus (don't drink early "for heals" — the heal reserve is
+            // the routine's job). Caution nudges it up after deaths but stays bounded.
             double mana = 0;
             if (usesMana)
             {
-                mana = 52 - 12 * lf;
-                if (SelfHeal.Contains(cls)) mana += 5;
-                mana = Math.Clamp(mana + caution, 38, 68);   // cap < old 80: a caster that gates at 80% mana re-rests after one cast
+                mana = 35 - 8 * lf;
+                mana = Math.Clamp(mana + caution, 25, 40);
             }
 
             return ((int)Math.Round(health), (int)Math.Round(mana));
