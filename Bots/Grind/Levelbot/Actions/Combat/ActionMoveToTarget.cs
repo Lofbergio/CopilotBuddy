@@ -13,7 +13,13 @@ namespace Levelbot.Actions.Combat
 {
     public class ActionMoveToTarget : NavigationAction
     {
+        // A gap this long between consecutive runs means a higher-priority behavior (combat, loot, rest)
+        // ran in between — that wasn't time spent failing to reach the target, so don't count it toward
+        // the 45s reach-timeout. Normal pursuit re-runs every tick (tens of ms).
+        private const int PreemptGapMs = 1500;
+
         private int _moveStartTime;
+        private int _lastRunTime;
 
         public ActionMoveToTarget()
         {
@@ -27,8 +33,15 @@ namespace Levelbot.Actions.Combat
 
         protected override RunStatus Run(object context)
         {
+            int now = Environment.TickCount;
+            // Pursuit was interrupted (we weren't ticked for a while) — restart the timeout so only
+            // continuous time spent trying to reach this target counts, not diversions to fight/loot/rest.
+            if (_moveStartTime != 0 && now - _lastRunTime > PreemptGapMs)
+                _moveStartTime = 0;
+            _lastRunTime = now;
+
             if (_moveStartTime == 0)
-                _moveStartTime = Environment.TickCount;
+                _moveStartTime = now;
 
             WoWUnit target = Targeting.Instance.FirstUnit;
             if (target == null)
