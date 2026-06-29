@@ -48,6 +48,7 @@ namespace Bots.VibeGrinder
         private readonly System.Diagnostics.Stopwatch _surfaceLogSw = new System.Diagnostics.Stopwatch();   // throttle incidental-hostile log
         private bool _resting;                  // committed rest state (sticky: enter at Min*, exit at RestDonePct/cap)
         private WoWPoint _restSpot = WoWPoint.Empty;   // committed safe-rest destination (picked once per rest)
+        private bool _restParked;               // positioning decision made for this rest — stop re-picking (see SafeRestReposition)
         private const int RestHysteresisPct = 12;  // resume at Min*+this (modest hysteresis), NOT a flat 85% top-off
         private const int RestMaxSeconds = 45;  // safety cap: if not recovered by now, give up resting and resume
 
@@ -123,6 +124,7 @@ namespace Bots.VibeGrinder
             _committedLastDist = double.MaxValue;
             _resting = false;
             _restSpot = WoWPoint.Empty;
+            _restParked = false;
             _safeRest.Reset();
             _selectRetry.Reset();
 
@@ -491,18 +493,25 @@ namespace Bots.VibeGrinder
 
             var s = VibeGrinderSettings.Instance;
 
+            // One positioning decision per rest. Bug-B secondary fix: arrival used to clear _restSpot, so the
+            // NEXT tick re-ran NearestHostileWithin and — in a dense camp where a different mob is always within
+            // range — picked a NEW spot and walked off again, forever. That perpetual relocation cancelled the
+            // eat/drink aura every few seconds (so Singular's rest never took hold → mana never recovered → 45s
+            // cap loop) and ping-ponged against LootBehavior. Park once and stay put; combat preempts rest if a
+            // mob wanders in, which re-arms positioning on the next rest cycle.
+            if (_restParked) return RunStatus.Failure;
+
             // Pick a committed safe spot ONCE, only if a hostile is too close to rest where we stand.
             if (_restSpot == WoWPoint.Empty)
             {
                 WoWUnit nearest = NearestHostileWithin(me, s.SafeRestDangerRange);
-                if (nearest == null) return RunStatus.Failure;                  // already clear → rest in place
+                if (nearest == null) return RunStatus.Failure;                  // already clear → rest in place (may back off once if one approaches)
                 if (!TryPickSafeSpot(me, s.SafeRestDangerRange, nearest, out _restSpot))
                 {
                     _restSpot = WoWPoint.Empty;
-                    return RunStatus.Failure;                                   // boxed in → rest in place (roam-block holds us)
+                    _restParked = true;                                         // boxed in → commit to resting here (don't re-path every tick)
+                    return RunStatus.Failure;
                 }
-                // DIAG (Bug-B secondary): repeated picks per rest = chasing a receding "safe" spot across a
-                // dense camp (TryPickSafeSpot only dodges the SINGLE nearest hostile). Watch the cadence.
                 Logging.Write(System.Drawing.Color.Khaki,
                     "[VibeGrinder/Rest] safe-spot pick: backing off {0:F0}yd from {1} (d={2:F0})",
                     me.Location.Distance(_restSpot), nearest.Name, nearest.Distance);
@@ -512,7 +521,8 @@ namespace Bots.VibeGrinder
             if (me.Location.Distance(_restSpot) <= 3f)
             {
                 if (me.IsMoving) WoWMovement.MoveStop();
-                _restSpot = WoWPoint.Empty;                                     // arrived → rest here
+                _restSpot = WoWPoint.Empty;
+                _restParked = true;                                            // arrived → rest here, stop re-picking for this rest
                 Logging.WriteDebug("[VibeGrinder/Rest] reached safe spot — resting in place");
                 return RunStatus.Failure;
             }
