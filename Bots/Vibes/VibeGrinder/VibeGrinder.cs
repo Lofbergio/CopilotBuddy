@@ -47,7 +47,7 @@ namespace Bots.VibeGrinder
         private readonly System.Diagnostics.Stopwatch _safeRest = new System.Diagnostics.Stopwatch();
         private bool _resting;                  // committed rest state (sticky: enter at Min*, exit at RestDonePct/cap)
         private WoWPoint _restSpot = WoWPoint.Empty;   // committed safe-rest destination (picked once per rest)
-        private const int RestDonePct = 85;     // rest until HP & mana ≥ this (hysteresis above the Min* enter band)
+        private const int RestHysteresisPct = 12;  // resume at Min*+this (modest hysteresis), NOT a flat 85% top-off
         private const int RestMaxSeconds = 45;  // safety cap: if not recovered by now, give up resting and resume
 
         public override string Name => "VibeGrinder";
@@ -497,28 +497,35 @@ namespace Bots.VibeGrinder
         {
             if (me.Combat || me.IsDead || me.IsGhost) { EndRest("combat/death"); return; }
 
-            bool usesMana = me.PowerType == WoWPowerType.Mana;
             int minHp = _restGovernor?.MinHealth ?? 55;
             int minMana = _restGovernor?.MinMana ?? 45;
+            // Mana only governs rest when we actually have water: with no drink, waiting for mana to recover is
+            // a pointless freeze (RestRoamBlock holds us still for the full 45s cap while mana crawls up on
+            // regen), so rest on HP alone and resume at whatever mana — the routine has instants/melee. Vendor
+            // buying restocks water; until then, don't stand frozen for it.
+            bool manaGoverns = me.PowerType == WoWPowerType.Mana && minMana > 0
+                               && Styx.Logic.Inventory.Consumable.GetBestDrink(false) != null;
 
             if (!_resting)
             {
-                bool need = me.HealthPercent <= minHp || (usesMana && minMana > 0 && me.ManaPercent <= minMana);
+                bool need = me.HealthPercent <= minHp || (manaGoverns && me.ManaPercent <= minMana);
                 if (need)
                 {
                     _resting = true; _restSpot = WoWPoint.Empty; _safeRest.Restart();
-                    // DIAG (Bug-B): rest enter/exit cadence + the live band. Tight back-to-back enter/exit logs
-                    // = the chatter; a high minMana that we re-cross after one cast = the spiral.
+                    // DIAG (Bug-B): rest enter/exit cadence + the live band + whether mana is even gating.
                     Logging.Write(System.Drawing.Color.Khaki,
-                        "[VibeGrinder/Rest] ENTER hp={0}%/min{1} mana={2}%/min{3}",
-                        me.HealthPercent, minHp, usesMana ? me.ManaPercent : -1, usesMana ? minMana : 0);
+                        "[VibeGrinder/Rest] ENTER hp={0}%/min{1} mana={2}%/min{3} water={4}",
+                        me.HealthPercent, minHp, manaGoverns ? me.ManaPercent : -1, manaGoverns ? minMana : 0, manaGoverns);
                 }
                 return;
             }
 
-            int doneHp = System.Math.Min(99, System.Math.Max(minHp + 10, RestDonePct));
-            int doneMana = System.Math.Min(99, System.Math.Max(minMana + 10, RestDonePct));
-            bool recovered = me.HealthPercent >= doneHp && (!usesMana || me.ManaPercent >= doneMana);
+            // Resume at a modest hysteresis above the enter band — NOT the old flat 85% top-off (RestDonePct),
+            // which froze a no-water caster for the full cap every rest (mana crawled 67->85 on regen while
+            // Roam was blocked — the 11:13 stall). Caps below keep a high-caution band from chasing near-full.
+            int doneHp = System.Math.Min(95, minHp + RestHysteresisPct);
+            int doneMana = System.Math.Min(90, minMana + RestHysteresisPct);
+            bool recovered = me.HealthPercent >= doneHp && (!manaGoverns || me.ManaPercent >= doneMana);
             if (recovered) EndRest("recovered");
             else if (_safeRest.Elapsed.TotalSeconds > RestMaxSeconds) EndRest("cap");
         }
