@@ -354,11 +354,31 @@ namespace Styx.Logic
 				return false;
 			}
 
-			// Out of combat, no ground mounts — use class speed buff as fallback
+			// Out of combat, no ground mounts — use class speed buff as fallback.
 			if (SpellManager.HasSpell("Ghost Wolf"))
 			{
 				Logging.Write("Mounting: Using Ghost Wolf since we don't have any mounts yet.");
+
+				// Ghost Wolf's cast time varies by talent (Enhancement's Ancestral Swiftness:
+				// -0.5s/pt → instant at 2pts). A cast-time Ghost Wolf is interrupted by movement, so
+				// MountUp (called every travel tick) spam-cast it forever while running. Stop+wait
+				// only when it actually has a cast time; an instant one can be cast on the move.
+				var ghostWolf = SpellManager.GetSpellByName("Ghost Wolf");
+				bool hasCastTime = ghostWolf == null || ghostWolf.CastTime > 0;
+				if (hasCastTime)
+				{
+					WoWMovement.MoveStop();
+					StyxWoW.Sleep(100);
+				}
+
 				SpellManager.Cast("Ghost Wolf");
+
+				if (hasCastTime)
+				{
+					int ghostWolfStart = Environment.TickCount;
+					while (!me.HasAura("Ghost Wolf") && !me.Combat && Environment.TickCount - ghostWolfStart < 3500)
+						StyxWoW.Sleep(150);
+				}
 				return true;
 			}
 			if (SpellManager.HasSpell("Travel Form"))
