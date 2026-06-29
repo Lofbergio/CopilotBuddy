@@ -137,6 +137,24 @@ return f..'|'..d";
             return BestOf(_cacheDrink);
         }
 
+        /// <summary>Total count (summed stacks) of usable food currently in bags.</summary>
+        public static int GetFoodCount() { EnsureScanFresh(); return CountStacks(_cacheFood); }
+
+        /// <summary>Total count (summed stacks) of usable drink currently in bags.</summary>
+        public static int GetDrinkCount() { EnsureScanFresh(); return CountStacks(_cacheDrink); }
+
+        // Sum StackCount across every bag item whose Entry is a detected food/drink. The scan can list an entry
+        // once per occupied slot, so dedupe to an id set first, then count all stacks (handles a split stack).
+        private static int CountStacks(List<KeyValuePair<uint, int>> entries)
+        {
+            var ids = new HashSet<uint>();
+            foreach (var kv in entries) ids.Add(kv.Key);
+            int total = 0;
+            foreach (var it in ObjectManager.Me.BagItems)
+                if (it != null && ids.Contains(it.Entry)) total += (int)it.StackCount;
+            return total;
+        }
+
         // Food/drink is NOT identified by a spell literally named "Food"/"Drink" — those spell names don't
         // exist (3.3.5a). Identify by item class Consumable + subclass Food & Drink (5), then split food vs
         // drink by the regen aura the use-spell applies while seated: mana-regen ⇒ drink, health-regen ⇒

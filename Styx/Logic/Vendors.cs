@@ -290,8 +290,22 @@ namespace Styx.Logic
 				return;
 
 			bool usesMana = StyxWoW.Me.PowerType == WoWPowerType.Mana || StyxWoW.Me.Class == WoWClass.Druid;
-			int drinkAmount = CharacterSettings.Instance.DrinkAmount;
-			int foodAmount = CharacterSettings.Instance.FoodAmount;
+			// Buy only the SHORTFALL: subtract usable food/drink already in bags so a restock run (often triggered
+			// by running out of just ONE category) doesn't also buy a full stack of the other you're already
+			// sitting on — the "bought 20 Snapvine Watermelon with 23 Mutton Chops in the bags" bug. 0 ⇒ skip it.
+			int drinkAmount = Math.Max(0, CharacterSettings.Instance.DrinkAmount - Consumable.GetDrinkCount());
+			int foodAmount = Math.Max(0, CharacterSettings.Instance.FoodAmount - Consumable.GetFoodCount());
+
+			// Already stocked (a sibling category triggered the trip) → buy nothing, and DON'T fall through to the
+			// "bought nothing ⇒ blacklist this vendor" path below, which would wrongly poison a fine vendor.
+			int neededDrink = usesMana ? drinkAmount : 0;
+			if (foodAmount <= 0 && neededDrink <= 0)
+			{
+				Logging.WriteDebug("[BuyItems] already at target food/drink — nothing to buy.");
+				ForceBuy = false;
+				BotPoi.Clear("Already stocked");
+				return;
+			}
 
 			// Find + buy food/drink via Lua (our memory item-cache reader can't see vendor-only items here;
 			// the game's tooltip can). Returns "drink~q|food~q|warm/total|diag". The client item-tooltip cache
