@@ -61,7 +61,12 @@ namespace Styx.Loaders
                 "WindowsBase",
                 "WindowsFormsIntegration",
                 "System.Xaml",
-                "System.Windows.Forms"
+                "System.Windows.Forms",
+                // The WinForms Form/Control base implements COM-interop interfaces (IOleObject, IViewObject…)
+                // defined here; it loads lazily so it isn't in GetAssemblies() yet. Without it, ANY drop-in
+                // that subclasses Form fails Roslyn with "type X is defined in an assembly that is not
+                // referenced (System.Windows.Forms.Primitives)". Force-load so compiled forms resolve.
+                "System.Windows.Forms.Primitives"
             };
 
             foreach (var name in wpfAssemblyNames)
