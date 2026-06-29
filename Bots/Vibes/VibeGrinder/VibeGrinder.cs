@@ -347,6 +347,22 @@ namespace Bots.VibeGrinder
         {
             var s = VibeGrinderSettings.Instance;
 
+            // Don't chase a mob into water. Oasis turtles (Oasis Snapjaw) sit in the pool below the bank, so
+            // the commitment locks onto one, wades us in, and we tread water at an unreachable target. If we're
+            // swimming, blacklist the committed mob and drop — Roam then heads back to the on-land hotspot.
+            if (me.IsSwimming)
+            {
+                if (_committedGuid != 0)
+                {
+                    Logging.Write(System.Drawing.Color.Khaki,
+                        "[VibeGrinder/Commit] swimming after {0:X} — blacklisting and dropping (won't chase into water).",
+                        _committedGuid);
+                    Blacklist.Add(_committedGuid, System.TimeSpan.FromMinutes(2));
+                    _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue;
+                }
+                return;
+            }
+
             // Validate the standing commitment: still a live candidate? And have we been genuinely unable to
             // engage it (stuck/unreachable) — NOT merely slow to walk there? The give-up clock is PROGRESS-
             // based: while we're still closing the distance it resets, so it only expires after
@@ -495,7 +511,14 @@ namespace Bots.VibeGrinder
         /// <summary>Sticky rest state: enter at the Min* band, exit only at RestDonePct (hysteresis) or the cap.</summary>
         private void UpdateRestingState(WoWUnit me)
         {
-            if (me.Combat || me.IsDead || me.IsGhost) { EndRest("combat/death"); return; }
+            // Never rest while swimming — eat/drink silently fail underwater and the routine loops on them
+            // for the whole 45s cap (the oasis "Drinking Melon Juice" stall). Stay un-rested so Roam keeps us
+            // moving back to land, where a normal rest can happen.
+            if (me.Combat || me.IsDead || me.IsGhost || me.IsSwimming)
+            {
+                EndRest(me.IsSwimming ? "swimming" : "combat/death");
+                return;
+            }
 
             int minHp = _restGovernor?.MinHealth ?? 55;
             int minMana = _restGovernor?.MinMana ?? 45;
