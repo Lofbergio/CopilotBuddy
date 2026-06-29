@@ -370,11 +370,15 @@ namespace Styx.Logic
 					if (me.HasAura("Ghost Wolf"))
 						return true;            // already up — don't re-cast it every travel tick
 
-					// MoveStop isn't instant: the char glides for a tick or two, and a cast-time Ghost Wolf
-					// started while still gliding fails with "can't cast while moving" (the 3x-retry spam). Wait
-					// until actually stopped before casting — a fixed 100ms sleep wasn't enough at travel speed.
+					// A cast-time Ghost Wolf silently fails if started while moving OR on GCD, and MountUp
+					// re-tries it every travel tick (the 3x-retry spam). Two failure modes seen:
+					//  (1) the IsMoving flag clears before the char physically stops, so an IsMoving poll exits
+					//      while still gliding -> "can't cast while moving". Settle with a fixed delay instead.
+					//  (2) a pre-buff (Lightning Shield) leaves the GCD up -> the cast is swallowed. Wait it out.
 					WoWMovement.MoveStop();
-					for (int t0 = Environment.TickCount; me.IsMoving && Environment.TickCount - t0 < 900; )
+					StyxWoW.Sleep(350);
+					for (int t0 = Environment.TickCount;
+					     SpellManager.GlobalCooldown && Environment.TickCount - t0 < 1600; )
 						StyxWoW.Sleep(50);
 				}
 
