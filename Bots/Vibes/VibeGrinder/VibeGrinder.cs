@@ -401,27 +401,40 @@ namespace Bots.VibeGrinder
                 if (!valid) { _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue; }
             }
 
-            // Acquire: commit to the best-scored candidate (after the quality weighting above).
+            // Acquire: commit to the NEAREST acceptable candidate, not the highest-scored one. Highest score =
+            // most isolated, which biases FAR — and walking across the area to a far straggler drags us through
+            // packs (the Sunscale/Kolkar pull that killed us) and blind-body-pulls things en route (the raptor
+            // we "didn't see"). The crowd weighting already REMOVED hard packs and BURIED neutrals-near-hostiles
+            // from the list, so nearest-of-what's-left is a close, single-pullable mob. Fall back to top score
+            // only if everything is buried (so we still act rather than idle).
             if (_committedGuid == 0)
             {
-                Targeting.TargetPriority best = null;
+                float buryFloor = -s.NeutralNearHostileVeto * 0.5f;   // below this = a buried neutral; skip it
+                Targeting.TargetPriority pick = null;
+                double nearest = double.MaxValue;
                 for (int i = 0; i < units.Count; i++)
-                    if (units[i].Object != null && (best == null || units[i].Score > best.Score))
-                        best = units[i];
-                if (best != null)
                 {
-                    _committedGuid = best.Object.Guid;
+                    var c = units[i];
+                    if (c.Object == null || c.Score < buryFloor) continue;
+                    double d = c.Object.Distance;
+                    if (d < nearest) { nearest = d; pick = c; }
+                }
+                if (pick == null)
+                    for (int i = 0; i < units.Count; i++)
+                        if (units[i].Object != null && (pick == null || units[i].Score > pick.Score))
+                            pick = units[i];
+
+                if (pick != null)
+                {
+                    _committedGuid = pick.Object.Guid;
                     _committedTimer.Restart();
                     _committedLastDist = double.MaxValue;
-                    // DIAG (Bug-A): what we chose to open on. If this is repeatedly a far/neutral mob while
-                    // NearestHostileDesc shows a closer hostile, the crowd/neutral veto is starving us of
-                    // pullable near targets and committing us to stragglers we can't catch.
-                    WoWUnit bu = best.Object.ToUnit();
+                    WoWUnit bu = pick.Object.ToUnit();
                     if (bu != null)
                         Logging.Write(System.Drawing.Color.Khaki,
                             "[VibeGrinder/Commit] ACQUIRE {0} (reaction={1}, d={2:F1}, score={3:F0}) " +
                             "nearestHostile={4} candidates={5}",
-                            bu.Name, bu.MyReaction, bu.Distance, best.Score, NearestHostileDesc(me), units.Count);
+                            bu.Name, bu.MyReaction, bu.Distance, pick.Score, NearestHostileDesc(me), units.Count);
                 }
             }
 
