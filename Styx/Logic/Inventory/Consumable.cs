@@ -1,6 +1,8 @@
 #nullable disable
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using Styx.Logic.Combat;
 using Styx.WoWInternals;
 using Styx.WoWInternals.WoWObjects;
 
@@ -11,136 +13,172 @@ namespace Styx.Logic.Inventory
     /// </summary>
     public static class Consumable
     {
-        /// <summary>
-        /// Gets all food items in the player's bags.
-        /// </summary>
+        // Our memory item-cache reader (ItemInfo) returns null for many consumables on this server, so
+        // subclass/spell detection is blind to bought food/water (Singular kept logging "no food/drink").
+        // Detect via the game's TOOLTIP instead — the same path the UI uses — scanning each bag item for a
+        // "restores … mana/health … sec" line (mana ⇒ drink, health ⇒ food). One cached Lua scan (≤1/sec)
+        // answers all callers; map matches back to WoWItems by Entry (a reliable memory field). This is CB
+        // answering "what's the best food/drink", which the routine relies on.
+        private static readonly System.Diagnostics.Stopwatch _scanAge = new System.Diagnostics.Stopwatch();
+        private static List<KeyValuePair<uint, int>> _cacheFood = new List<KeyValuePair<uint, int>>();
+        private static List<KeyValuePair<uint, int>> _cacheDrink = new List<KeyValuePair<uint, int>>();
+
+        private const string BagScanLua = @"
+local pl = UnitLevel('player')
+local tip = CopilotBuddyScanTip
+if not tip then tip = CreateFrame('GameTooltip','CopilotBuddyScanTip',nil,'GameTooltipTemplate') end
+local f,d = '',''
+for bag=0,4 do
+  for slot=1,GetContainerNumSlots(bag) do
+    local link = GetContainerItemLink(bag,slot)
+    if link then
+      local id = tonumber(string.match(link,'item:(%d+)'))
+      if id then
+        tip:SetOwner(UIParent,'ANCHOR_NONE') tip:ClearLines() tip:SetBagItem(bag,slot)
+        local hasMana,hasHealth,overTime,req = false,false,false,0
+        for l=1,tip:NumLines() do
+          local fs = _G['CopilotBuddyScanTipTextLeft'..l]
+          local t = fs and fs:GetText()
+          if t then
+            local lt = string.lower(t)
+            if string.find(lt,'mana',1,true) then hasMana=true end
+            if string.find(lt,'health',1,true) then hasHealth=true end
+            if string.find(lt,'sec',1,true) then overTime=true end
+            local r = string.match(t,'Requires Level (%d+)')
+            if r then req = tonumber(r) end
+          end
+        end
+        if overTime and req <= pl then
+          if hasMana then d = d..id..':'..req..',' end
+          if hasHealth then f = f..id..':'..req..',' end
+        end
+      end
+    end
+  end
+end
+return f..'|'..d";
+
+        private static void EnsureScanFresh()
+        {
+            if (_scanAge.IsRunning && _scanAge.Elapsed.TotalMilliseconds < 1000)
+                return;
+            string res;
+            try { res = Lua.GetReturnVal<string>(BagScanLua, 0) ?? "|"; }
+            catch { res = "|"; }
+            string[] halves = res.Split('|');
+            _cacheFood = ParseEntries(halves.Length > 0 ? halves[0] : string.Empty);
+            _cacheDrink = ParseEntries(halves.Length > 1 ? halves[1] : string.Empty);
+            _scanAge.Restart();
+        }
+
+        private static List<KeyValuePair<uint, int>> ParseEntries(string csv)
+        {
+            var list = new List<KeyValuePair<uint, int>>();
+            foreach (string tok in csv.Split(','))
+            {
+                if (tok.Length == 0) continue;
+                string[] kv = tok.Split(':');
+                if (kv.Length == 2 && uint.TryParse(kv[0], out uint entry) && int.TryParse(kv[1], out int req))
+                    list.Add(new KeyValuePair<uint, int>(entry, req));
+            }
+            return list;
+        }
+
+        private static List<WoWItem> MapToItems(List<KeyValuePair<uint, int>> entries)
+        {
+            var bag = ObjectManager.Me.BagItems;
+            var result = new List<WoWItem>();
+            foreach (var kv in entries)
+            {
+                WoWItem wi = bag.FirstOrDefault(it => it != null && it.Entry == kv.Key);
+                if (wi != null && !result.Contains(wi))
+                    result.Add(wi);
+            }
+            return result;
+        }
+
+        private static WoWItem BestOf(List<KeyValuePair<uint, int>> entries)
+        {
+            if (entries.Count == 0)
+                return null;
+            uint bestEntry = 0;
+            int bestReq = -1;
+            foreach (var kv in entries)
+                if (kv.Value > bestReq) { bestReq = kv.Value; bestEntry = kv.Key; }
+            return ObjectManager.Me.BagItems.FirstOrDefault(it => it != null && it.Entry == bestEntry);
+        }
+
+        /// <summary>All food items currently in bags (tooltip-detected).</summary>
         public static List<WoWItem> GetFood()
         {
-            return ObjectManager.Me.BagItems
-                .Where(IsFood)
-                .Distinct()
-                .ToList();
+            EnsureScanFresh();
+            return MapToItems(_cacheFood);
         }
 
-        /// <summary>
-        /// Gets all drink items in the player's bags.
-        /// </summary>
+        /// <summary>All drink items currently in bags (tooltip-detected).</summary>
         public static List<WoWItem> GetDrinks()
         {
-            return ObjectManager.Me.BagItems
-                .Where(IsDrink)
-                .Distinct()
-                .ToList();
+            EnsureScanFresh();
+            return MapToItems(_cacheDrink);
         }
 
-        /// <summary>
-        /// Gets the best food item.
-        /// </summary>
-        /// <param name="includeSpecialtyItems">Include items with special effects.</param>
+        /// <summary>Best (highest usable tier) food in bags, or null. includeSpecialtyItems kept for API
+        /// compatibility — tooltip detection already covers all edible food.</summary>
         public static WoWItem GetBestFood(bool includeSpecialtyItems)
         {
-            var food = GetFood();
-            if (food.Count == 0)
-                return null;
-
-            uint bestStack = 0;
-            int bestLevel = -1;
-            WoWItem bestItem = null;
-            int playerLevel = StyxWoW.Me.Level;
-
-            foreach (var item in food)
-            {
-                int level = item.ItemInfo.RequiredLevel;
-                if (level > playerLevel)
-                    continue;
-                if (!includeSpecialtyItems && !item.ItemSpells.All(IsBasicFoodOrDrink))
-                    continue;
-
-                // Best = highest usable tier; tie-break by larger stack.
-                if (level > bestLevel || (level == bestLevel && item.StackCount > bestStack))
-                {
-                    bestItem = item;
-                    bestLevel = level;
-                    bestStack = item.StackCount;
-                }
-            }
-
-            return bestItem;
+            EnsureScanFresh();
+            return BestOf(_cacheFood);
         }
 
-        /// <summary>
-        /// Gets the best drink item.
-        /// </summary>
-        /// <param name="includeSpecialtyItems">Include items with special effects.</param>
+        /// <summary>Best (highest usable tier) drink in bags, or null.</summary>
         public static WoWItem GetBestDrink(bool includeSpecialtyItems)
         {
-            var drinks = GetDrinks();
-            if (drinks.Count == 0)
-                return null;
+            EnsureScanFresh();
+            return BestOf(_cacheDrink);
+        }
 
-            uint bestStack = 0;
-            int bestLevel = -1;
-            WoWItem bestItem = null;
-            int playerLevel = StyxWoW.Me.Level;
+        // Food/drink is NOT identified by a spell literally named "Food"/"Drink" — those spell names don't
+        // exist (3.3.5a). Identify by item class Consumable + subclass Food & Drink (5), then split food vs
+        // drink by the regen aura the use-spell applies while seated: mana-regen ⇒ drink, health-regen ⇒
+        // food. Same logic the vendor-buy detection uses (MerchantFrame.GetBestConsumableFromVendor).
+        private const int SubClassFoodDrink = 5;
 
-            foreach (var item in drinks)
+        private static readonly WoWApplyAuraType[] DrinkAuras =
+            { WoWApplyAuraType.ObsModMana, WoWApplyAuraType.ModPowerRegen, WoWApplyAuraType.PeriodicEnergize };
+        private static readonly WoWApplyAuraType[] FoodAuras =
+            { WoWApplyAuraType.ObsModHealth, WoWApplyAuraType.ModRegen, WoWApplyAuraType.ModHealthRegenPercent };
+
+        /// <summary>True if the item is a Food &amp; Drink consumable whose use-spell restores health (food).</summary>
+        public static bool IsFoodItem(ItemInfo info) => HasConsumableAura(info, FoodAuras);
+
+        /// <summary>True if the item is a Food &amp; Drink consumable whose use-spell restores mana (drink).</summary>
+        public static bool IsDrinkItem(ItemInfo info) => HasConsumableAura(info, DrinkAuras);
+
+        private static bool HasConsumableAura(ItemInfo info, WoWApplyAuraType[] auras)
+        {
+            if (info == null)
+                return false;
+            if ((int)info.ItemClass != (int)WoWItemClass.Consumable || info.SubClassId != SubClassFoodDrink)
+                return false;
+
+            int[] spellIds = info.SpellId;
+            if (spellIds == null)
+                return false;
+            foreach (int sid in spellIds)
             {
-                int level = item.ItemInfo.RequiredLevel;
-                if (level > playerLevel)
+                if (sid == 0)
                     continue;
-                if (!includeSpecialtyItems && !item.ItemSpells.All(IsBasicFoodOrDrink))
+                WoWSpell spell = WoWSpell.FromId(sid);
+                if (spell?.SpellEffects == null)
                     continue;
-
-                // Best = highest usable tier; tie-break by larger stack.
-                if (level > bestLevel || (level == bestLevel && item.StackCount > bestStack))
+                foreach (SpellEffect eff in spell.SpellEffects)
                 {
-                    bestItem = item;
-                    bestLevel = level;
-                    bestStack = item.StackCount;
+                    if (eff != null && Array.IndexOf(auras, eff.AuraType) >= 0)
+                        return true;
                 }
             }
-
-            return bestItem;
+            return false;
         }
 
-        /// <summary>
-        /// Checks if an item is food.
-        /// HB 4.3.4 Consumable.smethod_1: spell name "Food" OR "Refreshment".
-        /// "Refreshment" covers WotLK Mage conjured food (Conjured Mana Strudel, etc.).
-        /// </summary>
-        private static bool IsFood(WoWItem item)
-        {
-            if ((int)item.ItemInfo.ItemClass != (int)WoWItemClass.Consumable)
-                return false;
-
-            return item.ItemSpells.Any(s =>
-                s.ActualSpell != null &&
-                (s.ActualSpell.Name == "Food" || s.ActualSpell.Name == "Refreshment"));
-        }
-
-        /// <summary>
-        /// Checks if an item is a drink.
-        /// HB 4.3.4 Consumable.smethod_3: spell name "Drink", "Starfire Espresso" or "Refreshment".
-        /// "Refreshment" covers WotLK Mage conjured water; "Starfire Espresso" is a buff food.
-        /// </summary>
-        private static bool IsDrink(WoWItem item)
-        {
-            if ((int)item.ItemInfo.ItemClass != (int)WoWItemClass.Consumable)
-                return false;
-
-            return item.ItemSpells.Any(s =>
-                s.ActualSpell != null &&
-                (s.ActualSpell.Name == "Drink" ||
-                 s.ActualSpell.Name == "Starfire Espresso" ||
-                 s.ActualSpell.Name == "Refreshment"));
-        }
-
-        /// <summary>
-        /// Checks if a spell is basic food or drink (no special effects).
-        /// </summary>
-        private static bool IsBasicFoodOrDrink(WoWItem.WoWItemSpell spell)
-        {
-            return spell.ActualSpell.Name == "Food" || spell.ActualSpell.Name == "Drink";
-        }
     }
 }

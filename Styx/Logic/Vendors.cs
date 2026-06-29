@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using Styx.Combat.CombatRoutine;
 using Styx.Helpers;
@@ -285,47 +286,50 @@ namespace Styx.Logic
 			if (asVendor == null || (asVendor.Type != Vendor.VendorType.Food && asVendor.Type != Vendor.VendorType.Restock))
 				return;
 
-			bool usesMana = StyxWoW.Me.PowerType == WoWPowerType.Mana || StyxWoW.Me.Class == WoWClass.Druid;
-			int bestDrinkIndex = _merchantFrame.GetBestDrinkFromVendor();
-			int bestFoodIndex = _merchantFrame.GetBestFoodFromVendor();
+			if (!_merchantFrame.IsVisible || _merchantFrame.MerchantNumItems <= 0)
+				return;
 
-			// If vendor doesn't sell food or drink, blacklist it
-			if (bestDrinkIndex == -1 && bestFoodIndex == -1)
+			bool usesMana = StyxWoW.Me.PowerType == WoWPowerType.Mana || StyxWoW.Me.Class == WoWClass.Druid;
+			int drinkAmount = CharacterSettings.Instance.DrinkAmount;
+			int foodAmount = CharacterSettings.Instance.FoodAmount;
+
+			// Find + buy food/drink via Lua (our memory item-cache reader can't see vendor-only items here;
+			// the game's tooltip can). Returns "drinkName|foodName" — either side empty if not found/bought.
+			string bought = _merchantFrame.BuyBestFoodDrink(usesMana, foodAmount, drinkAmount);
+			string[] parts = (bought ?? string.Empty).Split('|');
+			string drinkPart = parts.Length > 0 ? parts[0] : string.Empty;
+			string foodPart = parts.Length > 1 ? parts[1] : string.Empty;
+
+			// If the vendor sells neither food nor water, blacklist it so we don't keep returning.
+			if (drinkPart.Length == 0 && foodPart.Length == 0)
 			{
-				Logging.Write("Vendor does not sell food or water. Blacklisting it.");
+				Logging.Write("Vendor does not sell food or water ({0} items scanned). Blacklisting it.",
+					_merchantFrame.MerchantNumItems);
 				ProfileManager.CurrentProfile?.VendorManager?.Blacklist.Add(BotPoi.Current.AsVendor);
 				BotPoi.Clear("Blacklisted Vendor");
 				return;
 			}
 
-			// Buy drinks if needed
-			if (Consumable.GetBestDrink(false) == null && bestDrinkIndex != -1 && usesMana && 
-			    CharacterSettings.Instance.DrinkAmount > 0)
-			{
-				var drinkItem = _merchantFrame.GetMerchantItemByIndex(bestDrinkIndex);
-				if (drinkItem != null)
-				{
-					Logging.Write("Buying {0}x {1}", CharacterSettings.Instance.DrinkAmount, drinkItem.Name);
-					_merchantFrame.BuyItem(bestDrinkIndex, CharacterSettings.Instance.DrinkAmount);
-				}
-			}
-
-			// Buy food if needed
-			if (Consumable.GetBestFood(false) == null && bestFoodIndex != -1 &&
-			    CharacterSettings.Instance.FoodAmount > 0)
-			{
-				var foodItem = _merchantFrame.GetMerchantItemByIndex(bestFoodIndex);
-				if (foodItem != null)
-				{
-					Logging.Write("Buying {0}x {1}", CharacterSettings.Instance.FoodAmount, foodItem.Name);
-					_merchantFrame.BuyItem(bestFoodIndex, CharacterSettings.Instance.FoodAmount);
-				}
-			}
+			LogBought(drinkPart, drinkAmount);
+			LogBought(foodPart, foodAmount);
 
 			StyxWoW.Sleep(2000);
 			_merchantFrame.Close();
 			ForceBuy = false;
 			BotPoi.Clear("Restocked");
+		}
+
+		// part is "Name~perBuyQuantity" from BuyBestFoodDrink; logs what we actually purchased so the
+		// per-buy quantity (the 5x stacking) is visible and verifiable.
+		private static void LogBought(string part, int desiredItems)
+		{
+			if (string.IsNullOrEmpty(part))
+				return;
+			string[] seg = part.Split('~');
+			string name = seg[0];
+			int q = seg.Length > 1 && int.TryParse(seg[1], out int qq) && qq > 0 ? qq : 1;
+			int buys = (int)Math.Ceiling(desiredItems / (double)q);
+			Logging.Write("Buying {0} ({1}/buy x {2} buys = {3} items)", name, q, buys, buys * q);
 		}
 	}
 }

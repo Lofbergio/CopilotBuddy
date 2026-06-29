@@ -257,6 +257,22 @@ namespace Styx.Logic.Inventory.Frames.Merchant
             return MerchantItems.ToArray();
         }
 
+        /// <summary>
+        /// True once every merchant slot's item TEMPLATE (class/subclass/spells) has loaded into the client
+        /// item cache. The merchant knows item IDs the instant it opens, but ItemInfo.FromId reads the async
+        /// client cache — scanning before it fills returns null for every item (→ "sells no food/water" →
+        /// blacklists good vendors). Callers should wait on this before deciding what a vendor sells.
+        /// </summary>
+        public bool AllMerchantItemsCached()
+        {
+            if (!IsVisible || MerchantNumItems <= 0)
+                return false;
+            foreach (var item in GetAllMerchantItems())
+                if (item.ItemInfo == null)
+                    return false;
+            return true;
+        }
+
         private int? GetMerchantIndex(uint itemId)
         {
             for (int i = 1; i < MerchantNumItems + 1; i++)
@@ -331,34 +347,83 @@ namespace Styx.Logic.Inventory.Frames.Merchant
         /// <summary>
         /// Gets the best consumable of a specific type from a vendor.
         /// </summary>
+        /// <summary>
+        /// Find + buy the best usable food (health) and drink (mana) this merchant sells, via Lua. Our
+        /// memory item-cache reader (ItemInfo.FromId) returns null for vendor-only items on this server, so
+        /// subclass/spell detection is impossible from internals — but the game's own tooltip works (it's
+        /// what the UI shows). We scan each merchant item's tooltip for a "restores … mana/health over … sec"
+        /// line (drink vs food), pick the highest usable tier, and BuyMerchantItem it in-Lua. Returns
+        /// "drinkName|foodName" (either side empty if not found / not bought).
+        /// </summary>
+        public string BuyBestFoodDrink(bool usesMana, int foodAmount, int drinkAmount)
+        {
+            string lua = string.Format(@"
+local pl = UnitLevel('player')
+local tip = CopilotBuddyScanTip
+if not tip then tip = CreateFrame('GameTooltip','CopilotBuddyScanTip',nil,'GameTooltipTemplate') end
+local bd,bdR,bdName,bdQ = 0,-1,'',1
+local bf,bfR,bfName,bfQ = 0,-1,'',1
+for i=1,GetMerchantNumItems() do
+  local name,_,_,qty = GetMerchantItemInfo(i)
+  if name then
+    tip:SetOwner(UIParent,'ANCHOR_NONE') tip:ClearLines() tip:SetMerchantItem(i)
+    local hasMana,hasHealth,overTime,req = false,false,false,0
+    for l=1,tip:NumLines() do
+      local fs = _G['CopilotBuddyScanTipTextLeft'..l]
+      local t = fs and fs:GetText()
+      if t then
+        local lt = string.lower(t)
+        if string.find(lt,'mana',1,true) then hasMana=true end
+        if string.find(lt,'health',1,true) then hasHealth=true end
+        if string.find(lt,'sec',1,true) then overTime=true end
+        local r = string.match(t,'Requires Level (%d+)')
+        if r then req = tonumber(r) end
+      end
+    end
+    if req <= pl then
+      if hasMana and overTime and req > bdR then bd=i bdR=req bdName=name bdQ=(qty or 1) end
+      if hasHealth and overTime and req > bfR then bf=i bfR=req bfName=name bfQ=(qty or 1) end
+    end
+  end
+end
+-- BuyMerchantItem's count is the number of PURCHASES, each yielding the vendor's per-slot quantity — so
+-- divide the desired item count by that quantity, else we buy (amount x stack) and flood the bags.
+local out = ''
+if {0} and bd>0 and {1}>0 then BuyMerchantItem(bd, math.max(1, math.ceil({1}/math.max(1,bdQ)))) out=bdName..'~'..bdQ end
+out = out..'|'
+if bf>0 and {2}>0 then BuyMerchantItem(bf, math.max(1, math.ceil({2}/math.max(1,bfQ)))) out=out..bfName..'~'..bfQ end
+return out", usesMana ? "true" : "false", drinkAmount, foodAmount);
+
+            try { return Lua.GetReturnVal<string>(lua, 0) ?? string.Empty; }
+            catch { return string.Empty; }
+        }
+
         private int GetBestConsumableFromVendor(string consumableType)
         {
             int bestIndex = -1;
             int bestLevel = -1;
             int playerLevel = StyxWoW.Me?.Level ?? 1;
+            bool wantDrink = consumableType == "Drink";
 
             foreach (var item in GetAllMerchantItems())
             {
-                if (item.ItemInfo == null)
+                ItemInfo info = item.ItemInfo;
+                if (info == null)
                     continue;
 
-                // Check if item has the spell effect (Food/Drink)
-                int[] spellIds = item.ItemInfo.SpellId;
-                if (spellIds == null || spellIds.Length == 0 || spellIds[0] == 0)
+                // Identify food/water by item subclass + regen aura (NOT a spell named "Food"/"Drink",
+                // which never matches), via the shared Consumable classifier.
+                bool match = wantDrink ? Consumable.IsDrinkItem(info) : Consumable.IsFoodItem(info);
+                if (!match)
                     continue;
 
-                WoWSpell spell = WoWSpell.FromId(spellIds[0]);
-                if (spell == null || spell.Name != consumableType)
-                    continue;
-
-                // Check if player can use this item (level check)
-                if (item.ItemInfo.RequiredLevel > playerLevel)
+                if (info.RequiredLevel > playerLevel)
                     continue;
 
                 // Find highest level item that player can use
-                if (item.ItemInfo.RequiredLevel > bestLevel)
+                if (info.RequiredLevel > bestLevel)
                 {
-                    bestLevel = item.ItemInfo.RequiredLevel;
+                    bestLevel = info.RequiredLevel;
                     bestIndex = item.Index;
                 }
             }
