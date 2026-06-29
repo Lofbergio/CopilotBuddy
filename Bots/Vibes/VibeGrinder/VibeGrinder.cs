@@ -45,6 +45,7 @@ namespace Bots.VibeGrinder
         private double _committedLastDist = double.MaxValue;   // last distance to committed mob (progress watchdog)
         private readonly System.Diagnostics.Stopwatch _selectRetry = new System.Diagnostics.Stopwatch();
         private readonly System.Diagnostics.Stopwatch _safeRest = new System.Diagnostics.Stopwatch();
+        private readonly System.Diagnostics.Stopwatch _surfaceLogSw = new System.Diagnostics.Stopwatch();   // throttle incidental-hostile log
         private bool _resting;                  // committed rest state (sticky: enter at Min*, exit at RestDonePct/cap)
         private WoWPoint _restSpot = WoWPoint.Empty;   // committed safe-rest destination (picked once per rest)
         private const int RestHysteresisPct = 12;  // resume at Min*+this (modest hysteresis), NOT a flat 85% top-off
@@ -90,8 +91,8 @@ namespace Bots.VibeGrinder
                         // driver. On a grind trek those are active and already commit to one mob — running
                         // TransitPeel there too put TWO drivers on one pull (TransitPeel→closest-in-LoS vs
                         // ShouldClearPoiForBetterTarget→committed FirstUnit) and thrashed the POI between two
-                        // mobs every tick, pulling both. Grind treks instead only SURFACE foreign hostiles
-                        // (TransitIncludeHostiles, InTransit) and let the single existing commitment pull them.
+                        // mobs every tick, pulling both. While grinding, foreign hostiles are instead just
+                        // SURFACED (IncludeNearbyHostiles) and the single existing commitment pulls them.
                         new Decorator(ctx => OnVendorRun() && !StyxWoW.Me.Combat, new Action(ctx => TransitPeel())),
                         LevelBot.CreateVendorBehavior(),
                         // Rest commitment: while we've decided to rest and aren't topped off yet, OWN the tick so
@@ -137,9 +138,9 @@ namespace Bots.VibeGrinder
             LootTargeting.Instance.IncludeTargetsFilter += LevelBot.LevelbotIncludeLootsFilter;
             // Pull discipline: bias FirstUnit toward isolated mobs so we don't open on a pack.
             Targeting.Instance.WeighTargetsFilter += WeighTargetsAvoidPacks;
-            // Transit discipline: surface nearby hostiles during vendor runs (the LevelBot filter adds
-            // none then → uncontrolled body-pulls) so TransitPeel can single them off deliberately.
-            Targeting.Instance.IncludeTargetsFilter += TransitIncludeHostiles;
+            // Surface incidental hostiles (attackers + nearby level-safe hostiles) so the bot SEES the mobs
+            // off its grind list — otherwise it body-pulls them blind (see IncludeNearbyHostiles).
+            Targeting.Instance.IncludeTargetsFilter += IncludeNearbyHostiles;
 
             _onKill = args => _supervisor.RecordKill();
             BotEvents.Player.OnMobKilled += _onKill;
@@ -641,49 +642,50 @@ namespace Bots.VibeGrinder
         }
 
         /// <summary>
-        /// True while trekking to a grind hotspot we haven't reached yet — the initial run-in AND every
-        /// relocation (both leave CurrentHotSpot != LastHotSpot until we arrive within PathPrecision, then it
-        /// flips false). The LevelBot target filter only surfaces grind-faction/in-band mobs, so a FOREIGN
-        /// hostile pack on the path is invisible to Targeting and the bot bodyblocks/runs into it. Gating the
-        /// transit peel on this clears the path during treks without touching settled in-camp grinding.
+        /// Surface incidental hostiles as candidates. LevelBot's filter only adds grind-faction/in-band mobs,
+        /// so a foreign hostile (a roaming raptor, a Kolkar off the grind list) is invisible to Targeting and
+        /// the bot walks into it and body-pulls. Add a hostile when it is (a) attacking us/pet — DEFENSIVE,
+        /// any level/distance, so an add is always a target and we never leash off something that's on us — or
+        /// (b) within pull range AND level-safe — PATH-CLEAR, so we single-pull what's in our way instead of
+        /// bodyblocking it. Distant side hostiles stay ignored. These flow through the same pack-fear weighting
+        /// (ApplyCrowdAndNeutralWeighting vetoes any sitting in a camp) and the nearest-bias commitment, so we
+        /// pull the nearest CLEAN hostile and refuse camped ones. WHO pulls is unchanged: TransitPeel on a
+        /// vendor run, ApplyPullCommitment otherwise.
         /// </summary>
-        private static bool TrekkingToSpot()
+        private void IncludeNearbyHostiles(System.Collections.Generic.List<WoWObject> incoming,
+                                           System.Collections.Generic.HashSet<WoWObject> outgoing)
         {
             var me = StyxWoW.Me;
-            if (me == null || me.Combat) return false;
-            var ga = StyxWoW.AreaManager?.CurrentGrindArea;
-            return ga != null && ga.HotspotChanged;
-        }
-
-        /// <summary>A transit leg where the body-pull-avoidance peel applies: a vendor run OR a spot trek.</summary>
-        private static bool InTransit() => OnVendorRun() || TrekkingToSpot();
-
-        /// <summary>
-        /// Transit targeting: on any transit leg (vendor run OR spot trek) LevelBotIncludeTargetsFilter
-        /// surfaces too little — NO targets on a vendor run (HB 6.2.3: "only aggro mobs"), and only
-        /// grind-faction/in-band mobs while trekking — so a foreign hostile pack on the path is invisible
-        /// and the bot body-pulls/runs into it. Re-add nearby *hostiles* within pull range (neutrals don't
-        /// proximity-aggro, so they never add on a trek) so the caution weighting (WeighTargetsAvoidPacks)
-        /// orders them and the puller single-pulls the most isolated one. WHO pulls differs by leg: on a
-        /// vendor run TransitPeel (Roam/commitment are disabled there); on a grind trek the normal Roam
-        /// find-target + ApplyPullCommitment that are already active — do NOT also run TransitPeel on a trek,
-        /// or the two drivers thrash the POI between mobs. Pre-combat, in-transit only.
-        /// </summary>
-        private void TransitIncludeHostiles(System.Collections.Generic.List<WoWObject> incoming,
-                                            System.Collections.Generic.HashSet<WoWObject> outgoing)
-        {
-            if (!InTransit() || StyxWoW.Me.Combat) return;
+            if (me == null) return;
             double pull = Targeting.PullDistance;
-            if (pull <= 0) return;
+            if (pull <= 0) pull = 28;
+            int safeLevel = me.Level + VibeGrinderSettings.Instance.PathHostileLevelMargin;
+            ulong petGuid = me.GotAlivePet && me.Pet != null ? me.Pet.Guid : 0;
+            int surfaced = 0, defensive = 0;
+
             foreach (WoWObject obj in incoming)
             {
-                if (obj is WoWUnit u && obj is not WoWPlayer
-                    && !u.Dead
-                    && u.MyReaction <= WoWUnitReaction.Hostile   // hostiles only — neutrals won't body-pull us
-                    && u.Distance <= pull)
-                {
-                    outgoing.Add(obj);
-                }
+                if (obj is not WoWUnit u || obj is WoWPlayer) continue;
+                if (u.Dead || u.MyReaction > WoWUnitReaction.Hostile) continue;   // hostiles only
+                if (outgoing.Contains(obj) || Blacklist.Contains(u.Guid)) continue;
+
+                bool attackingUs = u.CurrentTargetGuid == me.Guid || (petGuid != 0 && u.CurrentTargetGuid == petGuid);
+                // Path-clear is gated to level-safe in-range hostiles (level 0 = ?? → never proactively pull,
+                // but still defend if it's on us). Defensive ignores both gates — fight what's hitting us.
+                int ulevel = (int)u.Level;
+                bool pathClear = u.Distance <= pull && ulevel > 0 && ulevel <= safeLevel;
+                if (!attackingUs && !pathClear) continue;
+
+                outgoing.Add(obj);
+                surfaced++;
+                if (attackingUs) defensive++;
+            }
+
+            if (surfaced > 0 && (!_surfaceLogSw.IsRunning || _surfaceLogSw.Elapsed.TotalSeconds >= 3))
+            {
+                Logging.WriteDebug("[VibeGrinder/Hostiles] surfaced {0} incidental hostile(s) ({1} attacking us).",
+                    surfaced, defensive);
+                _surfaceLogSw.Restart();
             }
         }
 
@@ -742,7 +744,7 @@ namespace Bots.VibeGrinder
             Targeting.Instance.IncludeTargetsFilter -= LevelBot.LevelBotIncludeTargetsFilter;
             LootTargeting.Instance.IncludeTargetsFilter -= LevelBot.LevelbotIncludeLootsFilter;
             Targeting.Instance.WeighTargetsFilter -= WeighTargetsAvoidPacks;
-            Targeting.Instance.IncludeTargetsFilter -= TransitIncludeHostiles;
+            Targeting.Instance.IncludeTargetsFilter -= IncludeNearbyHostiles;
             if (_onKill != null)
             {
                 BotEvents.Player.OnMobKilled -= _onKill;
