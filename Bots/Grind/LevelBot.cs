@@ -61,6 +61,8 @@ namespace Bots.Grind
         private static int _deathCount;
         private static readonly WaitTimer _deathTimer = new WaitTimer(new TimeSpan(0, 3, 0));
         private static Stopwatch _corpseWaitStopwatch = new Stopwatch();
+        private static readonly Stopwatch _corpsePointWaitSw = new Stopwatch();   // ghost waiting for a valid CorpsePoint
+        private static readonly Stopwatch _shDiagSw = new Stopwatch();            // throttle spirit-healer diagnostics
         private static bool _diedIndoors;
         private static readonly WaitTimer _releaseTimer = WaitTimer.FiveSeconds;
         private static WaitTimer _repairCostTimer = new WaitTimer(TimeSpan.FromMinutes(3.0));
@@ -272,6 +274,21 @@ namespace Bots.Grind
         public static PrioritySelector CreateDeathBehavior()
         {
             return new PrioritySelector(
+                // Fresh start every life: a stale ShouldUseSpiritHealer / camp count from a PREVIOUS death must
+                // not carry into the next one. Corpse-camp protection sets the flag, but if we then grab the
+                // corpse anyway it never clears — so a later death with a perfectly reachable corpse wrongly ran
+                // straight to the spirit healer (and into the SH↔corpse oscillation). Clear it whenever alive.
+                new Decorator(
+                    ctx => !StyxWoW.Me.IsDead && !StyxWoW.Me.IsGhost && (ShouldUseSpiritHealer || _deathCount != 0),
+                    new TreeSharp.Action(ctx =>
+                    {
+                        ShouldUseSpiritHealer = false;
+                        _deathCount = 0;
+                        if (_corpsePointWaitSw.IsRunning) _corpsePointWaitSw.Reset();
+                        if (_shDiagSw.IsRunning) _shDiagSw.Reset();
+                        return RunStatus.Failure;
+                    })
+                ),
                 // Dead - need to release
                 new Decorator(
                     ctx => StyxWoW.Me.IsDead,
@@ -282,16 +299,59 @@ namespace Bots.Grind
                             new TreeSharp.Action(ctx => SleepForLag()))
                     )
                 ),
-                // Ghost - need to use spirit healer (if enabled and can't reach corpse)
+                // Ghost but no VALID corpse location yet — CorpsePoint reads Empty (NaN) or 0,0,0 (a transient
+                // memory read right after release; corpse runs work fine once the server sends the real point).
+                // WAIT for it instead of falling through: a 0,0,0 sneaks past the "!= Empty" spirit-healer check
+                // below and traps the bot in a permanent spirit-healer interact loop (the 4.5h ghost hang), and
+                // the move-to-corpse branch would otherwise path to the world origin. Escalate to the spirit
+                // healer only if it stays invalid for 60s (a genuine read failure, not the usual transient).
+                new Decorator(
+                    ctx => StyxWoW.Me.IsGhost && !ShouldUseSpiritHealer
+                           && (StyxWoW.Me.CorpsePoint == WoWPoint.Empty || StyxWoW.Me.CorpsePoint == WoWPoint.Zero),
+                    new TreeSharp.Action(ctx =>
+                    {
+                        if (!_corpsePointWaitSw.IsRunning) _corpsePointWaitSw.Restart();
+                        if (_corpsePointWaitSw.ElapsedMilliseconds < 150 || _corpsePointWaitSw.ElapsedMilliseconds % 3000 < 150)
+                            Logging.Write("[Death] Ghost waiting for a valid corpse location (CorpsePoint={0}, {1:0}s) — NOT diverting to spirit healer.",
+                                StyxWoW.Me.CorpsePoint, _corpsePointWaitSw.Elapsed.TotalSeconds);
+                        if (_corpsePointWaitSw.Elapsed.TotalSeconds > 60)
+                        {
+                            Logging.Write("[Death] CorpsePoint still invalid after 60s — genuine read failure, escalating to spirit healer.");
+                            ShouldUseSpiritHealer = true;
+                            _corpsePointWaitSw.Reset();
+                        }
+                        return RunStatus.Success;
+                    })
+                ),
+                // Reset the wait clock once a valid corpse point shows up (normal corpse run takes over below).
+                new Decorator(
+                    ctx => _corpsePointWaitSw.IsRunning && StyxWoW.Me.CorpsePoint != WoWPoint.Empty
+                           && StyxWoW.Me.CorpsePoint != WoWPoint.Zero,
+                    new TreeSharp.Action(ctx => { _corpsePointWaitSw.Reset(); return RunStatus.Failure; })
+                ),
+                // Ghost - need to use spirit healer (if enabled and can't reach corpse). COMMIT once chosen:
+                // wrap in AlwaysSucceed so this owns the tick and the corpse branches below NEVER run — that
+                // stops the spirit-healer↔corpse ping-pong that hangs when neither recovery path completes
+                // (corpse unreachable AND the SH res not finishing). Cleared only on an actual resurrection.
                 new Decorator(
                     ctx => ShouldUseSpiritHealer && StyxWoW.Me.IsGhost,
-                    CreateSpiritHealerBehavior()
+                    new PrioritySelector(
+                        CreateSpiritHealerBehavior(),
+                        // Commit ONLY while a spirit healer actually exists (so walking to it can't ping-pong
+                        // with the corpse). No healer present → fall through (Failure) and let the corpse
+                        // branches run — never strand the ghost on a spirit healer that isn't there.
+                        new Decorator(
+                            ctx => ObjectManager.CachedUnits.Any(u => u.IsSpiritHealer),
+                            new ActionAlwaysSucceed()
+                        )
+                    )
                 ),
                 // Ghost - can't navigate to corpse, use spirit healer
                 new DecoratorIsNotPoiType(PoiType.Corpse, new Decorator(
                     ctx => CharacterSettings.Instance.RessAtSpiritHealers &&
                            StyxWoW.Me.IsGhost &&
                            StyxWoW.Me.CorpsePoint != WoWPoint.Empty &&
+                           StyxWoW.Me.CorpsePoint != WoWPoint.Zero &&   // 0,0,0 = not-yet-read, NOT an unreachable corpse
                            StyxWoW.Me.Location.DistanceSqr(StyxWoW.Me.CorpsePoint) > 40.0 &&
                            !Navigator.CanNavigateFully(StyxWoW.Me.Location, StyxWoW.Me.CorpsePoint),
                     new Sequence(
@@ -334,46 +394,104 @@ namespace Bots.Grind
         private static Composite CreateSpiritHealerBehavior()
         {
             return new PrioritySelector(
-                ctx => ObjectManager.CachedUnits
-                    .FirstOrDefault(u => u.IsSpiritHealer),
+                ctx => ObjectManager.CachedUnits.FirstOrDefault(u => u.IsSpiritHealer),
+                // No spirit healer in range — log it (we don't know where to walk). Keeps committed (parent
+                // AlwaysSucceed owns the tick) instead of ping-ponging back to the corpse.
+                new Decorator(
+                    ctx => ctx == null,
+                    new TreeSharp.Action(ctx =>
+                    {
+                        // No spirit healer to use → don't sit committed to nothing. Drop the flag and let the
+                        // corpse branches retry (camp-protection won't re-set it without a SH present).
+                        ShDiag("no spirit healer nearby — abandoning SH, retrying the corpse run");
+                        ShouldUseSpiritHealer = false;
+                        return RunStatus.Failure;
+                    })
+                ),
                 // Move to spirit healer
                 new Decorator(
                     ctx => ctx != null && ((WoWObject)ctx).DistanceSqr > 16.0,
-                    new TreeSharp.Action(ctx => { Navigator.MoveTo(((WoWObject)ctx).Location); })
+                    new TreeSharp.Action(ctx =>
+                    {
+                        var sh = (WoWObject)ctx;
+                        ShDiag(string.Format("moving to spirit healer '{0}' d={1:0.#}", sh.Name, sh.Distance));
+                        Navigator.MoveTo(sh.Location);
+                        return RunStatus.Success;
+                    })
                 ),
-                // Interact with spirit healer
+                // At the spirit healer — interact, capture what the server presents, then resurrect.
                 new Decorator(
                     ctx => ctx != null && ((WoWObject)ctx).DistanceSqr < 16.0,
                     new Sequence(
-                        new TreeSharp.Action(ctx => ((WoWObject)ctx).Interact()),
+                        new TreeSharp.Action(ctx => { ((WoWObject)ctx).Interact(); SleepForLag(); }),
+                        // DIAGNOSTIC: dump exactly what's on screen so we can match the right resurrect path on
+                        // THIS server (the default StaticPopup1/Healer-gossip detection wasn't completing the res).
+                        new TreeSharp.Action(ctx =>
+                        {
+                            try
+                            {
+                                bool popup = Lua.GetReturnVal<bool>("return (StaticPopup1 and StaticPopup1:IsVisible()) and true or false", 0);
+                                bool gossip = Lua.GetReturnVal<bool>("return (GossipFrame and GossipFrame:IsVisible()) and true or false", 0);
+                                int gNum = Lua.GetReturnVal<int>("return GetNumGossipOptions() or 0", 0);
+                                int delay = Lua.GetReturnVal<int>("return GetCorpseRecoveryDelay() or 0", 0);
+                                string popText = Lua.GetReturnVal<string>("return (StaticPopup1Text and StaticPopup1Text:GetText()) or ''", 0);
+                                Logging.Write("[Death/SH] interacted: popup={0} text='{1}' gossip={2} gossipOpts={3} corpseDelay={4}",
+                                    popup, popText, gossip, gNum, delay);
+                            }
+                            catch (System.Exception ex) { Logging.Write("[Death/SH] diag err: {0}", ex.Message); }
+                            return RunStatus.Success;
+                        }),
                         new Wait(5,
-                            ctx => Lua.GetReturnVal<bool>("return StaticPopup1:IsVisible() or GossipFrame:IsVisible()", 0),
+                            ctx => Lua.GetReturnVal<bool>("return ((StaticPopup1 and StaticPopup1:IsVisible()) or (GossipFrame and GossipFrame:IsVisible())) and true or false", 0),
                             new Sequence(
-                                // GossipFrame path: select Healer gossip option (decorator skips if frame absent)
-                                new DecoratorFrameIsVisible<GossipFrame>(
-                                    new TreeSharp.Action(ctx =>
+                                // Gossip path: Healer-typed option, else fall back to the first option (some
+                                // servers don't tag the resurrect option as type Healer).
+                                new TreeSharp.Action(ctx =>
+                                {
+                                    try
                                     {
-                                        var entry = GossipFrame.Instance.GossipOptionEntries
-                                            .FirstOrDefault(e => e.Type == GossipEntry.GossipEntryType.Healer);
-                                        if (entry.Index != 0)
-                                            GossipFrame.Instance.SelectGossipOption(entry.Index);
-                                    })
-                                ),
-                                // StaticPopup1 path: click the "Resurrect" button
-                                new TreeSharp.Action(ctx => Lua.DoString("StaticPopup1Button1:Click()")),
-                                // HB 4.3.4 smethod_80 — reset state regardless of which path triggered
+                                        if (Lua.GetReturnVal<bool>("return (GossipFrame and GossipFrame:IsVisible()) and true or false", 0))
+                                        {
+                                            var entry = GossipFrame.Instance.GossipOptionEntries
+                                                .FirstOrDefault(e => e.Type == GossipEntry.GossipEntryType.Healer);
+                                            if (entry.Index != 0) GossipFrame.Instance.SelectGossipOption(entry.Index);
+                                            else Lua.DoString("SelectGossipOption(1)");
+                                        }
+                                    }
+                                    catch { }
+                                }),
+                                // Popup path + generic accept-resurrect, then XP-loss confirm.
+                                new TreeSharp.Action(ctx => Lua.DoString("if StaticPopup1Button1 then StaticPopup1Button1:Click() end")),
+                                new TreeSharp.Action(ctx => Lua.DoString("if AcceptResurrect then AcceptResurrect() end")),
                                 new TreeSharp.Action(ctx =>
                                 {
                                     SleepForLag();
-                                    Lua.DoString("AcceptXPLoss()");
-                                    ShouldUseSpiritHealer = false;
-                                    _deathCount = 0;
+                                    Lua.DoString("if AcceptXPLoss then AcceptXPLoss() end");
+                                    // Only consider it done if we actually came back to life — otherwise stay
+                                    // committed and keep trying (with the diagnostic above showing why).
+                                    if (StyxWoW.Me.IsAlive && !StyxWoW.Me.IsGhost)
+                                    {
+                                        Logging.Write("[Death/SH] Resurrected at spirit healer.");
+                                        ShouldUseSpiritHealer = false;
+                                        _deathCount = 0;
+                                        _shDiagSw.Reset();
+                                    }
                                 })
                             )
                         )
                     )
                 )
             );
+        }
+
+        // Throttled spirit-healer diagnostic (≈ every 3s).
+        private static void ShDiag(string msg)
+        {
+            if (!_shDiagSw.IsRunning || _shDiagSw.Elapsed.TotalSeconds >= 3)
+            {
+                Logging.Write("[Death/SH] {0}", msg);
+                _shDiagSw.Restart();
+            }
         }
 
         private static Composite CreateCorpseRetrievalBehavior()
@@ -473,7 +591,13 @@ namespace Bots.Grind
             Logging.Write("Clicking corpse popup...");
             Lua.DoString("RetrieveCorpse()");
 
-            if (CharacterSettings.Instance.RessAtSpiritHealers && !Battlegrounds.IsInsideBattleground)
+            // Corpse-camp protection routes to a spirit healer — only engage it if one ACTUALLY exists nearby.
+            // Otherwise it strands the ghost committed to a healer that isn't there, ignoring a corpse that's
+            // perfectly grabbable (e.g. once the camp clears or you clear it manually). No SH → keep trying the
+            // corpse (bounded by the 40s force-grab). NOTE: this counter increments per GrabCorpse call (≈ per
+            // tick), so with a SH present it still trips fast — acceptable since it then has a real healer to use.
+            if (CharacterSettings.Instance.RessAtSpiritHealers && !Battlegrounds.IsInsideBattleground
+                && ObjectManager.CachedUnits.Any(u => u.IsSpiritHealer))
             {
                 if (!_deathTimer.IsFinished)
                 {
@@ -1071,13 +1195,20 @@ namespace Bots.Grind
                                             ),
                                             new ActionClearPoi("Done mailing")
                                         )),
-                                        // Buy
-                                        new DecoratorIsPoiType(PoiType.Buy, new Sequence(
+                                        // Buy — like Sell/Repair, require the MERCHANT frame (not just any
+                                        // vendor/gossip frame) to be open + populated before buying. Without
+                                        // this the bot ran BuyItems a tick after Interact, while only the
+                                        // gossip frame was up (or the item list hadn't arrived), read an empty
+                                        // merchant → "no food/water" → blacklisted good food vendors.
+                                        new DecoratorIsPoiType(PoiType.Buy,
+                                            new Decorator(ctx => MerchantFrame.Instance.IsVisible &&
+                                                                 MerchantFrame.Instance.MerchantNumItems > 0,
+                                            new Sequence(
                                             new ActionDebugString("Buying items"),
                                             new ActionSetActivity("Buying Items"),
                                             new TreeSharp.Action(ctx => Vendors.BuyItems()),
                                             new ActionClearPoi("Done buying")
-                                        )),
+                                        ))),
                                         // Train
                                         new DecoratorIsPoiType(PoiType.Train, new Sequence(
                                             new Wait(3, ctx => TrainerFrame.Instance.IsVisible, null),
