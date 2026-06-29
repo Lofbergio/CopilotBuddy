@@ -347,17 +347,16 @@ namespace Bots.VibeGrinder
         {
             var s = VibeGrinderSettings.Instance;
 
-            // Don't chase a mob into water. Oasis turtles (Oasis Snapjaw) sit in the pool below the bank, so
-            // the commitment locks onto one, wades us in, and we tread water at an unreachable target. If we're
-            // swimming, blacklist the committed mob and drop — Roam then heads back to the on-land hotspot.
+            // Don't tread water after a target. If we've waded in swimming, just DROP the pin (no blacklist —
+            // a stream crossing toward a fine land mob shouldn't poison it) and don't re-commit while swimming,
+            // so Roam pulls us back to the on-land hotspot. A genuinely unreachable mob is still caught by the
+            // normal no-progress give-up below once we're back on land.
             if (me.IsSwimming)
             {
                 if (_committedGuid != 0)
                 {
-                    Logging.Write(System.Drawing.Color.Khaki,
-                        "[VibeGrinder/Commit] swimming after {0:X} — blacklisting and dropping (won't chase into water).",
+                    Logging.WriteDebug("[VibeGrinder/Commit] swimming — dropping pin on {0:X} (won't tread water after it).",
                         _committedGuid);
-                    Blacklist.Add(_committedGuid, System.TimeSpan.FromMinutes(2));
                     _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue;
                 }
                 return;
