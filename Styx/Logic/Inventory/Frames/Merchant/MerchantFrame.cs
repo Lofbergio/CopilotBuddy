@@ -362,7 +362,14 @@ namespace Styx.Logic.Inventory.Frames.Merchant
             // detection is impossible and the caller should retry, NOT blacklist); diag is a per-item dump
             // (name, line count, M/H/S regen flags, req level) so a "found nothing at an obvious food vendor"
             // is debuggable from the log.
+            // NO inline Lua (`--`) comments below: the executor collapses the script to fewer lines, so a `--`
+            // comment swallows the rest of the chunk (incl. the final `return`) and the whole call comes back
+            // empty — which is exactly why every vendor read "0 items / sells nothing". Wrapped in pcall so any
+            // other runtime error is reported as "||ERR|<msg>" instead of vanishing into an empty string.
+            // BuyMerchantItem's count arg is the number of PURCHASES (each yields the per-slot quantity), so we
+            // divide the desired item count by that quantity to avoid buying amount x stack and flooding bags.
             string lua = string.Format(@"
+local ok,res = pcall(function()
 local pl = UnitLevel('player')
 local tip = CopilotBuddyScanTip
 if not tip then tip = CreateFrame('GameTooltip','CopilotBuddyScanTip',nil,'GameTooltipTemplate') end
@@ -396,13 +403,13 @@ for i=1,n do
     end
   end
 end
--- BuyMerchantItem's count is the number of PURCHASES, each yielding the vendor's per-slot quantity — so
--- divide the desired item count by that quantity, else we buy (amount x stack) and flood the bags.
 local out = ''
 if {0} and bd>0 and {1}>0 then BuyMerchantItem(bd, math.max(1, math.ceil({1}/math.max(1,bdQ)))) out=bdName..'~'..bdQ end
 out = out..'|'
 if bf>0 and {2}>0 then BuyMerchantItem(bf, math.max(1, math.ceil({2}/math.max(1,bfQ)))) out=out..bfName..'~'..bfQ end
-return out..'|'..warm..'/'..n..'|'..dbg", usesMana ? "true" : "false", drinkAmount, foodAmount);
+return out..'|'..warm..'/'..n..'|'..dbg
+end)
+if ok then return res else return '||ERR|'..tostring(res) end", usesMana ? "true" : "false", drinkAmount, foodAmount);
 
             try { return Lua.GetReturnVal<string>(lua, 0) ?? string.Empty; }
             catch { return string.Empty; }
