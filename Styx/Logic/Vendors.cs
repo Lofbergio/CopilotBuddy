@@ -294,17 +294,35 @@ namespace Styx.Logic
 			int foodAmount = CharacterSettings.Instance.FoodAmount;
 
 			// Find + buy food/drink via Lua (our memory item-cache reader can't see vendor-only items here;
-			// the game's tooltip can). Returns "drinkName|foodName" — either side empty if not found/bought.
-			string bought = _merchantFrame.BuyBestFoodDrink(usesMana, foodAmount, drinkAmount);
-			string[] parts = (bought ?? string.Empty).Split('|');
-			string drinkPart = parts.Length > 0 ? parts[0] : string.Empty;
-			string foodPart = parts.Length > 1 ? parts[1] : string.Empty;
+			// the game's tooltip can). Returns "drink~q|food~q|warm/total|diag". The client item-tooltip cache
+			// is often cold for a second after the merchant opens — the tooltip is then just the name line and
+			// nothing detects as food/water — so re-scan until it warms before deciding the vendor is barren.
+			// This stays inside one BuyItems call (the Buy behavior clears the POI right after we return).
+			string drinkPart = string.Empty, foodPart = string.Empty, warmInfo = string.Empty, diag = string.Empty;
+			for (int attempt = 0; attempt < 6; attempt++)   // ~3s budget for the tooltip cache to warm
+			{
+				string bought = _merchantFrame.BuyBestFoodDrink(usesMana, foodAmount, drinkAmount);
+				string[] parts = (bought ?? string.Empty).Split('|');
+				drinkPart = parts.Length > 0 ? parts[0] : string.Empty;
+				foodPart = parts.Length > 1 ? parts[1] : string.Empty;
+				warmInfo = parts.Length > 2 ? parts[2] : string.Empty;
+				diag = parts.Length > 3 ? parts[3] : string.Empty;
+				if (drinkPart.Length > 0 || foodPart.Length > 0)
+					break;                                  // bought something — done
+				bool cold = warmInfo.StartsWith("0/") && !warmInfo.StartsWith("0/0");
+				if (!cold)
+					break;                                  // tooltips warm but genuinely no food/water here
+				StyxWoW.Sleep(500);                         // cold cache → wait and re-scan (no purchase on a cold pass)
+			}
+
+			Logging.WriteDebug("[FoodScan] {0}: drink='{1}' food='{2}' warm={3} | {4}",
+				BotPoi.Current.Name, drinkPart, foodPart, warmInfo, diag);
 
 			// If the vendor sells neither food nor water, blacklist it so we don't keep returning.
 			if (drinkPart.Length == 0 && foodPart.Length == 0)
 			{
-				Logging.Write("Vendor does not sell food or water ({0} items scanned). Blacklisting it.",
-					_merchantFrame.MerchantNumItems);
+				Logging.Write("Vendor does not sell food or water ({0} items, warm {1}). Blacklisting it. [{2}]",
+					_merchantFrame.MerchantNumItems, warmInfo, diag);
 				ProfileManager.CurrentProfile?.VendorManager?.Blacklist.Add(BotPoi.Current.AsVendor);
 				BotPoi.Clear("Blacklisted Vendor");
 				return;

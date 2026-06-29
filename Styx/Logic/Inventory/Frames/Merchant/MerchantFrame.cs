@@ -357,18 +357,27 @@ namespace Styx.Logic.Inventory.Frames.Merchant
         /// </summary>
         public string BuyBestFoodDrink(bool usesMana, int foodAmount, int drinkAmount)
         {
+            // Returns "drink~q|food~q|<warm>/<total>|<diag>": drink/food are bought-item names (empty if not
+            // found/bought); warm = items whose tooltip had >1 line (cold client cache → only the name line, so
+            // detection is impossible and the caller should retry, NOT blacklist); diag is a per-item dump
+            // (name, line count, M/H/S regen flags, req level) so a "found nothing at an obvious food vendor"
+            // is debuggable from the log.
             string lua = string.Format(@"
 local pl = UnitLevel('player')
 local tip = CopilotBuddyScanTip
 if not tip then tip = CreateFrame('GameTooltip','CopilotBuddyScanTip',nil,'GameTooltipTemplate') end
 local bd,bdR,bdName,bdQ = 0,-1,'',1
 local bf,bfR,bfName,bfQ = 0,-1,'',1
-for i=1,GetMerchantNumItems() do
+local dbg,warm = '',0
+local n = GetMerchantNumItems()
+for i=1,n do
   local name,_,_,qty = GetMerchantItemInfo(i)
   if name then
     tip:SetOwner(UIParent,'ANCHOR_NONE') tip:ClearLines() tip:SetMerchantItem(i)
+    local nl = tip:NumLines()
+    if nl > 1 then warm = warm + 1 end
     local hasMana,hasHealth,overTime,req = false,false,false,0
-    for l=1,tip:NumLines() do
+    for l=1,nl do
       local fs = _G['CopilotBuddyScanTipTextLeft'..l]
       local t = fs and fs:GetText()
       if t then
@@ -380,6 +389,7 @@ for i=1,GetMerchantNumItems() do
         if r then req = tonumber(r) end
       end
     end
+    if i<=16 then dbg=dbg..i..':'..name..'(l'..nl..(hasMana and ' M' or '')..(hasHealth and ' H' or '')..(overTime and ' S' or '')..' r'..req..') ' end
     if req <= pl then
       if hasMana and overTime and req > bdR then bd=i bdR=req bdName=name bdQ=(qty or 1) end
       if hasHealth and overTime and req > bfR then bf=i bfR=req bfName=name bfQ=(qty or 1) end
@@ -392,7 +402,7 @@ local out = ''
 if {0} and bd>0 and {1}>0 then BuyMerchantItem(bd, math.max(1, math.ceil({1}/math.max(1,bdQ)))) out=bdName..'~'..bdQ end
 out = out..'|'
 if bf>0 and {2}>0 then BuyMerchantItem(bf, math.max(1, math.ceil({2}/math.max(1,bfQ)))) out=out..bfName..'~'..bfQ end
-return out", usesMana ? "true" : "false", drinkAmount, foodAmount);
+return out..'|'..warm..'/'..n..'|'..dbg", usesMana ? "true" : "false", drinkAmount, foodAmount);
 
             try { return Lua.GetReturnVal<string>(lua, 0) ?? string.Empty; }
             catch { return string.Empty; }

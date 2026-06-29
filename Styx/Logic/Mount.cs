@@ -367,8 +367,15 @@ namespace Styx.Logic
 				bool hasCastTime = ghostWolf == null || ghostWolf.CastTime > 0;
 				if (hasCastTime)
 				{
+					if (me.HasAura("Ghost Wolf"))
+						return true;            // already up — don't re-cast it every travel tick
+
+					// MoveStop isn't instant: the char glides for a tick or two, and a cast-time Ghost Wolf
+					// started while still gliding fails with "can't cast while moving" (the 3x-retry spam). Wait
+					// until actually stopped before casting — a fixed 100ms sleep wasn't enough at travel speed.
 					WoWMovement.MoveStop();
-					StyxWoW.Sleep(100);
+					for (int t0 = Environment.TickCount; me.IsMoving && Environment.TickCount - t0 < 900; )
+						StyxWoW.Sleep(50);
 				}
 
 				SpellManager.Cast("Ghost Wolf");
