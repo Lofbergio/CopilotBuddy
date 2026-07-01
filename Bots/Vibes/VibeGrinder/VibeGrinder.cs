@@ -547,12 +547,15 @@ namespace Bots.VibeGrinder
                 if (valid)
                 {
                     double d = held.Location.Distance(me.Location);
-                    // Progress = closing the gap OR having reached pull/cast range. Once we're in range the
-                    // APPROACH has succeeded and engaging is the routine's job — a ranged attacker stops closing
-                    // here to cast. Without the range clause the give-up clock reads "no progress" while we stand
-                    // pulling, blacklists the very mob we're pulling, and re-acquires another (the "pulled one,
-                    // switched and pulled the second too" double-pull). Combat then short-circuits this method.
-                    if (d <= s.MaxPullDistance || d < _committedLastDist - 0.5)
+                    // Progress = closing the gap OR actually ENGAGING (in combat) — reset on those, NOT on bare
+                    // proximity. An in-range mob we can't actually pull (a LoS/facing dead-end the InLineOfSpellSight
+                    // flag misses, or an evade spot) used to reset the clock every tick via `d <= MaxPullDistance`,
+                    // so it stood there forever casting into nothing (seen: ~6 min on one Hillsbrad Foreman —
+                    // los=True, canPull=True, yet no damage and combat=False). Gating on combat instead: a real pull
+                    // connects in ~3s (<< the 20s cap) so it's never blacklisted, and combat keeps the clock reset
+                    // through a genuine fight (mob in range, no distance progress) so we don't drop the mob we're
+                    // killing — but a stuck in-range pull expires → blacklist 2m + re-pick, i.e. skip it and move on.
+                    if (me.Combat || d < _committedLastDist - 0.5)
                         _committedTimer.Restart();
                     _committedLastDist = d;
 
