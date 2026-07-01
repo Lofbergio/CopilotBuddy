@@ -6,6 +6,7 @@ using Styx;
 using Styx.Helpers;
 using Styx.Logic.Pathing;
 using Styx.WoWInternals;
+using Styx.WoWInternals.World;
 using Styx.WoWInternals.WoWObjects;
 
 namespace Bots.VibeGrinder.Selection
@@ -35,9 +36,9 @@ namespace Bots.VibeGrinder.Selection
         /// Blacklisted centroids (recently abandoned) are excluded; if that empties the field, the
         /// blacklist is cleared and the search retried once.
         /// </summary>
-        public GrindSpot SelectBest(uint mapId, WoWPoint playerLoc, int playerLevel, IEnumerable<WoWPoint> blacklist, double caution = 1.0)
+        public GrindSpot SelectBest(uint mapId, WoWPoint playerLoc, int playerLevel, IEnumerable<(WoWPoint center, float radius)> blacklist, double caution = 1.0)
         {
-            var blocked = blacklist != null ? blacklist.ToList() : new List<WoWPoint>();
+            var blocked = blacklist != null ? blacklist.ToList() : new List<(WoWPoint center, float radius)>();
 
             // Path-gauntlet leniency ladder: prefer a route that avoids over-level hostiles, but if nothing
             // qualifies, relax rather than idle forever — the user would rather it grind the least-bad route
@@ -52,7 +53,7 @@ namespace Bots.VibeGrinder.Selection
                 if (best == null && blocked.Count > 0)
                 {
                     Styx.Helpers.Logging.Write("[VibeGrinder] No spot outside blacklist; clearing it and retrying once.");
-                    best = Search(mapId, playerLoc, playerLevel, new List<WoWPoint>(), caution, tol);
+                    best = Search(mapId, playerLoc, playerLevel, new List<(WoWPoint center, float radius)>(), caution, tol);
                 }
                 if (best != null)
                 {
@@ -67,7 +68,7 @@ namespace Bots.VibeGrinder.Selection
             return null;
         }
 
-        private GrindSpot Search(uint mapId, WoWPoint playerLoc, int playerLevel, List<WoWPoint> blocked, double caution, int pathGauntletTolerance)
+        private GrindSpot Search(uint mapId, WoWPoint playerLoc, int playerLevel, List<(WoWPoint center, float radius)> blocked, double caution, int pathGauntletTolerance)
         {
             bool scarce = playerLevel <= S.ScarcityLevelCeiling;
             // Scarce: halve the density requirement (floor of 2 — a lone spawn isn't a "spot").
@@ -105,7 +106,7 @@ namespace Bots.VibeGrinder.Selection
             // Phase 1 — cheap rank, no navigation (reachability is gated in phase 2 via GeneratePath,
             // which works at Start; CanNavigateFully needs a provider that isn't wired until ticks).
             var candidates = new List<Scored>();
-            int dropThin = 0, dropBlacklist = 0, dropFar = 0;
+            int dropThin = 0, dropBlacklist = 0, dropFar = 0, dropWater = 0;
             foreach (Cluster c in clusters)
             {
                 if (c.Members.Count < minMobs) { dropThin++; continue; }
@@ -140,7 +141,14 @@ namespace Bots.VibeGrinder.Selection
                 float below = avgLevel > 0f ? Math.Max(0f, playerLevel - avgLevel) : 0f;
                 float levelFactor = 1f / (1f + S.LowLevelSpotPenalty * below * below);
 
-                float baseScore = c.Members.Count * purity * proximityFactor / (1f + threat) * survFactor * levelFactor;
+                // Underwater camps are a poor grind (can't rest/totem/eat, drowning risk, and the swimming
+                // drop-pin logic won't fight submerged mobs). Devalue — not veto — so land wins but a lake
+                // camp is still a last resort. Cheap: one liquid traceline per gated candidate centroid.
+                bool submerged = S.SpotWaterPenalty > 0f && IsUnderwater(c.Centroid);
+                float waterFactor = submerged ? 1f / (1f + S.SpotWaterPenalty) : 1f;
+                if (submerged) dropWater++;
+
+                float baseScore = c.Members.Count * purity * proximityFactor / (1f + threat) * survFactor * levelFactor * waterFactor;
 
                 candidates.Add(new Scored
                 {
@@ -154,8 +162,8 @@ namespace Bots.VibeGrinder.Selection
                 });
             }
 
-            Logging.Write("[VibeGrinder] {0} candidates after gates (dropped: {1} thin, {2} blacklisted, {3} too far).",
-                candidates.Count, dropThin, dropBlacklist, dropFar);
+            Logging.Write("[VibeGrinder] {0} candidates after gates (dropped: {1} thin, {2} blacklisted, {3} too far; {4} underwater devalued).",
+                candidates.Count, dropThin, dropBlacklist, dropFar, dropWater);
 
             if (candidates.Count == 0)
                 return null;
@@ -308,6 +316,23 @@ namespace Bots.VibeGrinder.Selection
         }
 
         /// <summary>
+        /// True if the point sits under a liquid surface — a sky-down traceline that hits liquid.
+        /// MUST use CGWorldFrameHitFlags (native WoW Intersect); the navmesh TraceLine overload ignores
+        /// the Liquid flag (same gotcha GatherbuddyBot documents). Cheap enough per gated candidate.
+        /// </summary>
+        private static bool IsUnderwater(WoWPoint p)
+        {
+            try
+            {
+                return GameWorld.TraceLine(p.Add(0f, 0f, 200f), p, GameWorld.CGWorldFrameHitFlags.HitTestLiquid);
+            }
+            catch
+            {
+                return false; // never let a probe failure reject/keep a spot — treat as dry
+            }
+        }
+
+        /// <summary>
         /// Greedy clustering, seed-based (a spawn joins if within radius of the seed), keeping member
         /// lists. Spatial-hashed into radius-sized cells so it's O(n) instead of O(n²): a continent-wide
         /// level band can return thousands of spawns, and all-pairs there froze the worker thread for
@@ -387,11 +412,12 @@ namespace Bots.VibeGrinder.Selection
             return ordered;
         }
 
-        private static bool IsBlacklisted(WoWPoint centroid, List<WoWPoint> blocked)
+        private static bool IsBlacklisted(WoWPoint centroid, List<(WoWPoint center, float radius)> blocked)
         {
-            float r2 = S.GrindRadius * S.GrindRadius;
-            foreach (WoWPoint b in blocked)
-                if (centroid.DistanceSqr(b) <= r2)
+            // Per-entry radius: a normal abandoned-spot entry is GrindRadius; a death-cluster entry can be much
+            // wider (escalates with swarm size + regional deaths) so an entire death-trap area is excluded.
+            foreach (var b in blocked)
+                if (centroid.DistanceSqr(b.center) <= b.radius * b.radius)
                     return true;
             return false;
         }

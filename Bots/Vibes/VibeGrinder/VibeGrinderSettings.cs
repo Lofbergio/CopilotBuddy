@@ -177,16 +177,63 @@ namespace Bots.VibeGrinder
         // SafeRest fires on exactly the band the routine actually rests at — see SafeRestReposition.
         [Browsable(false)] public float SafeRestDangerRange => 30f;
 
+        // ---- Water / drowning ----
+        // Underwater spots are a poor grind (totems fail, can't rest/eat, drowning risk, and the swimming
+        // drop-pin logic won't even fight submerged mobs). DEVALUE, don't veto: multiply a submerged spot's
+        // score by 1/(1+SpotWaterPenalty) so land spots always outrank it, but a water camp can still be
+        // chosen as a last resort when nothing on land qualifies. 0 disables. Detected by a liquid traceline
+        // over the cluster centroid at selection time (top gated candidates only — cheap). See SpotSelector.
+        [Browsable(false)] public float SpotWaterPenalty => 4f;
+        // Drowning safety net: when the breath bar is draining and under this many seconds remain, surface
+        // (JumpAscend) and hold everything else until we can breathe. Rare in practice (VibeGrinder avoids
+        // water), but the only guard against a genuine drown. See VibeGrinder.SurfaceIfDrowning.
+        [Browsable(false)] public int BreathPanicSeconds => 12;
+
         // Cap PullDistance so the bot walks into the routine's cast range before engaging, instead of
         // stalling on a distant/stationary mob that's "in pull range" but out of cast range (27 ≈ 3yd
         // inside a 30yd caster cast range; clamps DOWN only, so a deliberate melee value is untouched).
         [Browsable(false)] public int MaxPullDistance => 27;
+
+        // Path defense (don't body-pull while traveling). IncludeNearbyHostiles surfaces a foreign hostile
+        // this far out — WIDER than MaxPullDistance (27) because at walk speed a 27yd ring leaves only ~1s of
+        // lead before a ~19yd aggro radius, too little for the commit->target->cast pull pipeline, so the mob
+        // aggros first (the "body-pulled as if he didn't see them" bug). 40yd gives ~3s of deliberate-pull lead.
+        [Browsable(false)] public int IncidentalHostileRadius => 40;
+        // A hostile within its OWN aggro range + this buffer is "about to body-pull us" (~25yd for a same-level
+        // mob). ApplyPullCommitment preempts a farther commitment for such a mob so we engage the path threat
+        // deliberately instead of walking past it. Narrow on purpose — only mobs inside their aggro bubble — so
+        // it doesn't reopen the commitment wobble it's meant to prevent.
+        [Browsable(false)] public float PreemptAggroBuffer => 6f;
+
+        // Vendor-run commitment (see VibeGrinder.UpdateVendorRun). Hold vendor mode this long past the last
+        // vendor-POI/combat tick — long enough to ride out a peel fight's POI flip + brief gaps, short enough
+        // that we resume grinding promptly after the transaction. Abort (resume grind) if the errand can't
+        // complete within VendorRunAbortSeconds, so an unreachable/unaffordable vendor never wedges us.
+        [Browsable(false)] public int VendorRunStickySeconds => 4;
+        [Browsable(false)] public int VendorRunAbortSeconds => 300;
+
+        // Vendor safety: reject a resolved vendor with at least VendorHostileThreshold player-HOSTILE creature
+        // spawns within VendorHostileRadius yd — it's in enemy territory (e.g. a repair NPC the DB flags inside
+        // an Alliance camp). The vendor is blacklisted and the resolver picks the next-nearest safe one. 0 disables.
+        [Browsable(false)] public float VendorHostileRadius => 45f;
+        [Browsable(false)] public int VendorHostileThreshold => 3;
+
+        // Stay-in-your-zone: vendor resolution is continent-wide (the Barrens, Dustwallow, Mulgore are all map
+        // 1), so the nearest vendor can sit one zone over in much higher-level country (a lvl-21 toon routed
+        // from the Barrens into Dustwallow Marsh dies crossing the border). Reject a vendor whose surrounding
+        // wild mobs (within VendorAreaScanRadius yd) average more than VendorAreaLevelMargin above our level.
+        // Over-level is the gate, NOT distance — a far SAME-level vendor is fine; nearest-first then keeps us in
+        // the current zone among the level-OK options. 0 margin... keep >=4 so a band-edge zone isn't vetoed.
+        [Browsable(false)] public float VendorAreaScanRadius => 200f;
+        [Browsable(false)] public int VendorAreaLevelMargin => 7;
 
         // ---- Supervisor timings ----
         [Browsable(false)] public int SupervisorIntervalSec => 15;
         [Browsable(false)] public int IntrusionSeconds => 60;
         [Browsable(false)] public float MinKillsPerMin => 3f;
         [Browsable(false)] public int EmptyTargetSeconds => 45;
+        [Browsable(false)] public float DepletionRecheckBuffer => 10f;   // extend the spot by this many yards to confirm it's truly empty before relocating
+        [Browsable(false)] public float EngageGraceSeconds => 3f;        // hold the ENGAGING latch this long past the last combat/commit tick (hysteresis vs the travel↔kill oscillation)
         [Browsable(false)] public int DeathLoopCount => 3;
         [Browsable(false)] public int DeathLoopWindowMin => 5;
         // Freeze watchdog: a body that hasn't moved AND hasn't killed for this long (while alive, out
@@ -224,6 +271,11 @@ namespace Bots.VibeGrinder
         // target so we only pull it when genuinely isolated.
         [Browsable(false)] public float NeutralHostileAvoidRadius => 22f;
         [Browsable(false)] public float NeutralNearHostileVeto => 1000f;
+        // Open-moment guard: a hostile can wander within range during the (often long) walk to a committed
+        // neutral, so right before we OPEN on it, defer the neutral if a hostile is within this radius — wider
+        // than the commit-time veto (22) because the threat closes during approach. Stops the "shot the giraffe,
+        // then a thunder-lizard 25yd away aggroed → 2-mob pull" — the bot takes the hostile first, neutral later.
+        [Browsable(false)] public float NeutralOpenAvoidRadius => 30f;
         // Cap on the hostile-crowd pull penalty: base score loses 2/yd, so 40 ≈ 20yd. Keeps add-avoidance a
         // tiebreaker among similarly-close mobs and stops it ever picking a farther mob over a nearer threat.
         [Browsable(false)] public float PullCrowdPenaltyCap => 40f;
@@ -240,7 +292,20 @@ namespace Bots.VibeGrinder
         [Browsable(false)] public int PullCrowdLevelCeiling => AddAvoidanceMode == AddAvoidance.Aggressive ? 70 : 50;
         [Browsable(false)] public int PackDeathAttackers => 2;
         [Browsable(false)] public float CrowdCautionStep => AddAvoidanceMode == AddAvoidance.Off ? 0f : 0.75f;
-        [Browsable(false)] public float CrowdCautionMax => 3f;
+        [Browsable(false)] public float CrowdCautionMax => 6f;   // was 3 — let swarm deaths climb fear higher (caution step now scales with crowd size)
+
+        // Death-cluster escalation (flee a death-trap region, don't hop camp-to-camp inside it). A Silithid hive
+        // swarms 20+ mobs and produced 53 deaths in one log because each death only blacklisted ONE 90yd camp.
+        // Now the blacklist radius per pack death = GrindRadius × (deaths clustered in this region) × crowdFactor,
+        // capped at MaxDeathBlacklistRadius. crowdFactor scales with swarm size (attackers / PackDeathAttackers,
+        // clamped to DeathCrowdRadiusMax) so a 20-mob death blacklists a BIG area on the first death; a couple of
+        // them blacklist the whole cluster and force a far relocate. DeathClusterAbandonCount regional deaths =
+        // "abandon the area" (logged). Death spots are remembered across spot-hops (NOT cleared on install).
+        [Browsable(false)] public float DeathRegionRadius => 500f;        // deaths within this of each other = one cluster
+        [Browsable(false)] public int DeathRegionWindowMin => 15;          // remember clustered deaths this long
+        [Browsable(false)] public float MaxDeathBlacklistRadius => 700f;   // cap — "the whole cluster"
+        [Browsable(false)] public float DeathCrowdRadiusMax => 5f;         // crowd-size multiplier clamp on the radius
+        [Browsable(false)] public int DeathClusterAbandonCount => 3;       // this many regional deaths ⇒ flee the area
         [Browsable(false)] public float CrowdCautionEase => 0.5f;
         [Browsable(false)] public int CrowdCautionKillStreak => 25;
         [Browsable(false)]
