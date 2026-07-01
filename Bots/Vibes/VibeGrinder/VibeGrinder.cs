@@ -521,6 +521,9 @@ namespace Bots.VibeGrinder
                     Logging.WriteDebug("[VibeGrinder/Commit] swimming — dropping pin on {0:X} (won't tread water after it).",
                         _committedGuid);
                     _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue;
+                    // Definitive "the mobs here need swimming" signal — feeds the water-trap relocate (a kill
+                    // clears it, so a workable shoreline camp is never abandoned). One count per commit→swim cycle.
+                    _supervisor?.RecordSwimBlocked();
                 }
                 return;
             }

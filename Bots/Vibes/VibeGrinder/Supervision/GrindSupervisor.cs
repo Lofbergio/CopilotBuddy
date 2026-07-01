@@ -58,6 +58,12 @@ namespace Bots.VibeGrinder.Supervision
         /// <summary>Set by VibeGrinder: drops its pull/peel/rest/vendor latches when a hard stall forces an escape.</summary>
         public System.Action OnForceEscape { get; set; }
 
+        // Water-trap detector (see SwimTrapCheck / RecordSwimBlocked). Swim-blocks = commit→swim cycles at the
+        // current spot (the bot chasing a mob into water); trips a fast relocate only if we've landed ZERO kills
+        // here — so a workable shoreline camp (any kill) is never abandoned. Both reset on install.
+        private int _swimBlocks;
+        private int _killsSinceInstall;
+
         // Adaptive add-fear: rises on pack deaths, eased by real progress (level-ups, area switches,
         // clean kill streaks) — never by idle wall-clock. Multiplies VibeGrinder's pull penalty.
         private double _crowdCaution = 1.0;
@@ -113,6 +119,8 @@ namespace Bots.VibeGrinder.Supervision
             _stallDiagged = false;
             _lastProgressAt = DateTime.MaxValue;
             _hardAnchor = WoWPoint.Empty;
+            _swimBlocks = 0;
+            _killsSinceInstall = 0;
         }
 
         public void OnInstalled(GrindSpot spot)
@@ -135,6 +143,8 @@ namespace Bots.VibeGrinder.Supervision
             _stallDiagged = false;
             _lastProgressAt = DateTime.UtcNow;
             _hardAnchor = StyxWoW.Me?.Location ?? WoWPoint.Empty;
+            _swimBlocks = 0;
+            _killsSinceInstall = 0;
         }
 
         public void RecordKill()
@@ -142,6 +152,15 @@ namespace Bots.VibeGrinder.Supervision
             _lastKillAt = DateTime.UtcNow;
             _lastProgressAt = DateTime.UtcNow;   // a kill is real progress — resets the hard dead-man's switch
             _kills.Enqueue(DateTime.UtcNow);
+            _killsSinceInstall++;
+            // A kill proves this spot is workable — even a watery one. Clear any swim-block suspicion so the
+            // water-trap relocate never abandons a shoreline camp we CAN grind.
+            if (_swimBlocks > 0)
+            {
+                Logging.Write(System.Drawing.Color.MediumSpringGreen,
+                    "[VibeGrinder/Water] kill landed — spot is workable, clearing {0} swim-block(s) and keeping it.", _swimBlocks);
+                _swimBlocks = 0;
+            }
             // A clean streak (no death) is evidence we're handling the area — ease the fear.
             if (S.CrowdCautionKillStreak > 0 && ++_cleanKills >= S.CrowdCautionKillStreak)
             {
@@ -241,6 +260,44 @@ namespace Bots.VibeGrinder.Supervision
 
             StallWatchdog(me);
             HardStallWatchdog(me);
+            SwimTrapCheck(me);
+        }
+
+        /// <summary>
+        /// One commit→swim cycle at the current spot — the bot committed to a mob and had to abandon it because
+        /// reaching it means swimming. Logged loudly (this is the water-trap evidence the user watches). Cleared
+        /// by any kill (RecordKill), so it only accumulates while we're catching NOTHING here.
+        /// </summary>
+        public void RecordSwimBlocked()
+        {
+            if (_current == null) return;
+            _swimBlocks++;
+            Logging.Write(System.Drawing.Color.LightSkyBlue,
+                "[VibeGrinder/Water] swim-blocked ({0}/{1}) — {2} kill(s) here, {3:F0}s since install. Targets need swimming.",
+                _swimBlocks, S.SwimTrapDrops, _killsSinceInstall, _sinceInstall.Elapsed.TotalSeconds);
+        }
+
+        /// <summary>
+        /// Water-trap relocate — the fast, reactive fix for the coastal-belt waste (log 2026-07-01_2023: 30+ min
+        /// swimming after Daggerspine mobs that sit in the water). NOT a selection-time ban: it abandons a spot
+        /// only once the bot has PROVEN it can't work it — `SwimTrapDrops` swim-blocks with ZERO kills since
+        /// arriving (any kill clears the count in RecordKill, so a grindable shoreline camp is kept). Bounds the
+        /// waste to ~`SwimTrapSeconds` instead of the 10-min hard switch, and blacklists a wide-enough radius
+        /// (`SwimTrapBlacklistRadius`) to step off the shoreline strip; repeated traps walk it out of the belt.
+        /// </summary>
+        private void SwimTrapCheck(WoWUnit me)
+        {
+            if (!S.EnableStallRelocate || _current == null) return;
+            if (_swimBlocks < S.SwimTrapDrops || _killsSinceInstall > 0) return;
+            if (_sinceInstall.Elapsed.TotalSeconds < S.SwimTrapSeconds) return;
+
+            Logging.Write(System.Drawing.Color.Orange,
+                "[VibeGrinder/Water] WATER TRAP: {0} swim-blocks, 0 kills in {1:F0}s at {2} — blacklisting {3:F0}yd and relocating off the shoreline.",
+                _swimBlocks, _sinceInstall.Elapsed.TotalSeconds, _current.Centroid, S.SwimTrapBlacklistRadius);
+
+            if (!Relocate("water trap", S.SwimTrapBlacklistRadius))
+                // Nowhere better in range — reset the count so we re-arm (and the 10-min hard switch still backstops).
+                _swimBlocks = 0;
         }
 
         /// <summary>
@@ -736,22 +793,25 @@ namespace Bots.VibeGrinder.Supervision
         /// Try to move to a better spot. Returns false (stay put) when nothing better exists — the
         /// scarcity rule: don't wander off a contested-but-workable camp to nowhere.
         /// </summary>
-        private bool Relocate(string reason)
+        private bool Relocate(string reason, float blacklistRadius = 0f)
         {
             var me = StyxWoW.Me;
+            // Default: blacklist/exclude one GrindRadius. Callers wanting a wider push-off (the water trap)
+            // pass a bigger radius so the next pick can't land back on the same strip.
+            float r = blacklistRadius > 0f ? blacklistRadius : S.GrindRadius;
 
             // Exclude the current centroid plus the active blacklist from the search.
             var exclude = ActiveBlacklist();
-            exclude.Add((_current.Centroid, S.GrindRadius));
+            exclude.Add((_current.Centroid, r));
 
             GrindSpot next = _selector.SelectBest(me.MapId, me.Location, me.Level, exclude, _crowdCaution);
-            if (next == null || next.Centroid.DistanceSqr(_current.Centroid) <= S.GrindRadius * S.GrindRadius)
+            if (next == null || next.Centroid.DistanceSqr(_current.Centroid) <= r * r)
             {
                 Logging.Write("[VibeGrinder] {0}: no better spot available — staying put.", reason);
                 return false;
             }
 
-            _blacklist[_current.Centroid] = (DateTime.UtcNow.AddMinutes(S.BlacklistMinutes), S.GrindRadius);
+            _blacklist[_current.Centroid] = (DateTime.UtcNow.AddMinutes(S.BlacklistMinutes), r);
             Logging.Write("[VibeGrinder] Relocating ({0}) → {1}", reason, next);
 
             _synth.Install(next, me.Level);   // Install() calls EnsureProfile() itself (idempotent)

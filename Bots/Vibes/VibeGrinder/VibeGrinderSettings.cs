@@ -269,6 +269,14 @@ namespace Bots.VibeGrinder
         [Browsable(false)] public float HardProgressRadius => 150f;        // net ground covered that counts as "going somewhere" (yd)
         [Browsable(false)] public float HardStallBlacklistRadius => 400f;  // blacklist this big on a hard escape so selection can't re-pick the trap
 
+        // Water-trap relocate (see GrindSupervisor.SwimTrapCheck): fast, reactive escape from a coastal camp whose
+        // mobs sit in the water. NOT a selection ban — it fires only after the bot proves it can't work the spot:
+        // SwimTrapDrops commit→swim cycles with ZERO kills since arriving (any kill clears the count). Bounds the
+        // waste to ~SwimTrapSeconds instead of the 10-min hard switch; blacklists wide enough to step off the strip.
+        [Browsable(false)] public int SwimTrapDrops => 3;
+        [Browsable(false)] public int SwimTrapSeconds => 60;
+        [Browsable(false)] public float SwimTrapBlacklistRadius => 150f;
+
         // ---- Supervisor triggers (derived from Relocate mode) ----
         [Browsable(false)] public bool EnableIntrusionRelocate => Relocate == RelocateMode.Auto;
         [Browsable(false)] public bool EnableLevelDriftRelocate => Relocate == RelocateMode.Auto;
