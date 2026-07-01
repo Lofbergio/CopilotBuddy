@@ -396,7 +396,11 @@ namespace Bots.Grind
                             return RunStatus.Success;
                         }
                         // (b) no healer loaded, but we know where the graveyard is and can path there → go back.
+                        // Guard on distance: if we're already AT the remembered spot yet still see no healer
+                        // (shouldn't happen — units on top of us are always loaded), don't MoveTo-in-place forever;
+                        // fall through to (c). Death code isn't covered by the hard-stall watchdog, so no loops here.
                         if (_lastGraveyardPos != WoWPoint.Empty && _lastGraveyardPos != WoWPoint.Zero
+                            && StyxWoW.Me.Location.DistanceSqr(_lastGraveyardPos) > 100.0   // >10yd out
                             && Navigator.CanNavigateFully(StyxWoW.Me.Location, _lastGraveyardPos))
                         {
                             if (!_offMeshCorpseSw.IsRunning || _offMeshCorpseSw.Elapsed.TotalSeconds >= 5)
