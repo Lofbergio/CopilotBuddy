@@ -189,6 +189,15 @@ namespace Bots.VibeGrinder
             _synth = new GrindAreaSynthesizer(_mailboxes);
             _selector = new SpotSelector(_factions);
             _supervisor = new GrindSupervisor(_selector, _synth, _factions);
+            // Hard dead-man's switch: when the supervisor force-escapes a stall, drop every commitment latch
+            // so nothing re-grabs the trap we're fleeing (pull/peel target, rest, vendor errand).
+            _supervisor.OnForceEscape = () =>
+            {
+                _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue;
+                _peelGuid = 0;
+                _resting = false;
+                _vendorRun = false;
+            };
             _restGovernor = new RestGovernor();   // dynamic rest thresholds; SafeRest reads these
             _restGovernor.SuppressedFloorHealth = VibeGrinderSettings.Instance.EmergencyMinHealth;   // vendor-run survival floor
             _restGovernor.SuppressedFloorMana = VibeGrinderSettings.Instance.EmergencyMinMana;

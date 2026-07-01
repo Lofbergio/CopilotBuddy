@@ -258,6 +258,17 @@ namespace Bots.VibeGrinder
         // still waits for StallSeconds. Set well above a normal pull wind-up / loot pause.
         [Browsable(false)] public int StallDiagSeconds => 12;
 
+        // Hard dead-man's switch — the unconditional floor UNDER StallSeconds. If NO real progress (no
+        // kill, no level-up, no meaningful travel of HardProgressRadius yd) happens for this long, FORCE
+        // an escape regardless of state — mounted, resting, vendoring, a fight it can't close, ANY reason,
+        // no exemptions: nuke every latch/POI, big-blacklist the current area, relocate anywhere else. The
+        // guarantee that the bot can never sit doing nothing for more than ~10 min (the "mounted in water,
+        // oscillating forever" trap the soft watchdog missed — it exempts mounted and resets on any jitter).
+        // Long fuse + NET-travel progress so a legit slow patch or a long cross-zone trek never trips it.
+        [Browsable(false)] public int HardStallMinutes => 10;
+        [Browsable(false)] public float HardProgressRadius => 150f;        // net ground covered that counts as "going somewhere" (yd)
+        [Browsable(false)] public float HardStallBlacklistRadius => 400f;  // blacklist this big on a hard escape so selection can't re-pick the trap
+
         // ---- Supervisor triggers (derived from Relocate mode) ----
         [Browsable(false)] public bool EnableIntrusionRelocate => Relocate == RelocateMode.Auto;
         [Browsable(false)] public bool EnableLevelDriftRelocate => Relocate == RelocateMode.Auto;

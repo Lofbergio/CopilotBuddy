@@ -49,6 +49,15 @@ namespace Bots.VibeGrinder.Supervision
         private DateTime _lastKillAt = DateTime.MaxValue;
         private bool _stallDiagged;
 
+        // Hard dead-man's switch (see HardStallWatchdog): last time we made REAL progress — a kill, a
+        // level-up, or covering ground — and the anchor we measure net travel from. No exemptions; this is
+        // the unconditional floor under the soft freeze watchdog.
+        private DateTime _lastProgressAt = DateTime.MaxValue;
+        private WoWPoint _hardAnchor = WoWPoint.Empty;
+
+        /// <summary>Set by VibeGrinder: drops its pull/peel/rest/vendor latches when a hard stall forces an escape.</summary>
+        public System.Action OnForceEscape { get; set; }
+
         // Adaptive add-fear: rises on pack deaths, eased by real progress (level-ups, area switches,
         // clean kill streaks) — never by idle wall-clock. Multiplies VibeGrinder's pull penalty.
         private double _crowdCaution = 1.0;
@@ -102,6 +111,8 @@ namespace Bots.VibeGrinder.Supervision
             _stillSince = DateTime.MaxValue;
             _lastKillAt = DateTime.MaxValue;
             _stallDiagged = false;
+            _lastProgressAt = DateTime.MaxValue;
+            _hardAnchor = WoWPoint.Empty;
         }
 
         public void OnInstalled(GrindSpot spot)
@@ -122,11 +133,14 @@ namespace Bots.VibeGrinder.Supervision
             _stillSince = DateTime.UtcNow;
             _lastPos = StyxWoW.Me?.Location ?? WoWPoint.Empty;
             _stallDiagged = false;
+            _lastProgressAt = DateTime.UtcNow;
+            _hardAnchor = StyxWoW.Me?.Location ?? WoWPoint.Empty;
         }
 
         public void RecordKill()
         {
             _lastKillAt = DateTime.UtcNow;
+            _lastProgressAt = DateTime.UtcNow;   // a kill is real progress — resets the hard dead-man's switch
             _kills.Enqueue(DateTime.UtcNow);
             // A clean streak (no death) is evidence we're handling the area — ease the fear.
             if (S.CrowdCautionKillStreak > 0 && ++_cleanKills >= S.CrowdCautionKillStreak)
@@ -148,6 +162,7 @@ namespace Bots.VibeGrinder.Supervision
             {
                 EaseCaution(S.CrowdCautionEase * (me.Level - _lastLevel), "leveled up");
                 _lastLevel = me.Level;
+                _lastProgressAt = DateTime.UtcNow;   // a level-up is real progress — resets the hard dead-man's switch
             }
 
             // Track the peak attackers-on-us so a death can be classed pack vs honest 1v1 — at the
@@ -225,6 +240,7 @@ namespace Bots.VibeGrinder.Supervision
                 _deaths.Dequeue();
 
             StallWatchdog(me);
+            HardStallWatchdog(me);
         }
 
         /// <summary>
@@ -392,6 +408,91 @@ namespace Bots.VibeGrinder.Supervision
             _lastKillAt = DateTime.UtcNow;
             _lastPos = me.Location;
             _stallDiagged = false;
+        }
+
+        /// <summary>
+        /// Hard dead-man's switch — the unconditional floor under StallWatchdog. Real progress = a kill or
+        /// level-up (both stamp _lastProgressAt directly) or covering ground (net HardProgressRadius from the
+        /// anchor = we're actually travelling somewhere). If NONE happen for HardStallMinutes the bot is doing
+        /// nothing productive — no matter WHY (mounted, resting, vendoring, a fight it can't close) — so force
+        /// an escape. The soft watchdog exempts mounted/service/rest and resets on any jitter, which is exactly
+        /// how the "mounted in water, oscillating forever" trap slipped through; this one has NO exemptions and
+        /// measures NET travel, so a legit slow patch or long trek (which keeps covering ground) can't trip it —
+        /// only a genuine no-progress lockup does. Dead/ghost is the one skip: a corpse run owns its own logic
+        /// and force-grinding a ghost is nonsense.
+        /// </summary>
+        private void HardStallWatchdog(WoWUnit me)
+        {
+            if (!S.EnableStallRelocate || _current == null) return;
+            if (me.IsDead || me.IsGhost)
+            {
+                _lastProgressAt = DateTime.UtcNow;
+                _hardAnchor = me.Location;
+                return;
+            }
+
+            // Covering ground is progress: a legit travel/vendor trek keeps moving so it can never false-trip;
+            // oscillating in place — the water bob, a wedged POI — never leaves the radius and accumulates.
+            if (_hardAnchor == WoWPoint.Empty || me.Location.Distance(_hardAnchor) > S.HardProgressRadius)
+            {
+                _hardAnchor = me.Location;
+                _lastProgressAt = DateTime.UtcNow;
+                return;
+            }
+
+            if ((DateTime.UtcNow - _lastProgressAt).TotalMinutes >= S.HardStallMinutes)
+                ForceEscape(me);
+        }
+
+        /// <summary>
+        /// Blow away everything and MOVE. Nuke VibeGrinder's latches + POI, big-blacklist the current area so
+        /// selection can't re-pick the trap, and force-relocate anywhere else. Resets the clocks so it can't
+        /// spin. If selection still finds nothing, we've at least cleared the wedge + blacklisted — the next
+        /// window escalates (blacklisting more each time) until we're out.
+        /// </summary>
+        private void ForceEscape(WoWUnit me)
+        {
+            Logging.Write(System.Drawing.Color.Red,
+                "[VibeGrinder] HARD STALL: no kill / level / travel for {0} min — FORCING escape (mounted={1}, combat={2}, poi={3}).",
+                S.HardStallMinutes, me.Mounted, me.Combat, BotPoi.Current?.Type.ToString() ?? "null");
+
+            OnForceEscape?.Invoke();                        // VibeGrinder drops its pull/peel/rest/vendor latches
+            BotPoi.Clear("VibeGrinder hard-stall escape");
+            ForceRelocate("hard stall");
+
+            _lastProgressAt = DateTime.UtcNow;
+            _hardAnchor = me.Location;
+            _stillSince = DateTime.UtcNow;                  // settle the soft clock too so it can't pile on
+            _lastKillAt = DateTime.UtcNow;
+            _stallDiagged = false;
+        }
+
+        /// <summary>
+        /// Force a relocation that does NOT defer to the "no better spot → stay put" rule: big-blacklist the
+        /// current centroid first so SelectBest returns a DIFFERENT, away spot (null only if the whole reachable
+        /// band is now excluded — logged, retried next window).
+        /// </summary>
+        private bool ForceRelocate(string reason)
+        {
+            var me = StyxWoW.Me;
+            if (me == null || _current == null) return false;
+
+            _blacklist[_current.Centroid] = (DateTime.UtcNow.AddMinutes(Math.Max(1, S.BlacklistMinutes)), S.HardStallBlacklistRadius);
+
+            GrindSpot next = _selector.SelectBest(me.MapId, me.Location, me.Level, ActiveBlacklist(), _crowdCaution);
+            if (next == null)
+            {
+                Logging.Write(System.Drawing.Color.Red,
+                    "[VibeGrinder] {0}: no reachable spot after {1:F0}yd blacklist — cleared state, retrying next window.",
+                    reason, S.HardStallBlacklistRadius);
+                return false;
+            }
+
+            Logging.Write(System.Drawing.Color.Orange, "[VibeGrinder] Force-relocating ({0}) → {1}", reason, next);
+            _synth.Install(next, me.Level);
+            OnInstalled(next);
+            EaseCaution(S.CrowdCautionEase, "hard-stall area switch");
+            return true;
         }
 
         /// <summary>True while travelling to service a vendor/mailbox/trainer/flightmaster (legit minutes-long idle).</summary>
