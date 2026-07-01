@@ -64,6 +64,11 @@ namespace Bots.Grind
         private static readonly Stopwatch _corpsePointWaitSw = new Stopwatch();   // ghost waiting for a valid CorpsePoint
         private static readonly Stopwatch _shDiagSw = new Stopwatch();            // throttle spirit-healer diagnostics
         private static readonly Stopwatch _offMeshCorpseSw = new Stopwatch();     // throttle the off-mesh corpse ClickToMove log
+        // Last spirit-healer location we've physically seen (we release ONTO a graveyard, so a ghost sees the
+        // healer the instant it teleports there). Cached so that if we then run toward an unreachable corpse and
+        // the healer unloads, we can navigate BACK to a known-good, on-mesh graveyard and resurrect — instead of
+        // being stranded with no idea where a healer is (no open-world graveyard DB exists).
+        private static WoWPoint _lastGraveyardPos = WoWPoint.Empty;
         private static bool _diedIndoors;
         private static readonly WaitTimer _releaseTimer = WaitTimer.FiveSeconds;
         private static WaitTimer _repairCostTimer = new WaitTimer(TimeSpan.FromMinutes(3.0));
@@ -291,6 +296,20 @@ namespace Bots.Grind
                         return RunStatus.Failure;
                     })
                 ),
+                // Remember the graveyard: a ghost releases ONTO a graveyard, so the spirit healer is right there
+                // for a tick or two before we run off toward the corpse. Cache its location every time we can see
+                // one — this is the known-good, on-mesh spot we navigate back to if an unreachable corpse later
+                // strands us with no healer loaded (see the off-mesh branch below). Non-consuming (Failure).
+                new Decorator(
+                    ctx => (StyxWoW.Me.IsGhost || StyxWoW.Me.IsDead)
+                           && ObjectManager.CachedUnits.Any(u => u.IsSpiritHealer),
+                    new TreeSharp.Action(ctx =>
+                    {
+                        WoWUnit sh = ObjectManager.CachedUnits.FirstOrDefault(u => u.IsSpiritHealer);
+                        if (sh != null) _lastGraveyardPos = sh.Location;
+                        return RunStatus.Failure;
+                    })
+                ),
                 // Dead - need to release
                 new Decorator(
                     ctx => StyxWoW.Me.IsDead,
@@ -348,15 +367,16 @@ namespace Bots.Grind
                         )
                     )
                 ),
-                // Ghost - corpse is off-mesh (Navigator can't path to it). Two cases:
+                // Ghost - corpse is off-mesh (Navigator can't path to it). Recovery, in priority:
                 //  (a) a spirit healer IS loaded → use it (walk over + res), the original recovery.
-                //  (b) NO spirit healer loaded → the old code set ShouldUseSpiritHealer=true anyway, which the SH
-                //      branch above then abandoned ("no spirit healer nearby") and re-flagged every tick — an
-                //      infinite corpse↔SH ping-pong that hung the bot ~58 min in an unmeshed canyon (log
-                //      2026-07-01_2236, "Corpse point has no mesh" ×42k). There's no SH to res at, so the ONLY
-                //      recovery is reaching the corpse: ClickToMove STRAIGHT at it. Server click-to-move follows
-                //      terrain without a navmesh, and a ghost has no aggro, so it can walk into the unmeshed pocket;
-                //      the retrieve branch below takes over once within 40yd. Throttled so it can't spam the log.
+                //  (b) none loaded but we REMEMBER a graveyard (cached above when we released onto it) → navigate
+                //      back there; arriving reloads the healer and (a) resurrects us. Beats the old behavior,
+                //      which set ShouldUseSpiritHealer=true blindly → SH branch found none → re-flagged every
+                //      tick → infinite corpse↔SH ping-pong that hung the bot ~58 min in an unmeshed canyon (log
+                //      2026-07-01_2236, "Corpse point has no mesh" ×42k).
+                //  (c) no healer and no known graveyard (never saw one this life) → last resort: ClickToMove
+                //      STRAIGHT at the corpse — server click-to-move follows terrain without a navmesh and a ghost
+                //      has no aggro, so it can walk into the unmeshed pocket; the retrieve branch takes over <40yd.
                 new DecoratorIsNotPoiType(PoiType.Corpse, new Decorator(
                     ctx => CharacterSettings.Instance.RessAtSpiritHealers &&
                            StyxWoW.Me.IsGhost &&
@@ -366,6 +386,7 @@ namespace Bots.Grind
                            !Navigator.CanNavigateFully(StyxWoW.Me.Location, StyxWoW.Me.CorpsePoint),
                     new TreeSharp.Action(ctx =>
                     {
+                        // (a) healer in range → res at it.
                         if (ObjectManager.CachedUnits.Any(u => u.IsSpiritHealer))
                         {
                             if (!ShouldUseSpiritHealer)
@@ -374,10 +395,23 @@ namespace Bots.Grind
                             _offMeshCorpseSw.Reset();
                             return RunStatus.Success;
                         }
-                        // No spirit healer to res at — don't ping-pong the flag; walk straight to the corpse.
+                        // (b) no healer loaded, but we know where the graveyard is and can path there → go back.
+                        if (_lastGraveyardPos != WoWPoint.Empty && _lastGraveyardPos != WoWPoint.Zero
+                            && Navigator.CanNavigateFully(StyxWoW.Me.Location, _lastGraveyardPos))
+                        {
+                            if (!_offMeshCorpseSw.IsRunning || _offMeshCorpseSw.Elapsed.TotalSeconds >= 5)
+                            {
+                                Logging.Write("Corpse off-mesh at {0}, no healer loaded — returning to the remembered graveyard {1} to resurrect.",
+                                    StyxWoW.Me.CorpsePoint, _lastGraveyardPos);
+                                _offMeshCorpseSw.Restart();
+                            }
+                            Navigator.MoveTo(_lastGraveyardPos);
+                            return RunStatus.Success;
+                        }
+                        // (c) no healer and no known graveyard → walk straight at the corpse.
                         if (!_offMeshCorpseSw.IsRunning || _offMeshCorpseSw.Elapsed.TotalSeconds >= 5)
                         {
-                            Logging.Write("Corpse off-mesh at {0} and no spirit healer loaded — ClickToMove straight to the corpse (ghost traverses unmeshed terrain).",
+                            Logging.Write("Corpse off-mesh at {0}, no healer and no known graveyard — ClickToMove straight to the corpse (ghost traverses unmeshed terrain).",
                                 StyxWoW.Me.CorpsePoint);
                             _offMeshCorpseSw.Restart();
                         }
