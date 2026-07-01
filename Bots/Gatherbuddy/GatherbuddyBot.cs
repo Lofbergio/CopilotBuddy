@@ -534,13 +534,13 @@ namespace Bots.Gatherbuddy
                                 new Action(ctx => { StyxWoW.Sleep(1000); return RunStatus.Success; }),
                                 new Action(ctx =>
                                 {
-                                    Lua.DoString("StaticPopup1Button1:Click()");
+                                    Lua.DoString("if StaticPopup1 and StaticPopup1:IsVisible() then StaticPopup1Button1:Click() else AcceptResurrect() end");
                                     return RunStatus.Success;
                                 }),
                                 new Action(ctx => { StyxWoW.Sleep(500); return RunStatus.Success; }),
                                 new Action(ctx =>
                                 {
-                                    Lua.DoString("StaticPopup1Button1:Click()");
+                                    Lua.DoString("if StaticPopup1 and StaticPopup1:IsVisible() then StaticPopup1Button1:Click() else AcceptResurrect() end");
                                     return RunStatus.Success;
                                 }),
                                 new Action(ctx => { StyxWoW.Sleep(2000); return RunStatus.Success; })
