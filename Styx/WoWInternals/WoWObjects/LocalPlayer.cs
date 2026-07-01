@@ -176,7 +176,13 @@ namespace Styx.WoWInternals.WoWObjects
             get
             {
                 if (Memory == null) return 0U;
-                return Memory.Read<uint>(MapIdPtr);
+                uint mapId = Memory.Read<uint>(MapIdPtr);
+                // 0x00AB63BC is event-written by the client (set on the map-load handshake,
+                // reset to -1 on some transitions / GM teleports that skip it). When it reads the
+                // -1 sentinel, fall back to the live object-manager map id (CurMgr+0xCC).
+                if (mapId == 0xFFFFFFFFU)
+                    mapId = ObjectManager.CurrentMapId;
+                return mapId;
             }
         }
 

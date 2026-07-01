@@ -22,6 +22,7 @@ namespace Styx.WoWInternals
         private const uint CurMgrBase = 0xC79CE0;      // 13081824U - s_curMgr base pointer
         private const uint CurMgrOffset = 0x2ED0;      // 11984U - offset to actual manager
         private const uint LocalGuidOffset = 0xC0;     // 192U - offset to local player GUID
+        private const uint MapIdOffset = 0xCC;         // 204U - live map id (CurMgr+0xCC), verified: 0=EK, 1=Kalimdor
         private const uint FirstObjectOffset = 0xAC;   // 172U - offset to first object in list
         private const uint NextObjectOffset = 0x3C;    // 60U - offset to next object
         private const uint ObjectTypeOffset = 0x14;    // 20U - offset to object type
@@ -198,6 +199,29 @@ namespace Styx.WoWInternals
                 catch
                 {
                     return 0U;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Live map id from the object manager (CurMgr+0xCC) — authoritative, unlike the
+        /// 0x00AB63BC static which the client only event-writes on the map-load handshake and
+        /// resets to -1 on some transitions / GM teleports. Returns 0xFFFFFFFF if unavailable.
+        /// </summary>
+        internal static uint CurrentMapId
+        {
+            get
+            {
+                if (Wow == null) return 0xFFFFFFFFU;
+                try
+                {
+                    uint curMgr = CurMgr;
+                    if (curMgr == 0) return 0xFFFFFFFFU;
+                    return Wow.Read<uint>(curMgr + MapIdOffset);
+                }
+                catch
+                {
+                    return 0xFFFFFFFFU;
                 }
             }
         }
