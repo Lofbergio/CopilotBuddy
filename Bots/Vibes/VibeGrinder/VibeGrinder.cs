@@ -100,8 +100,9 @@ namespace Bots.VibeGrinder
                                 // CombatBehavior FIRST and unconditional — it drives the pre-combat PULL (CanPull->
                                 // PullBehavior), so a peeled path threat actually gets engaged. (It was gated on
                                 // Me.Combat, which left the bot targeting a mob and walking past it into a body-pull.)
-                                // Its bundled rest can't fire here because RestGovernor.Suppressed zeroes the routine's
-                                // MinHealth/MinMana during the errand — so no drink-then-run, but the pull still runs.
+                                // Its bundled rest is FLOORED here by RestGovernor.Suppressed (EmergencyMin* during the
+                                // errand) — so no drink-then-run at moderate levels, but it still rests when critically
+                                // low so a long hostile vendor trek isn't a death march, and the pull still runs.
                                 LevelBot.CreateCombatBehavior(),
                                 new Decorator(ctx => !StyxWoW.Me.Combat, new Action(ctx => TransitPeel())), // else set a Kill POI on the in-range path hostile — single-pull it, don't body-pull
                                 LevelBot.CreateVendorBehavior(),                                            // else travel to + transact with the vendor
@@ -189,6 +190,8 @@ namespace Bots.VibeGrinder
             _selector = new SpotSelector(_factions);
             _supervisor = new GrindSupervisor(_selector, _synth, _factions);
             _restGovernor = new RestGovernor();   // dynamic rest thresholds; SafeRest reads these
+            _restGovernor.SuppressedFloorHealth = VibeGrinderSettings.Instance.EmergencyMinHealth;   // vendor-run survival floor
+            _restGovernor.SuppressedFloorMana = VibeGrinderSettings.Instance.EmergencyMinMana;
 
             // Reuse LevelBot's target/loot filters (faction + blackspot + loot rules).
             Targeting.Instance.IncludeTargetsFilter += LevelBot.LevelBotIncludeTargetsFilter;

@@ -72,10 +72,16 @@ namespace Bots.Vibes.Shared
         public int MinHealth => _minHealth;
         public int MinMana => _minMana;
 
-        // When set, drive the routine's rest thresholds to 0 so it never sits to eat/drink — the caller owns the
-        // decision (VibeGrinder sets this during a committed vendor run: you don't rest while running an errand,
-        // and the combat/pull behavior must still run to engage path threats without the bundled rest firing).
+        // When set, floor the routine's rest thresholds to the survival levels below (not 0) — the caller owns
+        // the decision (VibeGrinder sets this during a committed vendor run: no sit-drinking at moderate levels
+        // that would crawl the errand, but keep a survival net so a long hostile trek isn't a no-rest death
+        // march). The combat/pull behavior still runs to engage path threats; rest only fires when critical.
         public bool Suppressed { get; set; }
+
+        // The floor Suppressed clamps DOWN to (instead of 0). Caller may lower/raise; defaults are a sane
+        // survival net so a bot that never sets them still won't death-march.
+        public int SuppressedFloorHealth { get; set; } = 30;
+        public int SuppressedFloorMana { get; set; } = 10;
 
         public void Pulse(LocalPlayer me)
         {
@@ -87,7 +93,9 @@ namespace Bots.Vibes.Shared
 
                 TrackDeathsAndStreaks(me);                 // keep caution current so we're ready if we own writing
                 (int h, int m) = ComputeThresholds(me);
-                if (Suppressed) { h = 0; m = 0; }          // caller suspends resting (e.g. mid vendor errand)
+                // Floor to survival levels (not 0) mid-errand: won't sit at moderate HP/mana, but rest still
+                // fires when critical so a long hostile vendor trek isn't a no-rest death march.
+                if (Suppressed) { h = Math.Min(h, SuppressedFloorHealth); m = Math.Min(m, SuppressedFloorMana); }
 
                 bool weWrite = _reflectionResolved && !PluginOwnsWriting();
                 if (weWrite) WriteThresholds(h, m);

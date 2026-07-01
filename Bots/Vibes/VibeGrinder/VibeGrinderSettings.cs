@@ -189,6 +189,15 @@ namespace Bots.VibeGrinder
         // water), but the only guard against a genuine drown. See VibeGrinder.SurfaceIfDrowning.
         [Browsable(false)] public int BreathPanicSeconds => 12;
 
+        // ---- Vendor-run survival floor ----
+        // A committed vendor errand suppresses rest (RestGovernor.Suppressed) so it doesn't sit-drink at
+        // moderate levels and crawl to the vendor. But a LONG hostile trek (near vendors all in enemy
+        // territory → far safe one) then becomes a no-rest death march. Instead of zeroing the thresholds,
+        // Suppressed floors them here: rest only fires when CRITICALLY low, so it still travels promptly but
+        // won't fight to OOM/death on the way. Low by design (won't rest at 40%).
+        [Browsable(false)] public int EmergencyMinHealth => 30;
+        [Browsable(false)] public int EmergencyMinMana => 10;
+
         // Cap PullDistance so the bot walks into the routine's cast range before engaging, instead of
         // stalling on a distant/stationary mob that's "in pull range" but out of cast range (27 ≈ 3yd
         // inside a 30yd caster cast range; clamps DOWN only, so a deliberate melee value is untouched).
