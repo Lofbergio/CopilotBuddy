@@ -228,12 +228,15 @@ public class WeightSetEx : IDisposable
           && itemInfo.ArmorClass != WoWItemArmorClass.Misc
           && itemInfo.ArmorClass != WoWItemArmorClass.None)
       {
-        // HB 5.4.8/6.2.3 logic: |wanted - armor| + 1 (penalizes off-spec armor)
-        // HB 4.3.4 had a bug: Math.Max(wanted+1-armor, 1) clamped penalty to 1 for worse armor
+        // Gentle nudge toward the class's armor type, NOT a hard divide. WotLK has no armor-spec stat
+        // bonus, better itemization is already reflected in the stat score, armor value is minor while
+        // leveling, and tanks weight Armor directly - so a mildly-better off-type piece (e.g. a caster
+        // cloth item for a mail-wearer) can still win on stats. ~15% per tier off (diff 1 -> x0.85,
+        // diff 3 -> x0.55) instead of the old /2, /3, /4 which threw away half the score for one tier.
         int armorClass = (int) itemInfo.ArmorClass;
         int wantedArmorClass = (int) this.GetWantedArmorClass();
         int diff = Math.Abs(wantedArmorClass - armorClass);
-        totalScore /= (float)(diff + 1);
+        totalScore *= Math.Max(1f - 0.15f * diff, 0.4f);
       }
     }
     return totalScore;

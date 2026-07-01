@@ -116,12 +116,13 @@ namespace Styx.Logic.Inventory
             if (info == null)
                 return 0f;
 
-            var itemStats = info.GetItemStats();
+            // Map raw ITEM_MOD stats to scoring-stat names (was scoring raw WoWItemStatType names that don't parse).
+            var itemStats = ItemStats.FromRaw(info.GetItemStats(), 0f);
 
             float score = GetStatScore(Stat.DPS, info.DPS);
             score += EvaluateWeaponStats(info);
 
-            foreach (var kvp in itemStats)
+            foreach (var kvp in itemStats.Stats)
             {
                 score += GetStatScore(kvp.Key.ToString(), kvp.Value);
             }

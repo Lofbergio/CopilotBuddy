@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using Styx.Helpers;
 using Styx;
 using GreenMagic;
@@ -23,62 +24,110 @@ namespace Styx.WoWInternals.WoWObjects
         }
         
         #endregion
-        
+
+        #region Stat mapping (the fix)
+
+        // Items report stats keyed by WoWItemStatType (raw WotLK ITEM_MOD_* ids). This maps them to
+        // StatTypes *by meaning*, so StatTypes.ToString() parses into the Stat enum the weight sets use.
+        // The old code did (StatTypes)(int)key, which is a garbage cast between two unrelated enumerations
+        // (Agility(3)->NatureResistance, SpellPower(45)->CritAvoidance, ...) and silently zeroed scoring.
+        public static readonly Dictionary<WoWItemStatType, StatTypes> RawToStatType =
+            new Dictionary<WoWItemStatType, StatTypes>
+        {
+            { WoWItemStatType.Health, StatTypes.Health },
+            { WoWItemStatType.Mana, StatTypes.Mana },
+            { WoWItemStatType.Agility, StatTypes.Agility },
+            { WoWItemStatType.Strength, StatTypes.Strength },
+            { WoWItemStatType.Intellect, StatTypes.Intellect },
+            { WoWItemStatType.Spirit, StatTypes.Spirit },
+            { WoWItemStatType.Stamina, StatTypes.Stamina },
+            { WoWItemStatType.DefenseSkillRating, StatTypes.DefenseRating },
+            { WoWItemStatType.DodgeRating, StatTypes.DodgeRating },
+            { WoWItemStatType.ParryRating, StatTypes.ParryRating },
+            { WoWItemStatType.BlockRating, StatTypes.BlockRating },
+            { WoWItemStatType.HitMeleeRating, StatTypes.HitRatingMelee },
+            { WoWItemStatType.HitRangedRating, StatTypes.HitRatingRanged },
+            { WoWItemStatType.HitSpellRating, StatTypes.HitRatingSpell },
+            { WoWItemStatType.CritMeleeRating, StatTypes.CriticalStrikeRatingMelee },
+            { WoWItemStatType.CritRangedRating, StatTypes.CriticalStrikeRatingRanged },
+            { WoWItemStatType.CritSpellRating, StatTypes.CriticalStrikeRatingSpell },
+            { WoWItemStatType.HitTakenMeleeRating, StatTypes.HitAvoidanceRatingMelee },
+            { WoWItemStatType.HitTakenRangedRating, StatTypes.HitAvoidanceRatingRanged },
+            { WoWItemStatType.HitTakenSpellRating, StatTypes.HitAvoidanceRatingSpell },
+            { WoWItemStatType.CritTakenMeleeRating, StatTypes.CriticalStrikeAvoidanceRatingMelee },
+            { WoWItemStatType.CritTakenRangedRating, StatTypes.CriticalStrikeAvoidanceRatingRanged },
+            { WoWItemStatType.CritTakenSpellRating, StatTypes.CriticalStrikeAvoidanceRatingSpell },
+            { WoWItemStatType.HasteMeleeRating, StatTypes.HasteRatingMelee },
+            { WoWItemStatType.HasteRangedRating, StatTypes.HasteRatingRanged },
+            { WoWItemStatType.HasteSpellRating, StatTypes.HasteRatingSpell },
+            { WoWItemStatType.HitRating, StatTypes.HitRating },
+            { WoWItemStatType.CritRating, StatTypes.CriticalStrikeRating },
+            { WoWItemStatType.HitTakenRating, StatTypes.HitAvoidanceRating },
+            { WoWItemStatType.CritTakenRating, StatTypes.CriticalStrikeAvoidanceRating },
+            { WoWItemStatType.ResilienceRating, StatTypes.ResilienceRating },
+            { WoWItemStatType.HasteRating, StatTypes.HasteRating },
+            { WoWItemStatType.ExpertiseRating, StatTypes.ExpertiseRating },
+            { WoWItemStatType.AttackPower, StatTypes.AttackPower },
+            { WoWItemStatType.RangedAttackPower, StatTypes.RangedAttackPower },
+            { WoWItemStatType.FeralAttackPower, StatTypes.AttackPowerInForms },
+            // Legacy split spell stats -> unified SpellPower (WotLK gear uses SpellPower directly).
+            { WoWItemStatType.SpellHealingDone, StatTypes.SpellPower },
+            { WoWItemStatType.SpellDamageDone, StatTypes.SpellPower },
+            { WoWItemStatType.ManaRegeneration, StatTypes.ManaRegeneration },
+            { WoWItemStatType.ArmorPenetrationRating, StatTypes.ArmorPenetrationRating },
+            { WoWItemStatType.SpellPower, StatTypes.SpellPower },
+            { WoWItemStatType.HealthRegeneration, StatTypes.HealthPer5Sec },
+            { WoWItemStatType.SpellPenetration, StatTypes.SpellPenetration },
+            { WoWItemStatType.BlockValue, StatTypes.BlockValue },
+        };
+
+        // Builds an ItemStats from an item's raw stat dictionary (ItemInfo.GetItemStats()), correctly mapped.
+        public static ItemStats FromRaw(Dictionary<WoWItemStatType, int> raw, float dps)
+        {
+            var stats = new ItemStats { DPS = dps };
+            if (raw != null)
+            {
+                foreach (var kvp in raw)
+                {
+                    if (kvp.Value == 0)
+                        continue;
+                    StatTypes mapped;
+                    if (!RawToStatType.TryGetValue(kvp.Key, out mapped))
+                        continue; // unknown / non-scoring stat
+                    int current;
+                    stats.Stats.TryGetValue(mapped, out current);
+                    stats.Stats[mapped] = current + kvp.Value;
+                }
+            }
+            return stats;
+        }
+
+        #endregion
+
         #region Internal Methods
         private static ItemStats GetItemStatsFromLink(string itemLink)
         {
-            // Parse item stats using Lua tooltip scanning (3.3.5a compatible)
-            var stats = new ItemStats
+            // Resolve the base item and read its real stats (mapped correctly). Far more reliable than
+            // locale-dependent tooltip scraping, and consistent with the equip path.
+            uint? id = ParseItemId(itemLink);
+            if (id.HasValue)
             {
-                DPS = 0f,
-                Stats = new Dictionary<StatTypes, int>()
-            };
-            
-            try
-            {
-                // Use GameTooltip to scan item stats
-                string lua = string.Format(@"
-                    local stats = {{}};
-                    GameTooltip:SetOwner(UIParent, 'ANCHOR_NONE');
-                    GameTooltip:SetHyperlink('{0}');
-                    
-                    for i = 2, GameTooltip:NumLines() do
-                        local line = _G['GameTooltipTextLeft'..i];
-                        if line then
-                            local text = line:GetText();
-                            if text then
-                                -- Parse DPS
-                                local dps = text:match('%(([%d%.]+) damage per second%)');
-                                if dps then stats.dps = tonumber(dps); end
-                                
-                                -- Parse stats (+X Stat)
-                                local val, stat = text:match('%+(%d+)%s+(.+)');
-                                if val and stat then
-                                    stats[stat] = tonumber(val);
-                                end
-                            end
-                        end
-                    end
-                    
-                    GameTooltip:Hide();
-                    return stats.dps or 0;
-                ", itemLink);
-                
-                string dpsStr = Lua.GetReturnVal<string>(lua, 0);
-                if (!string.IsNullOrEmpty(dpsStr) && float.TryParse(dpsStr, out float dps))
-                {
-                    stats.DPS = dps;
-                }
-                
-                // Note: Full stat parsing would require additional Lua calls
-                // For now, DPS is the most critical stat for weapon comparison
+                var info = ItemInfo.FromId(id.Value);
+                if (info != null)
+                    return FromRaw(info.GetItemStats(), info.IsWeapon ? info.DPS : 0f);
             }
-            catch (Exception ex)
-            {
-                Logging.WriteDebug("[ItemStats] Failed to parse item link: {0}", ex.Message);
-            }
-            
-            return stats;
+            return new ItemStats();
+        }
+
+        private static uint? ParseItemId(string itemLink)
+        {
+            if (string.IsNullOrEmpty(itemLink))
+                return null;
+            var m = Regex.Match(itemLink, @"item:(\d+)");
+            uint id;
+            if (m.Success && uint.TryParse(m.Groups[1].Value, out id) && id != 0)
+                return id;
+            return null;
         }
         #endregion
         

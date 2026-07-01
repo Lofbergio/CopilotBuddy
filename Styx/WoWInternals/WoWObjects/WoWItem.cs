@@ -429,18 +429,11 @@ namespace Styx.WoWInternals.WoWObjects
 
         private static ItemStats CalculateItemStats(WoWItem item)
         {
-            var stats = new ItemStats();
             var info = item.ItemInfo;
-            if (info == null) return stats;
+            if (info == null) return new ItemStats();
 
-            if (info.IsWeapon)
-                stats.DPS = info.DPS;
-
-            var itemStats = info.GetItemStats();
-            foreach (var kvp in itemStats)
-                stats.Stats[(StatTypes)(int)kvp.Key] = kvp.Value;
-
-            return stats;
+            // Map raw ITEM_MOD stats to scoring stats by meaning (not a raw int cast - see ItemStats.RawToStatType).
+            return ItemStats.FromRaw(info.GetItemStats(), info.IsWeapon ? info.DPS : 0f);
         }
 
         #endregion
