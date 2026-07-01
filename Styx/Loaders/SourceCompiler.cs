@@ -48,10 +48,19 @@ namespace Styx.Loaders
             };
             CompiledToLocation = Options.OutputAssembly;
 
-            // Add all currently loaded assemblies as references
+            // Add all currently loaded assemblies as references - EXCEPT previously-compiled plugin/routine
+            // builds, which are emitted to the temp dir. Referencing a prior build of a plugin both
+            // (a) causes duplicate-type "ambiguous" compile errors on recompile (e.g. BuddyControlPanel's
+            // Extensions.ShowAtFront), and (b) grows the metadata reference set every recompile - which is
+            // what eventually OOMs the 32-bit process (MetadataReference.CreateFromFile over an ever-growing
+            // pile of stale plugin DLLs). Skipping them makes the reference set bounded and recompiles clean.
+            string tempDir = Path.GetTempPath();
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                AddReference(assembly.Location);
+                string loc = assembly.Location;
+                if (!string.IsNullOrEmpty(loc) && loc.StartsWith(tempDir, StringComparison.OrdinalIgnoreCase))
+                    continue; // stale plugin build - do not reference
+                AddReference(loc);
             }
 
             // Try to add common WPF / Windows Forms integration assemblies if available
