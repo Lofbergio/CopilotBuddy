@@ -467,6 +467,27 @@ namespace Bots.VibeGrinder
         }
 
         /// <summary>
+        /// True the instant we OPEN on the committed mob — the real "we've engaged, stop selecting" edge,
+        /// which is NOT Me.Combat. The combat flag only flips when the opener LANDS: for a caster that's
+        /// cast-time + projectile travel (1-3s) AFTER the bolt is away and the mob is already aggroed. The
+        /// whole pre-pull selection layer (preempt, give-up) must stand down at the opener, not at that lagged
+        /// flag, or it keeps "selecting" after we've physically pulled — the mid-cast target switch that
+        /// opened a SECOND mob (2-mob pull → pack death), and the give-up clock ticking on a mob we're casting
+        /// at. Signals, earliest first: mid-cast on it (caster opener in flight, the exact gap Me.Combat
+        /// misses); it's now targeting us (instant-cast / landed backstop); Me.Combat (melee / post-land).
+        /// A committed NEUTRAL we haven't provoked yet reads false on all three (no cast, not aggroed) — so
+        /// the neutral-preempt below still fires during the walk-onto phase, as intended.
+        /// </summary>
+        private bool HasOpenedOnCommit(WoWUnit me)
+        {
+            if (_committedGuid == 0) return false;
+            if (me.CurrentTargetGuid == _committedGuid && (me.IsCasting || me.IsChanneling)) return true;
+            if (me.Combat) return true;
+            WoWUnit cu = ObjectManager.GetObjectByGuid<WoWUnit>(_committedGuid);
+            return cu != null && !cu.Dead && cu.IsTargetingMeOrPet;
+        }
+
+        /// <summary>
         /// Engagement commitment — the fix for the whole class of "the bot keeps changing its mind" bugs
         /// (pulled a far mob while a nearer one aggroed; switched target mid-pull; opened on the wrong mob).
         /// The base game re-scores every target every tick, so FirstUnit wobbles as we and the mobs move,
@@ -495,14 +516,22 @@ namespace Bots.VibeGrinder
                 return;
             }
 
+            // The engagement boundary for the whole pre-pull selection layer below. Gating on `opened` (the
+            // opener edge) rather than Me.Combat is what stops the layer from re-selecting during the 1-3s the
+            // combat flag lags a caster's opener — the window that let preempt switch away from a mob we'd
+            // already bolted and pull a second one. See HasOpenedOnCommit.
+            bool opened = HasOpenedOnCommit(me);
+
             // Path defense (never walk a far commitment past a mob that's about to body-pull us). While
-            // approaching (pre-combat), if a level-safe, non-camp hostile is inside its OWN aggro bubble +
-            // buffer AND nearer than what we're committed to, drop the pin (no blacklist — the far mob is fine,
-            // just deferred) so Acquire below re-picks the nearest = the threat. We engage it deliberately
-            // instead of riding into it blind (the "body-pulled as if he didn't see them" bug). Camped hostiles
-            // were already removed from `units` by ApplyCrowdAndNeutralWeighting, so this never opens on a pack.
-            // Narrow (only mobs in their aggro bubble) so it doesn't reopen the commitment wobble it prevents.
-            if (_committedGuid != 0 && !me.Combat)
+            // approaching and BEFORE we've opened, if a level-safe, non-camp hostile is inside its OWN aggro
+            // bubble + buffer AND nearer than what we're committed to, drop the pin (no blacklist — the far mob
+            // is fine, just deferred) so Acquire below re-picks the nearest = the threat. We engage it
+            // deliberately instead of riding into it blind (the "body-pulled as if he didn't see them" bug).
+            // Camped hostiles were already removed from `units` by ApplyCrowdAndNeutralWeighting, so this never
+            // opens on a pack. Narrow (only mobs in their aggro bubble) so it doesn't reopen the commitment
+            // wobble it prevents. Gated on `!opened`: once the opener is away the pull is irrevocable — the mob
+            // is aggroed, so switching would ADD it as a second mob, not replace it (the 2-mob pull death).
+            if (_committedGuid != 0 && !opened)
             {
                 WoWUnit held = FindCandidate(units, _committedGuid);
                 double heldDist = held != null && !held.Dead ? held.Location.Distance(me.Location) : double.MaxValue;
@@ -547,15 +576,16 @@ namespace Bots.VibeGrinder
                 if (valid)
                 {
                     double d = held.Location.Distance(me.Location);
-                    // Progress = closing the gap OR actually ENGAGING (in combat) — reset on those, NOT on bare
+                    // Progress = closing the gap OR actually ENGAGING (opened) — reset on those, NOT on bare
                     // proximity. An in-range mob we can't actually pull (a LoS/facing dead-end the InLineOfSpellSight
                     // flag misses, or an evade spot) used to reset the clock every tick via `d <= MaxPullDistance`,
                     // so it stood there forever casting into nothing (seen: ~6 min on one Hillsbrad Foreman —
-                    // los=True, canPull=True, yet no damage and combat=False). Gating on combat instead: a real pull
-                    // connects in ~3s (<< the 20s cap) so it's never blacklisted, and combat keeps the clock reset
+                    // los=True, canPull=True, yet no damage and combat=False). Gating on `opened` instead: a real pull
+                    // connects in ~3s (<< the 20s cap) so it's never blacklisted, and `opened` keeps the clock reset
                     // through a genuine fight (mob in range, no distance progress) so we don't drop the mob we're
-                    // killing — but a stuck in-range pull expires → blacklist 2m + re-pick, i.e. skip it and move on.
-                    if (me.Combat || d < _committedLastDist - 0.5)
+                    // killing — and it resets from the opener's FIRST cast, not the lagged combat flag, so the clock
+                    // can't blacklist a mob we're mid-cast on. A stuck pull that never opens expires → blacklist 2m.
+                    if (opened || d < _committedLastDist - 0.5)
                         _committedTimer.Restart();
                     _committedLastDist = d;
 
