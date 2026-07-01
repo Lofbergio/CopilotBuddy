@@ -72,6 +72,11 @@ namespace Bots.Vibes.Shared
         public int MinHealth => _minHealth;
         public int MinMana => _minMana;
 
+        // When set, drive the routine's rest thresholds to 0 so it never sits to eat/drink — the caller owns the
+        // decision (VibeGrinder sets this during a committed vendor run: you don't rest while running an errand,
+        // and the combat/pull behavior must still run to engage path threats without the bundled rest firing).
+        public bool Suppressed { get; set; }
+
         public void Pulse(LocalPlayer me)
         {
             try
@@ -82,6 +87,7 @@ namespace Bots.Vibes.Shared
 
                 TrackDeathsAndStreaks(me);                 // keep caution current so we're ready if we own writing
                 (int h, int m) = ComputeThresholds(me);
+                if (Suppressed) { h = 0; m = 0; }          // caller suspends resting (e.g. mid vendor errand)
 
                 bool weWrite = _reflectionResolved && !PluginOwnsWriting();
                 if (weWrite) WriteThresholds(h, m);

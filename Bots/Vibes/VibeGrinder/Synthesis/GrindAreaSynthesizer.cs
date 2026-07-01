@@ -24,7 +24,6 @@ namespace Bots.VibeGrinder.Synthesis
         private uint _installedMap = uint.MaxValue;
         // Originals of the global CharacterSettings we seed, so Stop() can restore them (don't
         // permanently overwrite a user's deliberate 0 = "never buy consumables").
-        private int _origFoodAmount = -1, _origDrinkAmount = -1;
         private int _origPullDistance = -1;
         private bool? _origRessAtSpiritHealers;
 
@@ -72,16 +71,9 @@ namespace Bots.VibeGrinder.Synthesis
             // Empty VendorManager + this flag => vendor tree auto-resolves sell/repair/food from data.bin.
             CharacterSettings.Instance.FindVendorsAutomatically = true;
 
-            // Unattended grinder must restock consumables. Default 0 => never buys food/water, so a mana class
-            // sit-regens for minutes when OOM (which despawns nearby loot). Seed sane amounts only if the user
-            // hasn't set their own. (BuyItems only buys drink for mana classes, so this is safe for all.)
-            // Capture originals first so Stop() can restore (these are GLOBAL CharacterSettings).
-            _origFoodAmount = CharacterSettings.Instance.FoodAmount;
-            _origDrinkAmount = CharacterSettings.Instance.DrinkAmount;
-            if (CharacterSettings.Instance.FoodAmount == 0)
-                CharacterSettings.Instance.FoodAmount = 20;
-            if (CharacterSettings.Instance.DrinkAmount == 0)
-                CharacterSettings.Instance.DrinkAmount = 20;
+            // Food/water restock amounts are USER-controlled (CharacterSettings.FoodAmount/DrinkAmount). We no
+            // longer auto-seed 0 -> 20: a deliberate 0 is honored — no buying, and with empty bags no drinking
+            // (a pure self-sustain run). The old seeding silently overrode that, so it's gone.
 
             // Pull-range dead band: LevelBot only walks to a target while dist >= PullDistance, then hands
             // off to the routine to engage. If PullDistance (default 45/48) exceeds the routine's cast range
@@ -169,8 +161,6 @@ namespace Bots.VibeGrinder.Synthesis
         /// <summary>Restore the global CharacterSettings we seeded in EnsureProfile. Call from Stop().</summary>
         public void RestoreCharacterSettings()
         {
-            if (_origFoodAmount >= 0) { CharacterSettings.Instance.FoodAmount = _origFoodAmount; _origFoodAmount = -1; }
-            if (_origDrinkAmount >= 0) { CharacterSettings.Instance.DrinkAmount = _origDrinkAmount; _origDrinkAmount = -1; }
             if (_origPullDistance >= 0) { CharacterSettings.Instance.PullDistance = _origPullDistance; _origPullDistance = -1; }
             if (_origRessAtSpiritHealers.HasValue) { CharacterSettings.Instance.RessAtSpiritHealers = _origRessAtSpiritHealers.Value; _origRessAtSpiritHealers = null; }
         }

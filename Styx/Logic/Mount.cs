@@ -76,32 +76,28 @@ namespace Styx.Logic
 			LocalPlayer? me = Me;
 			if (me == null) return;
 
-			if (!string.IsNullOrEmpty(reason))
-				Logging.WriteDebug("Stop and dismount. Reason: {0}", reason);
-
+			// Nothing to dismount (not mounted, not in flight form) → return WITHOUT logging or issuing the Lua.
+			// The log + Lua used to run regardless: callers fire Dismount on a stale me.Mounted (true for a tick
+			// after dismounting), so a second call hit the client when already on foot → the "You are not mounted"
+			// red error in chat, plus pointless "Stop and dismount" log spam during the vendor-run POI thrash.
 			ShapeshiftForm shapeshift = me.Shapeshift;
-			if (me.Mounted || shapeshift == ShapeshiftForm.FlightForm || shapeshift == ShapeshiftForm.EpicFlightForm)
-			{
-				if (string.IsNullOrEmpty(reason))
-					Logging.WriteDebug("Stop and dismount.");
+			if (!(me.Mounted || shapeshift == ShapeshiftForm.FlightForm || shapeshift == ShapeshiftForm.EpicFlightForm))
+				return;
 
-				// HB 4.3.4: no descent loop — just stop and dismount.
-				// Descent before dismount is the caller's responsibility
-				// (gather [4] already handles it with WoWMovement.Move(Descend) + WaitContinue(!IsFlying)).
-				WoWMovement.MoveStop();
+			Logging.WriteDebug(string.IsNullOrEmpty(reason) ? "Stop and dismount." : $"Stop and dismount. Reason: {reason}");
 
-				if (shapeshift == ShapeshiftForm.FlightForm || shapeshift == ShapeshiftForm.EpicFlightForm)
-				{
-					Lua.DoString("CancelShapeshiftForm()");
-				}
-				else
-				{
-					Lua.DoString("Dismount()");
-				}
+			// HB 4.3.4: no descent loop — just stop and dismount.
+			// Descent before dismount is the caller's responsibility
+			// (gather [4] already handles it with WoWMovement.Move(Descend) + WaitContinue(!IsFlying)).
+			WoWMovement.MoveStop();
 
-				// HB 6.2.3: Fire OnDismount event after dismounting
-				RaiseOnDismount(reason);
-			}
+			if (shapeshift == ShapeshiftForm.FlightForm || shapeshift == ShapeshiftForm.EpicFlightForm)
+				Lua.DoString("CancelShapeshiftForm()");
+			else
+				Lua.DoString("Dismount()");
+
+			// HB 6.2.3: Fire OnDismount event after dismounting
+			RaiseOnDismount(reason);
 		}
 
 		/// <summary>
@@ -111,6 +107,7 @@ namespace Styx.Logic
 		internal static void RaiseOnDismount(string? reason)
 		{
 			reason ??= string.Empty;
+			_rollFreshMount = true;   // dismounted — next mount-up picks a fresh random mount (re-arm before the early-out)
 			EventHandler<EventArgs>? handler = OnDismount;
 			if (handler == null)
 				return;
@@ -129,6 +126,10 @@ namespace Styx.Logic
 		}
 
 		private static readonly Random _random = new Random();
+		// Re-roll a fresh random mount only ONCE per mount-up (re-armed on dismount), not on every MountUp call.
+		// MountUp runs each travel tick and a stalled attempt (post-death flee / can't-mount-here) would otherwise
+		// re-roll + log every frame — the "Auto-detected random ground mount: White Kodo" spam flood.
+		private static bool _rollFreshMount = true;
 
 		/// <summary>
 		/// Auto-detects and sets mount name if FindMountAutomatically is enabled.
@@ -141,13 +142,19 @@ namespace Styx.Logic
 
 			if (CharacterSettings.Instance.UseRandomMount)
 			{
-				// Random mount selection
+				if (!_rollFreshMount)
+					return;   // already rolled for this mount-up; don't re-roll/log every tick
+
+				// Random mount selection. Only consume the flag once we actually pick something — so if mounts
+				// aren't in the companion list yet, we retry next tick instead of locking in an empty name.
+				bool rolled = false;
 				var groundMounts = MountHelper.GroundMounts;
 				if (groundMounts != null && groundMounts.Count > 0)
 				{
 					var mount = groundMounts[_random.Next(0, groundMounts.Count)];
 					CharacterSettings.Instance.MountName = mount.CreatureSpellId.ToString();
 					Logging.WriteDebug("Auto-detected random ground mount: {0}", mount.Name);
+					rolled = true;
 				}
 
 				var flyingMounts = MountHelper.FlyingMounts;
@@ -156,7 +163,11 @@ namespace Styx.Logic
 					var mount = flyingMounts[_random.Next(0, flyingMounts.Count)];
 					CharacterSettings.Instance.FlyingMountName = mount.CreatureSpellId.ToString();
 					Logging.WriteDebug("Auto-detected random flying mount: {0}", mount.Name);
+					rolled = true;
 				}
+
+				if (rolled)
+					_rollFreshMount = false;
 			}
 			else
 			{
@@ -220,15 +231,17 @@ namespace Styx.Logic
 			if (!LevelbotSettings.Instance.UseMount)
 				return false;
 
-			// Auto-detect mount if enabled
-			AutoDetectMount();
-
 			LocalPlayer? me = Me;
 			if (me == null)
 				return false;
 
+			// Already mounted / dead / ghost → nothing to do. Check BEFORE AutoDetectMount so we don't re-roll
+			// the random mount + log "Auto-detected ..." every travel tick while mounted (the [D] spam flood).
 			if (me.Mounted || me.Dead || me.IsGhost)
 				return false;
+
+			// Auto-detect mount if enabled
+			AutoDetectMount();
 
 			// Ghost Wolf (Shaman) / Travel Form (Druid): fallback when regular mounts can't be used.
 			// Both spells are outdoors-only in WotLK 3.3.5a (Wowhead verified).

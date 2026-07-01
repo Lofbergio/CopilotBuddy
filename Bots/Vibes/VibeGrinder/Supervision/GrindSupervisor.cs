@@ -34,7 +34,10 @@ namespace Bots.VibeGrinder.Supervision
         private readonly Dictionary<ulong, DateTime> _intruderSince = new();
         private readonly Queue<DateTime> _kills = new();
         private readonly Queue<DateTime> _deaths = new();
-        private readonly Dictionary<WoWPoint, DateTime> _blacklist = new();
+        private readonly Dictionary<WoWPoint, (DateTime expiry, float radius)> _blacklist = new();
+        // Death locations (NOT cleared on spot-install — we must remember regional deaths across spot-hops so the
+        // escalation can recognise "this whole AREA keeps killing me" and blacklist the cluster, not one camp).
+        private readonly List<(WoWPoint loc, DateTime when)> _deathSpots = new();
         private WoWPoint _packDeathSpot = WoWPoint.Empty;   // the camp that just killed us
         private bool _packDeathRelocatePending;             // relocate off it as soon as we're back up
         private bool _wasDead;
@@ -66,14 +69,14 @@ namespace Bots.VibeGrinder.Supervision
         /// <summary>Adaptive multiplier (≥1) on the pull add-avoidance penalty. Grows with pack deaths.</summary>
         public double CrowdCautionFactor => _crowdCaution;
 
-        /// <summary>Active (non-expired) blacklisted centroids — passed to SpotSelector at Start.</summary>
-        public List<WoWPoint> ActiveBlacklist()
+        /// <summary>Active (non-expired) blacklisted areas (centroid + radius) — passed to SpotSelector.</summary>
+        public List<(WoWPoint center, float radius)> ActiveBlacklist()
         {
             DateTime now = DateTime.UtcNow;
             // Evict expired entries so the dictionary doesn't grow unbounded over a long session.
-            foreach (WoWPoint key in _blacklist.Where(kv => kv.Value <= now).Select(kv => kv.Key).ToList())
+            foreach (WoWPoint key in _blacklist.Where(kv => kv.Value.expiry <= now).Select(kv => kv.Key).ToList())
                 _blacklist.Remove(key);
-            return _blacklist.Keys.ToList();
+            return _blacklist.Select(kv => (kv.Key, kv.Value.radius)).ToList();
         }
 
         public void Reset()
@@ -82,6 +85,7 @@ namespace Bots.VibeGrinder.Supervision
             _intruderSince.Clear();
             _kills.Clear();
             _deaths.Clear();
+            _deathSpots.Clear();
             _blacklist.Clear();
             _packDeathSpot = WoWPoint.Empty;
             _packDeathRelocatePending = false;
@@ -172,18 +176,42 @@ namespace Bots.VibeGrinder.Supervision
                 _cleanKills = 0;
                 if (_attackerPeak >= S.PackDeathAttackers)   // a real pack death (not an honest 1v1)
                 {
-                    if (S.CrowdCautionStep > 0f) Escalate();
-                    // Don't grind the camp that just killed us. Blacklist the death spot and flag a relocate for
-                    // the moment we're back up — DON'T wait for the 3-deaths-in-5-min loop (camp deaths are
-                    // minutes apart, so that never trips). Bounded by the scarcity rule: if nothing better
-                    // exists we stay, but with the camp blacklisted so SelectBest won't re-pick it.
+                    if (S.CrowdCautionStep > 0f) Escalate(_attackerPeak);
+                    // ESCALATING death-cluster blacklist: don't just blacklist the one camp (then hop 90yd to the
+                    // next swarm in the same hive — that's how one log hit 53 deaths). The radius grows with BOTH
+                    // the swarm size and how many deaths have clustered in this region, so a couple of big-pack
+                    // deaths blacklist the WHOLE area and force a far relocate out of the death trap.
                     if (S.EnableDeathLoopRelocate)
                     {
-                        _packDeathSpot = me.Location;
-                        _blacklist[_packDeathSpot] = DateTime.UtcNow.AddMinutes(System.Math.Max(1, S.BlacklistMinutes));
+                        WoWPoint here = me.Location;
+                        DateTime now2 = DateTime.UtcNow;
+                        _deathSpots.Add((here, now2));
+                        _deathSpots.RemoveAll(d => (now2 - d.when).TotalMinutes > S.DeathRegionWindowMin);
+
+                        float regionR2 = S.DeathRegionRadius * S.DeathRegionRadius;
+                        int regional = _deathSpots.Count(d => d.loc.DistanceSqr(here) <= regionR2);   // incl. this one
+                        // crowd factor: an honest 2-mob death = 1×; a 20-mob swarm scales the radius up (clamped).
+                        float crowdFactor = System.Math.Clamp(
+                            (float)_attackerPeak / System.Math.Max(1, S.PackDeathAttackers), 1f, S.DeathCrowdRadiusMax);
+                        float radius = System.Math.Min(S.GrindRadius * regional * crowdFactor, S.MaxDeathBlacklistRadius);
+
+                        _packDeathSpot = here;
+                        _blacklist[here] = (now2.AddMinutes(System.Math.Max(1, S.BlacklistMinutes)), radius);
                         _packDeathRelocatePending = true;
+
+                        // Also blacklist the live mobs (by GUID) INSIDE the radius so nothing re-targets them as
+                        // we leave. The spatial blacklist above only stops SpotSelector re-PICKING here; it doesn't
+                        // stop the corpse-run / vendor-run target drivers re-grabbing the very swarm that killed us.
+                        // That gap let the bot, post-abandon, thrash its Kill POI between two in-area mobs (a
+                        // Silithid Swarm ⇄ a roaming Greater Thunderhawk, ~86 flips in 3 min) and wedge a repair run.
+                        // OM-visible only (can't see the far edge of a 700yd ring) — i.e. exactly the swarm on/near
+                        // us. Timed (BlacklistMinutes), so the area frees up once we've gone.
+                        BlacklistMobsInRadius(here, radius);
+
+                        bool abandon = regional >= S.DeathClusterAbandonCount;
                         Logging.Write(System.Drawing.Color.Orange,
-                            "[VibeGrinder] Died to a {0}-mob pack — blacklisting this camp and relocating when back up.", _attackerPeak);
+                            "[VibeGrinder] Died to a {0}-mob pack ({1} death(s) in this region) — blacklisting {2:F0}yd{3} and relocating.",
+                            _attackerPeak, regional, radius, abandon ? " — ABANDONING this whole area (it keeps killing us)" : "");
                     }
                 }
                 _attackerPeak = 0;
@@ -311,6 +339,39 @@ namespace Bots.VibeGrinder.Supervision
         }
 
         /// <summary>
+        /// GUID-blacklist every attackable mob currently within <paramref name="radius"/> of a death spot, so no
+        /// target driver (corpse-run combat, vendor-run TransitPeel, grind commitment) re-engages the pack we're
+        /// fleeing. Attackable = reaction ≤ Neutral — the swarm is hostile but the in-area grind mobs we'd
+        /// oscillate onto are often neutral wildlife, so hostile-only would miss half the thrash. Object-manager
+        /// scoped (we only see/avoid what's loaded near us, which is the immediate threat). Timed via BlacklistMinutes.
+        /// </summary>
+        private void BlacklistMobsInRadius(WoWPoint center, float radius)
+        {
+            try
+            {
+                var dur = TimeSpan.FromMinutes(System.Math.Max(1, S.BlacklistMinutes));
+                float r2 = radius * radius;
+                int n = 0;
+                foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
+                {
+                    if (u == null || u is WoWPlayer || u.Dead || u.IsTotem) continue;
+                    if (u.MyReaction > WoWUnitReaction.Neutral) continue;          // friendly NPCs/guards: never blacklist
+                    if (u.Location.DistanceSqr(center) > r2) continue;
+                    Blacklist.Add(u.Guid, dur);
+                    n++;
+                }
+                if (n > 0)
+                    Logging.Write(System.Drawing.Color.Orange,
+                        "[VibeGrinder] Blacklisted {0} mob(s) within {1:F0}yd of the death spot for {2}min — won't re-engage them while leaving.",
+                        n, radius, System.Math.Max(1, S.BlacklistMinutes));
+            }
+            catch (Exception ex)
+            {
+                Logging.Write(System.Drawing.Color.Orange, "[VibeGrinder] Blacklist-in-radius failed: {0}", ex.Message);
+            }
+        }
+
+        /// <summary>
         /// Unwedge a freeze: drop + briefly blacklist the target/POI we're stuck on (so combat/roam don't
         /// re-grab it next tick) and relocate forward. Resets the freeze clock either way so the break
         /// can't spin every tick — if no better spot exists, the POI clear alone re-floats the bot.
@@ -368,14 +429,17 @@ namespace Bots.VibeGrinder.Supervision
             catch { return 0; }
         }
 
-        private void Escalate()
+        private void Escalate(int attackers)
         {
             double before = _crowdCaution;
-            _crowdCaution = System.Math.Min(_crowdCaution + S.CrowdCautionStep, System.Math.Max(1.0, S.CrowdCautionMax));
+            // Scale the fear jump with the swarm size: a 2-mob death nudges (1× step), a 20-mob death slams it up
+            // (clamped by DeathCrowdRadiusMax) so the bot turns spot-shy fast after a real swarm, not after ten.
+            float crowdFactor = System.Math.Clamp((float)attackers / System.Math.Max(1, S.PackDeathAttackers), 1f, S.DeathCrowdRadiusMax);
+            _crowdCaution = System.Math.Min(_crowdCaution + S.CrowdCautionStep * crowdFactor, System.Math.Max(1.0, S.CrowdCautionMax));
             if (_crowdCaution != before)
                 Logging.Write(System.Drawing.Color.Orange,
                     "[VibeGrinder] Pack death ({0} attackers) — crowd caution {1:F2} → {2:F2}.",
-                    _attackerPeak, before, _crowdCaution);
+                    attackers, before, _crowdCaution);
         }
 
         private void EaseCaution(double amount, string why)
@@ -385,6 +449,24 @@ namespace Bots.VibeGrinder.Supervision
             _crowdCaution = System.Math.Max(1.0, _crowdCaution - amount);
             if (_crowdCaution != before)
                 Logging.Write("[VibeGrinder] Crowd caution eased ({0}): {1:F2} → {2:F2}.", why, before, _crowdCaution);
+        }
+
+        /// <summary>
+        /// SURVIVAL-CRITICAL relocates (pack death / death loop) — fleeing a camp that keeps killing us. Split
+        /// out from the discretionary triggers and **placed above the ENGAGING gate in Root** so it fires even
+        /// while committed to a kill. The regression it fixes: after a pack death the bot rezzes at its corpse
+        /// (in the swarm), re-commits to a silithid → ENGAGING → the abandon-relocate (which lived inside the
+        /// `!Engaging`-gated RelocationCheck) was starved and never ran, so it re-fought the swarm and died on
+        /// loop. Still gated !Combat/!Ghost (can't relocate mid-fight or as a corpse). Unthrottled — a flag +
+        /// death-count check, and we want it responsive the first out-of-combat tick after a rez. See CLAUDE.md.
+        /// </summary>
+        public Composite EmergencyRelocationCheck()
+        {
+            return new Decorator(
+                ctx => _current != null
+                       && StyxWoW.Me != null && !StyxWoW.Me.Combat
+                       && !StyxWoW.Me.IsDead && !StyxWoW.Me.IsGhost,
+                new TreeSharp.Action(ctx => EvaluateEmergency()));
         }
 
         public Composite RelocationCheck()
@@ -397,11 +479,12 @@ namespace Bots.VibeGrinder.Supervision
                 new TreeSharp.Action(ctx =>
                 {
                     _throttle.Restart();
-                    return Evaluate();
+                    return EvaluateDiscretionary();
                 }));
         }
 
-        private RunStatus Evaluate()
+        /// <summary>Death-trap flee. Runs regardless of ENGAGING (see EmergencyRelocationCheck).</summary>
+        private RunStatus EvaluateEmergency()
         {
             var me = StyxWoW.Me;
             if (me == null || _current == null)
@@ -414,6 +497,28 @@ namespace Bots.VibeGrinder.Supervision
                 return Relocate("died to a pack") ? RunStatus.Success : RunStatus.Failure;
             }
 
+            if (S.EnableDeathLoopRelocate && _deaths.Count >= S.DeathLoopCount)
+            {
+                bool moved = Relocate("death loop");
+                // Acknowledge the signal either way: if nothing better exists we stay, but clearing
+                // the window stops a per-interval "no better spot" log spin until it ages out.
+                _deaths.Clear();
+                return moved ? RunStatus.Success : RunStatus.Failure;
+            }
+
+            return RunStatus.Failure;
+        }
+
+        /// <summary>
+        /// DISCRETIONARY relocates (intrusion / out-level / depletion) — quality-of-grind, not survival. These
+        /// stay behind the ENGAGING gate (don't abandon a kill in progress for a nearer/denser/contested spot).
+        /// </summary>
+        private RunStatus EvaluateDiscretionary()
+        {
+            var me = StyxWoW.Me;
+            if (me == null || _current == null)
+                return RunStatus.Failure;
+
             if (S.EnableIntrusionRelocate && IntrusionTripped())
                 return Relocate("player intrusion") ? RunStatus.Success : RunStatus.Failure;
 
@@ -423,15 +528,6 @@ namespace Bots.VibeGrinder.Supervision
 
             if (S.EnableDepletionRelocate && _sinceInstall.Elapsed.TotalSeconds > 90 && Depleted())
                 return Relocate("spot depleted") ? RunStatus.Success : RunStatus.Failure;
-
-            if (S.EnableDeathLoopRelocate && _deaths.Count >= S.DeathLoopCount)
-            {
-                bool moved = Relocate("death loop");
-                // Acknowledge the signal either way: if nothing better exists we stay, but clearing
-                // the window stops a per-interval "no better spot" log spin until it ages out.
-                _deaths.Clear();
-                return moved ? RunStatus.Success : RunStatus.Failure;
-            }
 
             return RunStatus.Failure;
         }
@@ -483,13 +579,56 @@ namespace Bots.VibeGrinder.Supervision
                     _emptySince = DateTime.UtcNow;
                 else if ((DateTime.UtcNow - _emptySince).TotalSeconds >= S.EmptyTargetSeconds
                          && _kills.Count < S.MinKillsPerMin)
+                {
+                    // Before abandoning: Targeting collects around the TOON's parked position, so a spot whose
+                    // remaining mobs sit at the far edge (or a wanderer that just drifted in) reads as empty.
+                    // Re-scan the WHOLE spot from its centroid, extended by DepletionRecheckBuffer, with the
+                    // exact grind-target filter. If anything valid is there the spot isn't dead — reset the
+                    // empty timer and keep grinding. (Backstop: StallWatchdog still relocates if we genuinely
+                    // can't make progress on them, so a stuck-on-edge mob can't wedge us here.)
+                    int found = ValidTargetsNearSpot(S.DepletionRecheckBuffer);
+                    if (found > 0)
+                    {
+                        Logging.Write("[VibeGrinder] Depletion recheck: {0} valid target(s) within +{1:F0}yd of spot — staying, not relocating.",
+                            found, S.DepletionRecheckBuffer);
+                        _emptySince = DateTime.MaxValue;   // give the spot a fresh empty-window before re-checking
+                        return false;
+                    }
                     return true;
+                }
             }
             else
             {
                 _emptySince = DateTime.MaxValue;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Count valid grind targets within (GrindRadius + extraRadius) of the spot centroid, using LevelBot's
+        /// exact include-filter (faction/level-band/avoid/blackspot) so this can't drift from what the bot pulls.
+        /// Excludes blacklisted mobs (ones we've already given up on) so they can't keep a dead spot "alive".
+        /// </summary>
+        private int ValidTargetsNearSpot(float extraRadius)
+        {
+            var me = StyxWoW.Me;
+            if (me == null || _current == null) return 0;
+            float r = S.GrindRadius + extraRadius;
+            float rSqr = r * r;
+
+            var incoming = new List<WoWObject>();
+            foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
+            {
+                if (u == null || !u.IsAlive || u.Guid == me.Guid) continue;
+                if (u.Location.DistanceSqr(_current.Centroid) > rSqr) continue;
+                if (Blacklist.Contains(u.Guid)) continue;
+                incoming.Add(u);
+            }
+            if (incoming.Count == 0) return 0;
+
+            var outgoing = new HashSet<WoWObject>();
+            Bots.Grind.LevelBot.LevelBotIncludeTargetsFilter(incoming, outgoing);
+            return outgoing.Count;
         }
 
         /// <summary>
@@ -502,7 +641,7 @@ namespace Bots.VibeGrinder.Supervision
 
             // Exclude the current centroid plus the active blacklist from the search.
             var exclude = ActiveBlacklist();
-            exclude.Add(_current.Centroid);
+            exclude.Add((_current.Centroid, S.GrindRadius));
 
             GrindSpot next = _selector.SelectBest(me.MapId, me.Location, me.Level, exclude, _crowdCaution);
             if (next == null || next.Centroid.DistanceSqr(_current.Centroid) <= S.GrindRadius * S.GrindRadius)
@@ -511,7 +650,7 @@ namespace Bots.VibeGrinder.Supervision
                 return false;
             }
 
-            _blacklist[_current.Centroid] = DateTime.UtcNow.AddMinutes(S.BlacklistMinutes);
+            _blacklist[_current.Centroid] = (DateTime.UtcNow.AddMinutes(S.BlacklistMinutes), S.GrindRadius);
             Logging.Write("[VibeGrinder] Relocating ({0}) → {1}", reason, next);
 
             _synth.Install(next, me.Level);   // Install() calls EnsureProfile() itself (idempotent)

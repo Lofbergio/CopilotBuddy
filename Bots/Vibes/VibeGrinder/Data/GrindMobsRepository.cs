@@ -255,6 +255,48 @@ WHERE s.map_id = @map
             return result;
         }
 
+        /// <summary>
+        /// Count creature SPAWNS within `radius` (box half-width) of `center` whose faction is HOSTILE to the
+        /// player — i.e. would aggro on sight (FactionResolver.HostileFactions). Used to reject a vendor sitting
+        /// in enemy territory: the DB flags some repair/sell NPCs inside opposing-faction camps (e.g. Prospector
+        /// Khazgorm at the Alliance dig site Bael Modan), and a Horde bot would be torn apart trying to shop
+        /// there. Returns 0 if the DB is absent or no factions are hostile.
+        /// </summary>
+        public static int HostileSpawnCountNear(uint mapId, WoWPoint center, float radius, FactionResolver factions)
+        {
+            EnsureInitialized();
+            if (!_isAvailable || factions == null || factions.HostileFactions.Count == 0) return 0;
+
+            const string sql = @"
+SELECT m.faction, COUNT(*) AS cnt
+FROM spawns s JOIN mobs m ON m.entry = s.entry
+WHERE s.map_id = @map
+  AND s.x BETWEEN @minX AND @maxX AND s.y BETWEEN @minY AND @maxY
+GROUP BY m.faction";
+            int total = 0;
+            try
+            {
+                using var cmd = new SQLiteCommand(sql, _connection);
+                cmd.Parameters.AddWithValue("@map", (int)mapId);
+                cmd.Parameters.AddWithValue("@minX", center.X - radius);
+                cmd.Parameters.AddWithValue("@maxX", center.X + radius);
+                cmd.Parameters.AddWithValue("@minY", center.Y - radius);
+                cmd.Parameters.AddWithValue("@maxY", center.Y + radius);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    if (factions.HostileFactions.Contains(reader.GetInt32(0)))
+                        total += reader.GetInt32(1);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.WriteDebug("[GrindMobs] HostileSpawnCountNear error: {0}", ex.Message);
+                return 0;
+            }
+            return total;
+        }
+
         /// <summary>Distinct creature factions present on a map — seeds FactionResolver.</summary>
         public static List<int> DistinctFactionsOnMap(uint mapId)
         {

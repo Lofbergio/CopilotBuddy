@@ -67,6 +67,7 @@ namespace Bots.Grind
         private static readonly WaitTimer _releaseTimer = WaitTimer.FiveSeconds;
         private static WaitTimer _repairCostTimer = new WaitTimer(TimeSpan.FromMinutes(3.0));
         private static ulong _lastRepairCost;
+        private static int _lowDuraPolls;   // consecutive polls reading below the repair threshold (debounce a transient startup 0)
 
         // Root behavior cache
         private PrioritySelector _rootBehavior;
@@ -1343,11 +1344,18 @@ namespace Bots.Grind
                 return false;
             }
 
-            double dura = StyxWoW.Me.LowestDurabilityPercent;
-            double minDura = ProfileManager.CurrentProfile.MinDurability;
-            bool need = Vendors.ForceRepair || dura <= minDura;
-            LogDecision("repair", string.Format("[NeedToRepair] {0} — lowestDurability {1:F0}% <= min {2}%:{3} (force={4})",
-                need ? "YES" : "no", dura, minDura, dura <= minDura, Vendors.ForceRepair));
+            double dura = StyxWoW.Me.LowestDurabilityPercent;          // 0-1 fraction
+            double minDura = ProfileManager.CurrentProfile.MinDurability; // 0-1 fraction
+            bool low = dura <= minDura;
+
+            // Debounce: an equipped item's Durability descriptor occasionally reads 0 on the first poll after
+            // attach (MaxDurability populated, Durability not) → a phantom "broken" that commits a wasted vendor
+            // trip. A real low-durability persists across the ~8s polls; a stale read doesn't. Require two
+            // consecutive low polls before committing; ForceRepair bypasses (explicit intent).
+            _lowDuraPolls = low ? _lowDuraPolls + 1 : 0;
+            bool need = Vendors.ForceRepair || _lowDuraPolls >= 2;
+            LogDecision("repair", string.Format("[NeedToRepair] {0} — durability {1:F0}% <= min {2:F0}%:{3} (confirm {4}/2, force={5})",
+                need ? "YES" : "no", dura * 100, minDura * 100, low, _lowDuraPolls, Vendors.ForceRepair));
             return need;
         }
 
@@ -1675,6 +1683,7 @@ namespace Bots.Grind
             _releaseTimer.Reset();
             _repairCostTimer.Reset();
             _lastRepairCost = 0;
+            _lowDuraPolls = 0;
             ShouldUseSpiritHealer = false;
         }
 
