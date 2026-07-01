@@ -63,6 +63,7 @@ namespace Bots.Grind
         private static Stopwatch _corpseWaitStopwatch = new Stopwatch();
         private static readonly Stopwatch _corpsePointWaitSw = new Stopwatch();   // ghost waiting for a valid CorpsePoint
         private static readonly Stopwatch _shDiagSw = new Stopwatch();            // throttle spirit-healer diagnostics
+        private static readonly Stopwatch _offMeshCorpseSw = new Stopwatch();     // throttle the off-mesh corpse ClickToMove log
         private static bool _diedIndoors;
         private static readonly WaitTimer _releaseTimer = WaitTimer.FiveSeconds;
         private static WaitTimer _repairCostTimer = new WaitTimer(TimeSpan.FromMinutes(3.0));
@@ -347,7 +348,15 @@ namespace Bots.Grind
                         )
                     )
                 ),
-                // Ghost - can't navigate to corpse, use spirit healer
+                // Ghost - corpse is off-mesh (Navigator can't path to it). Two cases:
+                //  (a) a spirit healer IS loaded → use it (walk over + res), the original recovery.
+                //  (b) NO spirit healer loaded → the old code set ShouldUseSpiritHealer=true anyway, which the SH
+                //      branch above then abandoned ("no spirit healer nearby") and re-flagged every tick — an
+                //      infinite corpse↔SH ping-pong that hung the bot ~58 min in an unmeshed canyon (log
+                //      2026-07-01_2236, "Corpse point has no mesh" ×42k). There's no SH to res at, so the ONLY
+                //      recovery is reaching the corpse: ClickToMove STRAIGHT at it. Server click-to-move follows
+                //      terrain without a navmesh, and a ghost has no aggro, so it can walk into the unmeshed pocket;
+                //      the retrieve branch below takes over once within 40yd. Throttled so it can't spam the log.
                 new DecoratorIsNotPoiType(PoiType.Corpse, new Decorator(
                     ctx => CharacterSettings.Instance.RessAtSpiritHealers &&
                            StyxWoW.Me.IsGhost &&
@@ -355,11 +364,26 @@ namespace Bots.Grind
                            StyxWoW.Me.CorpsePoint != WoWPoint.Zero &&   // 0,0,0 = not-yet-read, NOT an unreachable corpse
                            StyxWoW.Me.Location.DistanceSqr(StyxWoW.Me.CorpsePoint) > 40.0 &&
                            !Navigator.CanNavigateFully(StyxWoW.Me.Location, StyxWoW.Me.CorpsePoint),
-                    new Sequence(
-                        new TreeSharp.Action(ctx => Logging.Write("Corpse point has no mesh. MapId: {0} Location: {1}", StyxWoW.Me.MapId, StyxWoW.Me.CorpsePoint)),
-                        new TreeSharp.Action(ctx => Logging.Write("Can't navigate to our corpse. Trying the spirit healer instead! DEBUG: {0}", StyxWoW.Me.CorpsePoint)),
-                        new TreeSharp.Action(ctx => ShouldUseSpiritHealer = true)
-                    )
+                    new TreeSharp.Action(ctx =>
+                    {
+                        if (ObjectManager.CachedUnits.Any(u => u.IsSpiritHealer))
+                        {
+                            if (!ShouldUseSpiritHealer)
+                                Logging.Write("Corpse off-mesh at {0} — a spirit healer is loaded, using it.", StyxWoW.Me.CorpsePoint);
+                            ShouldUseSpiritHealer = true;   // SH branch above handles the walk + res
+                            _offMeshCorpseSw.Reset();
+                            return RunStatus.Success;
+                        }
+                        // No spirit healer to res at — don't ping-pong the flag; walk straight to the corpse.
+                        if (!_offMeshCorpseSw.IsRunning || _offMeshCorpseSw.Elapsed.TotalSeconds >= 5)
+                        {
+                            Logging.Write("Corpse off-mesh at {0} and no spirit healer loaded — ClickToMove straight to the corpse (ghost traverses unmeshed terrain).",
+                                StyxWoW.Me.CorpsePoint);
+                            _offMeshCorpseSw.Restart();
+                        }
+                        WoWMovement.ClickToMove(StyxWoW.Me.CorpsePoint);
+                        return RunStatus.Success;
+                    })
                 )),
                 // Ghost - far from corpse, need to move
                 // HB 4.3.4 smethod_84: IsGhost && Distance > 40
