@@ -124,6 +124,15 @@ namespace Styx.Logic.Combat
             get { return _spellEntry.Category; }
         }
 
+        // ⚠ BROKEN — DO NOT CONSUME (2026-07-02). _spellEntry (row.GetStruct<SpellEntry>) misreads client
+        // memory: the in-game Spell row is NOT the flat Spell.dbc record (only field 0/Id matches; Deadly
+        // Poison read Dispel=1025 vs the file's 4, and a raw dump showed floats/pointers where file columns
+        // should be — see the AuraScanDebug plugin findings). EVERY _spellEntry-backed property here is
+        // garbage: DispelType, School, Category, MaxStackCount, baseLevel, DurationIndex, rangeIndex, the
+        // effect arrays… Properties that WORK use other paths (GetSpellInfo cache: CastTime/MaxRange/
+        // PowerCost; Spells.bin: Name/Rank; ASM: Cooldown; Lua: CanCast). Consumers were rerouted: cleanse
+        // reads UnitDebuff (Lua debuffType), immunity-learning takes school from combat-log payloads.
+        // Fixing this properly means reverse-engineering the client's real in-memory SpellRec layout.
         public WoWDispelType DispelType
         {
             get { return (WoWDispelType)_spellEntry.Dispel; }
