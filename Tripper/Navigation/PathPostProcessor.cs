@@ -12,7 +12,7 @@ namespace Tripper.Navigation
     /// </summary>
     internal static class PathPostProcessor
     {
-        private const float DefaultEdgeDistance = 2.0f;
+        private const float DefaultEdgeDistance = 3.5f;   // keep in sync with Navigator.EdgeDistance (see its comment)
         private const int MaxRecursionDepth = 5;
         private const int MaxRaycastPolys = 512;
 

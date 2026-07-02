@@ -129,9 +129,13 @@ namespace Tripper.Navigation
         /// <summary>
         /// Edge distance threshold for MoveAwayFromEdges post-processing.
         /// Points closer than this to a wall will be moved away.
-        /// Default: 2.0 yards (like HB).
+        /// HB used 2.0 — but waypoint ADVANCE turns toward the next waypoint up to PathPrecision
+        /// (speed×0.15 ≈ 2.1yd mounted) BEFORE the corner point, so the effective corner clearance is
+        /// EdgeDistance − PathPrecision ≈ 0 and a large model (Tauren, mounted) scrapes the wall.
+        /// 3.5 keeps ≥1.4yd through the cut; corridors narrower than 2× still center via the
+        /// midpoint logic in TryMoveAwayFromEdge.
         /// </summary>
-        public float EdgeDistance { get; set; } = 2.0f;
+        public float EdgeDistance { get; set; } = 3.5f;
 
         #endregion
 

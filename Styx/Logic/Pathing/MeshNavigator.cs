@@ -766,6 +766,34 @@ namespace Styx.Logic.Pathing
 
 		#endregion
 
+		#region Internal — corridor clearance (skip / push-ahead shortcut lines)
+
+		// A zero-width navmesh raycast passes within the mmap erosion (~agent radius) of poly edges —
+		// legal for the mesh, too tight for a large model (Tauren, mounted) to steer through. The skip and
+		// push-ahead SHORTCUT lines bypass the MoveAwayFromEdges-processed corners, so they must prove
+		// actual wall clearance, not just visibility ("visible ≠ fits").
+		private const float FollowClearance = 1.25f;   // large-model collision radius + CTM steering slop
+
+		private bool HasWallClearance(uint mapId, Vector3 from, Vector3 to)
+		{
+			var seg = to - from;
+			float len = seg.Length();
+			if (len < 1f)
+				return true;
+			int samples = Math.Min(8, (int)(len / 3f) + 1);
+			for (int i = 1; i <= samples; i++)
+			{
+				var p = from + seg * (i / (float)(samples + 1));
+				float d = TripperNavigator.FindDistanceToWall(mapId, p, FollowClearance, out _);
+				// d < 0 = query failure (no poly under the sample) — stay permissive, the raycast already passed.
+				if (d >= 0f && d < FollowClearance)
+					return false;
+			}
+			return true;
+		}
+
+		#endregion
+
 		#region Internal — push-ahead (HB 6.2.3 method_25/26)
 
 		/// <summary>
@@ -816,7 +844,8 @@ namespace Styx.Logic.Pathing
 			var status = TripperNavigator.RaycastWithExtents(mapId, waypointVec, lookaheadVec, tightExtents,
 				out float hitT, out _, out _, out _);
 
-			return (status.Succeeded && hitT >= 1.0f) ? lookahead : waypoint;
+			return (status.Succeeded && hitT >= 1.0f && HasWallClearance(mapId, waypointVec, lookaheadVec))
+				? lookahead : waypoint;
 		}
 
 		#endregion
@@ -848,6 +877,10 @@ namespace Styx.Logic.Pathing
 				var wpVec = new Vector3(_currentPath[idx].X, _currentPath[idx].Y, _currentPath[idx].Z);
 				bool blocked = TripperNavigator.RaycastBlocked(mapId, playerVec, wpVec, out _, _factionAreaType);
 				if (blocked)
+					break;
+				// Visible ≠ fits: the direct line cuts inside the processed corners it skips — require
+				// real wall clearance or a big/mounted model snags the fence corner the ray legally grazed.
+				if (idx > 1 && !HasWallClearance(mapId, playerVec, wpVec))
 					break;
 				idx++;
 			}
