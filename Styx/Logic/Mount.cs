@@ -381,77 +381,104 @@ namespace Styx.Logic
 				}
 			}
 
-			Lua.DoString(string.Format("CallCompanion('MOUNT', {0})", GetMountIndex(mountName)));
+			// EVENT-DRIVEN mount wait (the LuaEventWait pattern — attach, pump ProcessPendingEvents, detach).
+			// The client TELLS us the cast lifecycle the instant it happens: START (in flight — wait
+			// confidently), FAILED/INTERRUPTED (resolve immediately with the real reason — no grace-window
+			// guessing), UI_ERROR_MESSAGE (the exact red error, e.g. "Spell is not ready yet" = a GCD race).
+			// Memory reads still answer the STATE questions (Mounted, Combat); events answer the EDGES.
+			bool castStarted = false, castEnded = false;
+			string failReason = null, redError = null;
 
-			// Smart wait — distinguish "mount cast in flight" (keep waiting) from "cast never STARTED"
-			// (a race ate it: GCD from a just-fired buff, another cast, a server rejection) and from
-			// "cast started then died" (interrupted by damage/movement). The old blind !Mounted loop
-			// couldn't tell these apart, so a race-lost attempt burned the full 6.5s in silence. Every
-			// failure path LOGS WHY (races must be visible) and sets a SHORT retry cooldown.
-			int startTime = Environment.TickCount;
-			string lastError = me.LastRedErrorMessage;
-			bool sawCast = false;
-			int castEndedAt = 0;
+			LuaEventHandlerDelegate onStart = (s, e) =>
+			{ if (e.Args.Length > 0 && (string)e.Args[0] == "player") { castStarted = true; } };
+			LuaEventHandlerDelegate onFail = (s, e) =>
+			{ if (e.Args.Length > 0 && (string)e.Args[0] == "player") { failReason = e.EventName; castEnded = true; } };
+			LuaEventHandlerDelegate onStop = (s, e) =>
+			{ if (e.Args.Length > 0 && (string)e.Args[0] == "player") { castEnded = true; } };
+			LuaEventHandlerDelegate onError = (s, e) =>
+			{ if (e.Args.Length > 0) redError = e.Args[0] as string; };
 
-			while (!me.Mounted && Environment.TickCount - startTime < 6500)
+			Lua.Events.AttachEvent("UNIT_SPELLCAST_START", onStart);
+			Lua.Events.AttachEvent("UNIT_SPELLCAST_FAILED", onFail);
+			Lua.Events.AttachEvent("UNIT_SPELLCAST_INTERRUPTED", onFail);
+			Lua.Events.AttachEvent("UNIT_SPELLCAST_STOP", onStop);
+			Lua.Events.AttachEvent("UI_ERROR_MESSAGE", onError);
+			try
 			{
-				if (me.Combat)
-				{
-					Logging.WriteDebug("[Mount] mount attempt aborted — entered combat.");
-					_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(1);
-					return false;
-				}
+				Lua.DoString(string.Format("CallCompanion('MOUNT', {0})", GetMountIndex(mountName)));
 
-				if (!string.IsNullOrEmpty(lastError) && me.LastRedErrorMessage != lastError)
+				int startTime = Environment.TickCount;
+				int endedAt = 0;
+				while (!me.Mounted && Environment.TickCount - startTime < 6500)
 				{
-					Logging.Write("You can't mount here.");
-					AddCantMountSpot(me.Location);
-					_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(1);
-					return false;
-				}
+					LuaEvents.ProcessPendingEvents();   // pump — handlers above fire on THIS thread, now
 
-				if (me.IsCasting)
-				{
-					sawCast = true;           // mount cast is genuinely in flight — wait it out
-					castEndedAt = 0;
-				}
-				else if (sawCast)
-				{
-					// Cast finished; give me.Mounted a moment to reflect before calling it interrupted.
-					if (castEndedAt == 0)
-						castEndedAt = Environment.TickCount;
-					else if (Environment.TickCount - castEndedAt > 800)
+					if (me.Combat)
 					{
-						Logging.Write("[Mount] mount cast ended without mounting — interrupted (hit/moved)? Retrying in 1s.");
+						Logging.WriteDebug("[Mount] mount attempt aborted — entered combat.");
 						_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(1);
 						return false;
 					}
+
+					if (failReason != null)
+					{
+						// The client told us exactly what happened — no inference. A red error naming a
+						// location problem also poisons the spot like the old heuristic did.
+						Logging.Write("[Mount] mount cast {0}{1} — retrying in 1s.",
+							failReason == "UNIT_SPELLCAST_INTERRUPTED" ? "INTERRUPTED (hit/moved)" : "FAILED",
+							string.IsNullOrEmpty(redError) ? "" : $" ('{redError}')");
+						if (redError != null && redError.IndexOf("mount", StringComparison.OrdinalIgnoreCase) >= 0
+							&& redError.IndexOf("here", StringComparison.OrdinalIgnoreCase) >= 0)
+							AddCantMountSpot(me.Location);
+						_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(1);
+						return false;
+					}
+
+					if (!castStarted && Environment.TickCount - startTime > 600)
+					{
+						// RACE MARKER: CallCompanion went out but the client never began a cast and never
+						// errored. The MountUp defer-guard should pre-empt GCD races; anything here is new.
+						Logging.Write("[Mount] mount cast never STARTED ({0}ms) — GCD={1}, casting={2}, redError='{3}'. Retrying in 1s.",
+							Environment.TickCount - startTime, SpellManager.GlobalCooldown, me.IsCasting, redError ?? "");
+						_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(1);
+						return false;
+					}
+
+					if (castEnded && !me.Mounted)
+					{
+						// STOP fired (cast completed or was cut) — give me.Mounted a beat to reflect.
+						if (endedAt == 0) endedAt = Environment.TickCount;
+						else if (Environment.TickCount - endedAt > 800)
+						{
+							Logging.Write("[Mount] mount cast ended without mounting — retrying in 1s.");
+							_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(1);
+							return false;
+						}
+					}
+
+					StyxWoW.Sleep(30);
 				}
-				else if (Environment.TickCount - startTime > 600)
+
+				if (!me.Mounted)
 				{
-					// RACE CONDITION MARKER: CallCompanion went out but no cast ever began. The usual
-					// culprit is the GCD of a spell cast moments earlier (pre-buff shield etc.) — the
-					// MountUp defer-guard should catch those; anything landing here is a new race.
-					Logging.Write("[Mount] mount cast never STARTED ({0}ms) — GCD={1}, casting={2}, lastError='{3}'. Retrying in 1s.",
-						Environment.TickCount - startTime, SpellManager.GlobalCooldown, me.IsCasting, me.LastRedErrorMessage);
-					_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(1);
+					Logging.Write("[Mount] not mounted after 6.5s — retrying in 5s.");
+					_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(5);
 					return false;
 				}
 
-				StyxWoW.Sleep(100);
+				// Mount succeeded — any stale cant-mount spots near this location are now invalid.
+				// (e.g. spots recorded during a previous combat pass at this exact location)
+				RemoveCantMountSpotsNear(me.Location, 10f);
+				return true;
 			}
-
-			if (!me.Mounted)
+			finally
 			{
-				Logging.Write("[Mount] not mounted after 6.5s despite a completed-looking cast — retrying in 5s.");
-				_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(5);
-				return false;
+				Lua.Events.DetachEvent("UNIT_SPELLCAST_START", onStart);
+				Lua.Events.DetachEvent("UNIT_SPELLCAST_FAILED", onFail);
+				Lua.Events.DetachEvent("UNIT_SPELLCAST_INTERRUPTED", onFail);
+				Lua.Events.DetachEvent("UNIT_SPELLCAST_STOP", onStop);
+				Lua.Events.DetachEvent("UI_ERROR_MESSAGE", onError);
 			}
-
-			// Mount succeeded — any stale cant-mount spots near this location are now invalid.
-			// (e.g. spots recorded during a previous combat pass at this exact location)
-			RemoveCantMountSpotsNear(me.Location, 10f);
-			return true;
 		}
 
 		/// <summary>
