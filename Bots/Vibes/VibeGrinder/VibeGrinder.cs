@@ -1346,6 +1346,7 @@ namespace Bots.VibeGrinder
             Navigator.PathPrecision = System.Math.Clamp(me.MovementInfo.CurrentSpeed * 0.15f, 1.5f, 10f);
             if (_restGovernor != null) _restGovernor.Suppressed = _vendorRun;   // no resting mid-errand (the routine's pull still runs)
             _restGovernor?.Pulse(me);
+            if (_supervisor != null) _supervisor.RestingLatch = _resting;   // stall watchdog can't see a no-consumable rest otherwise
             _supervisor?.Pulse();
 
             // ENGAGING hysteresis (see CLAUDE.md "Stateful inter-spot movement"): while in combat or holding a

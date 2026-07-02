@@ -58,6 +58,15 @@ namespace Bots.VibeGrinder.Supervision
         /// <summary>Set by VibeGrinder: drops its pull/peel/rest/vendor latches when a hard stall forces an escape.</summary>
         public System.Action OnForceEscape { get; set; }
 
+        /// <summary>
+        /// Mirrors VibeGrinder's rest latch (set each Pulse). The zero-consumable design rests by SITTING with
+        /// NO Food/Drink aura, so the soft stall watchdog's aura exemptions couldn't see it — a natural-regen
+        /// rest accumulated "12s no-move" and fired a scary STALL diagnostic the instant rest exited (log
+        /// 2026-07-02_1403: rest EXIT → ACQUIRE → STALL within 4ms). The HARD watchdog deliberately does NOT
+        /// honor this (no exemptions, ever — rest is capped at 60s, far under its 10min fuse).
+        /// </summary>
+        public bool RestingLatch { get; set; }
+
         // Water-trap detector (see SwimTrapCheck / RecordSwimBlocked). Swim-blocks = commit→swim cycles at the
         // current spot (the bot chasing a mob into water); trips a fast relocate only if we've landed ZERO kills
         // here — so a workable shoreline camp (any kill) is never abandoned. Both reset on install.
@@ -324,6 +333,7 @@ namespace Bots.VibeGrinder.Supervision
 
             bool exempt = me.IsDead || me.IsGhost || me.Combat || me.Mounted
                           || me.HasAura("Food") || me.HasAura("Drink")
+                          || RestingLatch
                           || OnServiceRun();
             if (exempt)
             {
