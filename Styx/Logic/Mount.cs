@@ -342,9 +342,20 @@ namespace Styx.Logic
 			if (!CanMount())
 				return false;
 
+			// Wait for the character to actually STOP, not a fixed sleep — MoveStop isn't instant (the char
+			// glides a tick or two) and CallCompanion issued mid-glide fails with "Can't do that while moving"
+			// (caught live by the event-driven wait, log 2026-07-02_1158 12:01:44). Bounded so a forced-move
+			// state can't wedge us; on timeout we bail and retry next tick rather than cast into a known fail.
 			WoWMovement.MoveStop();
+			int stopWait = Environment.TickCount;
+			while (me.IsMoving && Environment.TickCount - stopWait < 1000)
+				StyxWoW.Sleep(50);
+			if (me.IsMoving)
+			{
+				Logging.WriteDebug("[Mount] still moving 1s after MoveStop — deferring mount to next tick.");
+				return false;
+			}
 			Logging.Write("Mounting: {0}{1}", effectiveMountName, canFly ? " [flying]" : "");
-			StyxWoW.Sleep(200);
 
 			// The 10s anti-spam timer arms on SUCCESS only. A race-lost/failed attempt sets the short
 			// _nextMountAttemptAt cooldown inside DoMount instead, so we retry in ~1s, not 10.
