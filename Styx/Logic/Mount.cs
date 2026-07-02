@@ -81,6 +81,11 @@ namespace Styx.Logic
 		private static DateTime _dismountIssuedAt = DateTime.MinValue;
 		private static bool DismountPending => (DateTime.UtcNow - _dismountIssuedAt).TotalMilliseconds < 1500;
 
+		// One-step-lookahead tuning (see MountUp): a target this close means the next action is a pull.
+		private const float ImminentFightRange = 45f;
+		// Walk 7yd/s vs ~3.5s mount cast + ~11yd/s ride: break-even ≈ 60yd. Shorter trips: stay on foot.
+		private const float MinMountTravelDistance = 60f;
+
 		public static void Dismount(string reason)
 		{
 			LocalPlayer? me = Me;
@@ -253,6 +258,28 @@ namespace Styx.Logic
 			// the random mount + log "Auto-detected ..." every travel tick while mounted (the [D] spam flood).
 			if (me.Mounted || me.Dead || me.IsGhost)
 				return false;
+
+			// --- One-step lookahead: don't start a ~3s commitment the very next action will cancel ---
+			// (1) Fight imminent: a Kill POI, or an engageable target already inside ImminentFightRange —
+			//     the first pull cast auto-dismounts us, so mounting here is mount → ride 10yd → knocked off.
+			//     Also keeps a vendor-run bot on foot while TransitPeel still has a path hostile to clear.
+			//     Out-of-combat only: in combat the regular mount is blocked anyway and the travel-form flee
+			//     path must stay available.
+			if (!me.Combat)
+			{
+				WoWUnit? fu = Targeting.Instance.FirstUnit;
+				if (BotPoi.Current.Type == PoiType.Kill
+					|| (fu != null && fu.IsAlive && fu.Distance < ImminentFightRange))
+					return false;
+			}
+			// (2) Trip too short to pay back the mount cast: walking ~7yd/s vs ~3.5s cast + ~11yd/s ride
+			//     breaks even near 60yd — below that, mounting LOSES time (and looks bot-dumb doing it).
+			if (_currentDestinationRetriever != null)
+			{
+				WoWPoint dest = _currentDestinationRetriever();
+				if (dest != WoWPoint.Empty && me.Location.Distance(dest) < MinMountTravelDistance)
+					return false;
+			}
 
 			// Auto-detect mount if enabled
 			AutoDetectMount();
@@ -639,25 +666,12 @@ namespace Styx.Logic
 			WoWPoint location = me.Location;
 			float distance = location.Distance(travelingTo);
 
-			// If at a hotspot and there's a target nearby
-			if (BotPoi.Current.Type == PoiType.Hotspot)
-			{
-				if (distance <= 100f && Targeting.Instance.FirstUnit != null)
-				{
-					Logging.WriteDebug("Dismount to pull near hotspot.");
-					return true;
-				}
-			}
-
-			// If at a kill POI and we're close
-			if (BotPoi.Current.Type == PoiType.Kill)
-			{
-				if (distance <= CharacterSettings.Instance.PullDistance)
-				{
-					Logging.WriteDebug("Dismount to kill bot poi.");
-					return true;
-				}
-			}
+			// NO explicit dismount for pulls (the old Kill-POI ≤PullDistance and hotspot-with-target ≤100yd
+			// branches) — WotLK auto-dismounts on the first spellcast, so like a real player the bot rides all
+			// the way to cast range and the PULL CAST itself dismounts it (the hotspot branch even dropped us
+			// 100yd out and walked the rest). The combat-attacker branch above stays: jumped while mounted and
+			// stationary, with nothing castable (OOM melee fallback), the cast path may never fire — that one
+			// needs the button. Interaction dismounts below stay too (can't loot/vendor mounted).
 
 			// Dismount for interacting with objects/NPCs
 			if (BotPoi.Current.Type == PoiType.Loot || 
