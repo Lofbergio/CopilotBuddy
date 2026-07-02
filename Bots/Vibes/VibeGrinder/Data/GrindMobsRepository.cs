@@ -297,6 +297,53 @@ GROUP BY m.faction";
             return total;
         }
 
+        /// <summary>
+        /// All hostile (player-attacking faction) spawns of meaningful level within a box — the trek-safety
+        /// corridor feed (TrekSafety). minLevel floors out greys that can't hurt us; NO upper level bound
+        /// (reds are exactly what we're looking for). rank included so elites can be weighted.
+        /// </summary>
+        public static List<MobSpawn> QueryHostileSpawnsNear(uint mapId, WoWPoint center, float radius,
+            FactionResolver factions, int minLevel)
+        {
+            EnsureInitialized();
+            var result = new List<MobSpawn>();
+            if (!_isAvailable || factions == null || factions.HostileFactions.Count == 0) return result;
+
+            const string sql = @"
+SELECT s.x, s.y, s.z, m.entry, m.max_level, m.rank, m.faction
+FROM spawns s JOIN mobs m ON m.entry = s.entry
+WHERE s.map_id = @map
+  AND s.x BETWEEN @minX AND @maxX AND s.y BETWEEN @minY AND @maxY
+  AND m.max_level >= @minLevel";
+            try
+            {
+                using var cmd = new SQLiteCommand(sql, _connection);
+                cmd.Parameters.AddWithValue("@map", (int)mapId);
+                cmd.Parameters.AddWithValue("@minX", center.X - radius);
+                cmd.Parameters.AddWithValue("@maxX", center.X + radius);
+                cmd.Parameters.AddWithValue("@minY", center.Y - radius);
+                cmd.Parameters.AddWithValue("@maxY", center.Y + radius);
+                cmd.Parameters.AddWithValue("@minLevel", minLevel);
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    int faction = reader.GetInt32(6);
+                    if (!factions.HostileFactions.Contains(faction)) continue;
+                    result.Add(new MobSpawn(
+                        (uint)reader.GetInt32(3),
+                        new WoWPoint(reader.GetFloat(0), reader.GetFloat(1), reader.GetFloat(2)),
+                        reader.GetInt32(4),
+                        reader.GetInt32(5),
+                        faction));
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.WriteDebug("[GrindMobs] QueryHostileSpawnsNear error: {0}", ex.Message);
+            }
+            return result;
+        }
+
         /// <summary>Distinct creature factions present on a map — seeds FactionResolver.</summary>
         public static List<int> DistinctFactionsOnMap(uint mapId)
         {

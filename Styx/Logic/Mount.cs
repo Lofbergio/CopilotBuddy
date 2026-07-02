@@ -264,25 +264,53 @@ namespace Styx.Logic
 				return false;
 
 			// --- One-step lookahead: don't start a ~3s commitment the very next action will cancel ---
-			// (1) Fight imminent: a Kill POI, or an engageable target already inside ImminentFightRange —
-			//     the first pull cast auto-dismounts us, so mounting here is mount → ride 10yd → knocked off.
-			//     Also keeps a vendor-run bot on foot while TransitPeel still has a path hostile to clear.
-			//     Out-of-combat only: in combat the regular mount is blocked anyway and the travel-form flee
-			//     path must stay available.
+			// ENGAGE vs EVADE classifier (the trek-safety story): a target we CAN fight → stay on foot and
+			// take it deliberately; a hostile we can NEVER beat (red ≥ our level+3, or a relevant elite) near
+			// its SERVER aggro bubble → the OPPOSITE: mount NOW — speed is the only protection, and evade
+			// overrides both the stay-afoot gate and the short-trip gate. TrekSafety bends routes around
+			// STATIC red/pack spawns; this live check covers roamers and anything the DB marks missed.
+			bool evadeDanger = false;
 			if (!me.Combat)
 			{
-				WoWUnit? fu = Targeting.Instance.FirstUnit;
-				if (BotPoi.Current.Type == PoiType.Kill
-					|| (fu != null && fu.IsAlive && fu.Distance < ImminentFightRange))
-					return false;
+				foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
+				{
+					if (u == null || !u.IsAlive || u.IsPlayer || u.IsTotem) continue;
+					bool red = u.Level >= me.Level + 3;
+					bool scaryElite = u.Elite && u.Level >= me.Level - 2;
+					if (!red && !scaryElite) continue;
+					float bubble = u.GetAggroRange(me);      // 0 when not hostile to us (reaction gate inside)
+					if (bubble <= 0f) continue;
+					if (u.Distance < bubble + 10f) { evadeDanger = true; break; }
+				}
 			}
-			// (2) Trip too short to pay back the mount cast: walking ~7yd/s vs ~3.5s cast + ~11yd/s ride
-			//     breaks even near 60yd — below that, mounting LOSES time (and looks bot-dumb doing it).
-			if (_currentDestinationRetriever != null)
+
+			if (!evadeDanger)
 			{
-				WoWPoint dest = _currentDestinationRetriever();
-				if (dest != WoWPoint.Empty && me.Location.Distance(dest) < MinMountTravelDistance)
-					return false;
+				// (1) Fight imminent: a Kill POI, or an engageable target already inside ImminentFightRange —
+				//     the first pull cast auto-dismounts us, so mounting here is mount → ride 10yd → knocked
+				//     off. Also keeps a vendor-run bot on foot while TransitPeel still has a hostile to clear.
+				//     Out-of-combat only: in combat the regular mount is blocked anyway and the travel-form
+				//     flee path must stay available.
+				if (!me.Combat)
+				{
+					WoWUnit? fu = Targeting.Instance.FirstUnit;
+					if (BotPoi.Current.Type == PoiType.Kill
+						|| (fu != null && fu.IsAlive && fu.Distance < ImminentFightRange))
+						return false;
+				}
+				// (2) Trip too short to pay back the mount cast: walking ~7yd/s vs ~3.5s cast + ~11yd/s ride
+				//     breaks even near 60yd — below that, mounting LOSES time (and looks bot-dumb doing it).
+				if (_currentDestinationRetriever != null)
+				{
+					WoWPoint dest = _currentDestinationRetriever();
+					if (dest != WoWPoint.Empty && me.Location.Distance(dest) < MinMountTravelDistance)
+						return false;
+				}
+			}
+			else if (DateTime.UtcNow >= _nextMountDeferLogAt)
+			{
+				Logging.WriteDebug("[Mount] danger nearby (red/elite in aggro range) — mounting to evade.");
+				_nextMountDeferLogAt = DateTime.UtcNow.AddSeconds(2);
 			}
 
 			// Race guard: a spell that JUST fired (e.g. the routine's pre-buff shield, 133ms before the mount

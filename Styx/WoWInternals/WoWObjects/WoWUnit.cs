@@ -1243,25 +1243,18 @@ namespace Styx.WoWInternals.WoWObjects
             if (reaction >= WoWUnitReaction.Neutral || Dead)
                 return 0f;
 
-            float range = 20f;
-            int levelDiff = Level - to.Level;
-            range += levelDiff * 1f;
+            // SERVER TRUTH — verified against the local AzerothCore source (Creature::GetAggroRange,
+            // 2026-07-02): base 20yd at equal level, +1yd per level the mob is ABOVE the target (diff
+            // capped at 25 → 45yd max), -1yd per level below (floored at 5yd), × Rate.Creature.Aggro
+            // (1 on this server), plus detect-range auras (mob's MOD_DETECT_RANGE, target's
+            // MOD_DETECTED_RANGE — the old code had these two swapped). The old elite +3 / beast -3 /
+            // mechanical +3 modifiers were wowwiki folklore with NO server counterpart — beast -3
+            // UNDERESTIMATED most open-world mobs by 3yd, the wrong direction for a safety model.
+            // Server-side CanStartAttack additionally requires LoS and Z-separation ≤ ~3yd.
+            float range = 20f + Math.Min(Level - to.Level, 25);
 
-            if (Elite)
-                range += 3f;
-
-            switch (CreatureType)
-            {
-                case WoWCreatureType.Beast:
-                    range -= 3f;
-                    break;
-                case WoWCreatureType.Mechanical:
-                    range += 3f;
-                    break;
-            }
-
-            range += GetAllAuras().GetTotalAuraModifier(WoWApplyAuraType.ModDetectedRange);
-            range += to.GetAllAuras().GetTotalAuraModifier(WoWApplyAuraType.ModDetectRange);
+            range += GetAllAuras().GetTotalAuraModifier(WoWApplyAuraType.ModDetectRange);
+            range += to.GetAllAuras().GetTotalAuraModifier(WoWApplyAuraType.ModDetectedRange);
 
             return Math.Max(5f, Math.Min(range, 45f));
         }

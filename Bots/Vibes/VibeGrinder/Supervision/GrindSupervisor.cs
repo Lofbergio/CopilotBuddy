@@ -147,6 +147,13 @@ namespace Bots.VibeGrinder.Supervision
             _killsSinceInstall = 0;
             _preSelected = null;   // a new spot invalidates any pre-pick made from the old one
             _nextPreSelectAt = DateTime.UtcNow.AddSeconds(60);
+
+            // Trek safety: mark red/pack aggro bubbles along the travel leg to this spot so the navigator
+            // routes AROUND them (soft cost) instead of beelining through lethal country. Every relocate
+            // funnels through OnInstalled, so this covers initial install, depletion, water-trap, hard-stall.
+            var me2 = StyxWoW.Me;
+            if (me2 != null && me2.IsValid)
+                TrekSafety.MarkLeg(_factions, me2.Location, spot.Centroid, me2.Level, me2.MapId, "grind leg");
         }
 
         public void RecordKill()

@@ -1108,6 +1108,8 @@ namespace Bots.VibeGrinder
                     _vendorWatchdog.Restart();
                     Logging.Write(System.Drawing.Color.Khaki,
                         "[VibeGrinder/Vendor] COMMIT — {0} run; grind/rest/roam suspended until done.", BotPoi.Current.Type);
+                    // Trek safety for the errand leg: bend the route around red/pack aggro bubbles.
+                    Supervision.TrekSafety.MarkLeg(_factions, me.Location, BotPoi.Current.Location, me.Level, me.MapId, "vendor leg");
                 }
                 return _vendorRun;
             }
@@ -1139,6 +1141,14 @@ namespace Bots.VibeGrinder
             _vendorHoldUntil = DateTime.MinValue;
             _vendorWatchdog.Reset();
             _vendorCheckedEntry = 0;
+            // Trek safety for the RETURN leg: re-mark hazards from here back to the grind spot (the vendor-leg
+            // marks are for a route we're no longer on). Falls back to a plain clear when no spot is installed.
+            var me = StyxWoW.Me;
+            var area = StyxWoW.AreaManager?.CurrentGrindArea;
+            if (me != null && area?.CurrentHotSpot != null)
+                Supervision.TrekSafety.MarkLeg(_factions, me.Location, area.CurrentHotSpot.Position, me.Level, me.MapId, "return leg");
+            else
+                Supervision.TrekSafety.Clear();
         }
 
         /// <summary>
@@ -1315,6 +1325,7 @@ namespace Bots.VibeGrinder
             }
             Vendors.OnVendorItems -= OnVendorSweep;
             Vendors.OnMailItems -= OnMailSweep;
+            Supervision.TrekSafety.Clear();   // restore any hazard-marked navmesh polys
             _synth?.RestoreCharacterSettings();   // undo the global FoodAmount/DrinkAmount seeding
             GrindMobsRepository.Shutdown();   // release the DB handle so a later Start re-opens cleanly
             Bots.DungeonBuddy.Avoidance.WorldObstacleManager.Shutdown();
