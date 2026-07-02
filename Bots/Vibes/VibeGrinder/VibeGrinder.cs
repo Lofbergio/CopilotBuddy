@@ -45,6 +45,7 @@ namespace Bots.VibeGrinder
         private double _committedLastDist = double.MaxValue;   // last distance to committed mob (progress watchdog)
         private readonly System.Diagnostics.Stopwatch _selectRetry = new System.Diagnostics.Stopwatch();
         private readonly System.Diagnostics.Stopwatch _safeRest = new System.Diagnostics.Stopwatch();
+        private readonly System.Diagnostics.Stopwatch _restMoveSw = new System.Diagnostics.Stopwatch();   // safe-spot walk cap (see SafeRestReposition)
         private readonly System.Diagnostics.Stopwatch _surfaceLogSw = new System.Diagnostics.Stopwatch();   // throttle incidental-hostile log
         private readonly System.Diagnostics.Stopwatch _eliteVetoLogSw = new System.Diagnostics.Stopwatch();   // throttle elite-veto log
         private bool _resting;                  // committed rest state (sticky: enter at Min*, exit at RestDonePct/cap)
@@ -780,10 +781,24 @@ namespace Bots.VibeGrinder
                 Logging.Write(System.Drawing.Color.Khaki,
                     "[VibeGrinder/Rest] safe-spot pick: backing off {0:F0}yd from {1} (d={2:F0})",
                     me.Location.Distance(_restSpot), nearest.Name, nearest.Distance);
+                _restMoveSw.Restart();
             }
 
             // Drive to the committed spot (exclusive — owns movement so nothing below interleaves).
-            if (me.Location.Distance(_restSpot) <= 3f)
+            // Arrival is 2D: the spot is a navmesh path endpoint, but nav z vs live z can still disagree by a
+            // couple of yards on slopes — a 3D check then never fires and we shove MoveTo forever (the
+            // stuck-jig-on-open-ground bug). The 8s cap is the documented backstop: whatever goes wrong with
+            // the walk, we stop repositioning and rest where we stand rather than fight the stuck handler.
+            if (_restMoveSw.Elapsed.TotalSeconds > 8)
+            {
+                if (me.IsMoving) WoWMovement.MoveStop();
+                _restSpot = WoWPoint.Empty;
+                _restParked = true;
+                Logging.Write(System.Drawing.Color.Khaki,
+                    "[VibeGrinder/Rest] safe-spot walk capped at 8s — resting here instead.");
+                return RunStatus.Failure;
+            }
+            if (me.Location.Distance2D(_restSpot) <= 3f)
             {
                 if (me.IsMoving) WoWMovement.MoveStop();
                 _restSpot = WoWPoint.Empty;
@@ -946,7 +961,16 @@ namespace Bots.VibeGrinder
             float scale = (danger + 12f) / len;
             WoWPoint away = new WoWPoint(me.Location.X + dx * scale, me.Location.Y + dy * scale, me.Location.Z);
             WoWPoint[] path = Navigator.GeneratePath(me.Location, away);
-            if (path != null && path.Length > 0) { spot = away; return true; }
+            // Commit to the PATH'S endpoint, not the raw vector point: `away` carries OUR Z, and on a slope the
+            // real ground 42yd out sits several yards higher/lower — the 3D arrival check then never fires and
+            // Navigator.MoveTo re-issues into a stationary position until the stuck handler jigs on OPEN ground
+            // (log 2026-07-02_1209, 9 stuck events on a Arathi hillside). The path end is on-mesh, correct-Z,
+            // and reachable by construction. An endpoint that barely leaves our position = effectively boxed in.
+            if (path != null && path.Length > 0)
+            {
+                WoWPoint reachable = path[path.Length - 1];
+                if (me.Location.Distance2D(reachable) > 5f) { spot = reachable; return true; }
+            }
             spot = WoWPoint.Empty;
             return false;
         }
