@@ -126,11 +126,17 @@ namespace Bots.VibeGrinder
                         // Transit discipline (only while OnVendorRun): don't detour to loot corpses on the
                         // way to a vendor — stay moving, out of the danger corridor sooner (drops are
                         // grabbed later when grinding).
-                        // Never loot while still in combat: a mob that FLED keeps us in combat, but CombatBehavior
-                        // returns Failure for the tick it's out of cast range — without this gate a pending loot
-                        // of a PREVIOUS kill's corpse slips through underneath and drags us off the runner before
-                        // we finish it (the "looted the dead mob while the 2nd fled" bug). Finish the fight first.
-                        new Decorator(ctx => !OnVendorRun() && !StyxWoW.Me.Combat, LevelBot.CreateLootBehavior()),
+                        // Never loot while a fight is still LIVE: a mob that FLED keeps us in combat, but
+                        // CombatBehavior returns Failure for the tick it's out of cast range — without this gate a
+                        // pending loot of a PREVIOUS kill's corpse slips through underneath and drags us off the
+                        // runner before we finish it (the "looted the dead mob while the 2nd fled" bug). But the
+                        // raw Me.Combat flag LINGERS ~5.5s after the last kill (server leave-combat timer), and for
+                        // that window loot was blocked, CombatBehavior idled, and Roam sprinted toward the hotspot
+                        // — after a "spot depleted" pre-relocate that hotspot is 100yd+ out, so the bot visibly ran
+                        // AWAY from its unlooted corpses and doubled back (log 2026-07-02_1601 16:06:35→:41). Fight
+                        // is over = nothing alive has us targeted (a fled runner still targets us → still blocked).
+                        new Decorator(ctx => !OnVendorRun() && (!StyxWoW.Me.Combat || NoLiveAttackers()),
+                            LevelBot.CreateLootBehavior()),
                         // ...and during a VENDOR RUN ONLY, deliberately single-pull the most isolated hostile
                         // in pull range instead of body-pulling blind into a pack. Vendor-only is load-bearing:
                         // on a vendor run Roam's find-target + ApplyPullCommitment are DISABLED (vendor POI is
@@ -158,10 +164,12 @@ namespace Bots.VibeGrinder
                         new Decorator(ctx => !Engaging,
                             _supervisor != null ? _supervisor.RelocationCheck() : new Action(ctx => RunStatus.Failure)),
                         //  (2) EngageHold: during a TRANSIENT no-target gap mid-engage (commit dropped this tick,
-                        //      not yet in combat), OWN the tick so Roam's hotspot-move can't bolt toward the far
-                        //      new spot — the travel↔kill ping-pong. FirstUnit present → fall through so Roam
-                        //      approaches it normally (route-killing untouched). Not engaging → fall through to travel.
-                        new Decorator(ctx => Engaging && Targeting.Instance.FirstUnit == null && !StyxWoW.Me.Combat,
+                        //      not yet in combat — OR the post-kill combat-flag linger, when nothing above owns the
+                        //      tick), OWN the tick so Roam's hotspot-move can't bolt toward the far new spot — the
+                        //      travel↔kill ping-pong, and the linger-window sprint-and-mount-attempt (16:06:35, log
+                        //      2026-07-02_1601). FirstUnit present → fall through so Roam approaches it normally
+                        //      (route-killing untouched). Not engaging → fall through to travel.
+                        new Decorator(ctx => Engaging && Targeting.Instance.FirstUnit == null,
                             new Action(ctx => RunStatus.Success)),
                         LevelBot.CreateRoamBehavior(),
                         new Action(ctx => RunStatus.Success) // idle
@@ -1229,6 +1237,21 @@ namespace Bots.VibeGrinder
         /// pull the nearest CLEAN hostile and refuse camped ones. WHO pulls is unchanged: TransitPeel on a
         /// vendor run, ApplyPullCommitment otherwise.
         /// </summary>
+        // "The fight is actually over" while Me.Combat still lingers (server leave-combat timer holds the
+        // flag ~5.5s past the last kill): nothing alive has us or the pet targeted. A fled runner still
+        // targets us, so the fled-mob loot protection this refines stays intact. Only scanned while the
+        // combat flag is up (short-circuited by the caller), so the OM sweep costs nothing in normal ticks.
+        private static bool NoLiveAttackers()
+        {
+            ulong meGuid = StyxWoW.Me.Guid;
+            ulong petGuid = StyxWoW.Me.GotAlivePet && StyxWoW.Me.Pet != null ? StyxWoW.Me.Pet.Guid : 0;
+            foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
+                if (u != null && u.IsAlive
+                    && (u.CurrentTargetGuid == meGuid || (petGuid != 0 && u.CurrentTargetGuid == petGuid)))
+                    return false;
+            return true;
+        }
+
         private void IncludeNearbyHostiles(System.Collections.Generic.List<WoWObject> incoming,
                                            System.Collections.Generic.HashSet<WoWObject> outgoing)
         {
