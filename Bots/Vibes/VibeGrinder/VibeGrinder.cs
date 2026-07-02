@@ -664,12 +664,12 @@ namespace Bots.VibeGrinder
                 if (!valid) { _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue; }
             }
 
-            // Acquire: commit to the NEAREST acceptable candidate, not the highest-scored one. Highest score =
-            // most isolated, which biases FAR — and walking across the area to a far straggler drags us through
-            // packs (the Sunscale/Kolkar pull that killed us) and blind-body-pulls things en route (the raptor
-            // we "didn't see"). The crowd weighting already REMOVED hard packs and BURIED neutrals-near-hostiles
-            // from the list, so nearest-of-what's-left is a close, single-pullable mob. Fall back to top score
-            // only if everything is buried (so we still act rather than idle).
+            // Acquire: commit to the NEAREST acceptable candidate (tiered — see below), not the highest-scored
+            // one. Highest score = most isolated, which biases FAR — and walking across the area to a far
+            // straggler drags us through packs (the Sunscale/Kolkar pull that killed us) and blind-body-pulls
+            // things en route (the raptor we "didn't see"). The crowd weighting already REMOVED hard packs and
+            // BURIED neutrals-near-hostiles from the list, so nearest-of-what's-left is a close, single-pullable
+            // mob. Fall back to top score only if everything is buried (so we still act rather than idle).
             // Rest BEFORE pulling: don't START a new pull while resting OR while we need to. Both are required:
             // RestNeeded catches the entry tick (before _resting latches), and _resting catches the RECOVERY band
             // — the rest latch is sticky with hysteresis (enters at MinHealth, exits at a higher done-band), so
@@ -691,14 +691,25 @@ namespace Bots.VibeGrinder
                 for (int attempt = 0; attempt < 3 && pick == null; attempt++)
                 {
                     double nearest = double.MaxValue;
+                    int pickTier = int.MaxValue;
                     for (int i = 0; i < units.Count; i++)
                     {
                         var c = units[i];
                         if (c.Object == null || c.Score < buryFloor || rejected.Contains(c.Object.Guid)) continue;
                         WoWUnit cu = c.Object.ToUnit();
                         if (cu == null || cu.Dead) continue;   // a just-killed corpse lingers a frame in the list — don't re-commit to it
+                        // Tiered nearest: already-ours (attacking us, or a hostile whose aggro bubble we're
+                        // inside — that fight is coming regardless) > visible > around-a-corner. A LoS-blocked
+                        // pick means walking INTO its position to gain LoS, so the open happens at body-pull
+                        // range (user report 2026-07-02); a corner mob also can't aggro through the wall while
+                        // we fight the visible one. Last resort, not a veto: with nothing visible we still
+                        // grind the corner mob, deliberately.
                         double d = c.Object.Distance;
-                        if (d < nearest) { nearest = d; pick = c; }
+                        int tier = cu.IsTargetingMeOrPet
+                                   || (cu.MyReaction <= WoWUnitReaction.Hostile
+                                       && d <= cu.MyAggroRange + s.PreemptAggroBuffer) ? 0
+                                 : cu.InLineOfSpellSight ? 1 : 2;
+                        if (tier < pickTier || (tier == pickTier && d < nearest)) { nearest = d; pick = c; pickTier = tier; }
                     }
                     if (pick == null) break;
 
