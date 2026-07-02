@@ -85,6 +85,10 @@ namespace Styx.Logic
 		private const float ImminentFightRange = 45f;
 		// Walk 7yd/s vs ~3.5s mount cast + ~11yd/s ride: break-even ≈ 60yd. Shorter trips: stay on foot.
 		private const float MinMountTravelDistance = 60f;
+		// Mount race handling: throttle for the defer log, and a SHORT retry cooldown after a failed attempt
+		// (1s race-loss / 5s unknown) — deliberately not the 10s _mountTimer, which only arms on SUCCESS now.
+		private static DateTime _nextMountDeferLogAt = DateTime.MinValue;
+		private static DateTime _nextMountAttemptAt = DateTime.MinValue;
 
 		public static void Dismount(string reason)
 		{
@@ -281,6 +285,26 @@ namespace Styx.Logic
 					return false;
 			}
 
+			// Race guard: a spell that JUST fired (e.g. the routine's pre-buff shield, 133ms before the mount
+			// decision in log 2026-07-02_1057) holds the GCD; CallCompanion issued into that window silently
+			// never starts — the old code then blind-waited 6.5s and the 10s mount timer blocked any retry, so
+			// the bot walked off unmounted. DEFER instead: cheap, and the next travel tick lands past the GCD.
+			// Logged with the blocker's name so cast/GCD races are visible in the log, per-episode throttled.
+			if (me.IsCasting || me.IsChanneling || SpellManager.GlobalCooldown)
+			{
+				if (DateTime.UtcNow >= _nextMountDeferLogAt)
+				{
+					Logging.WriteDebug("[Mount] deferring mount-up: {0} — retry next tick.",
+						me.IsCasting ? "casting " + (me.CastingSpell?.Name ?? "?") : "GCD active (a spell just fired)");
+					_nextMountDeferLogAt = DateTime.UtcNow.AddSeconds(2);
+				}
+				return false;
+			}
+
+			// Short race-retry cooldown (set by a failed DoMount) — NOT the 10s _mountTimer.
+			if (DateTime.UtcNow < _nextMountAttemptAt)
+				return false;
+
 			// Auto-detect mount if enabled
 			AutoDetectMount();
 
@@ -322,15 +346,18 @@ namespace Styx.Logic
 			Logging.Write("Mounting: {0}{1}", effectiveMountName, canFly ? " [flying]" : "");
 			StyxWoW.Sleep(200);
 
-			DoMount();
+			// The 10s anti-spam timer arms on SUCCESS only. A race-lost/failed attempt sets the short
+			// _nextMountAttemptAt cooldown inside DoMount instead, so we retry in ~1s, not 10.
+			if (!DoMount())
+				return false;
 			_mountTimer.Reset();
 			return true;
 		}
 
-		private static void DoMount()
+		private static bool DoMount()
 		{
 			LocalPlayer? me = Me;
-			if (me == null) return;
+			if (me == null) return false;
 
 			// Use flying mount in fly zones, ground mount everywhere else.
 			bool canFly = Flightor.CanFly;
@@ -338,7 +365,7 @@ namespace Styx.Logic
 			string mountName = (canFly && !string.IsNullOrEmpty(flyingMountName))
 				? flyingMountName
 				: LevelbotSettings.Instance.MountName;
-			if (string.IsNullOrEmpty(mountName)) return;
+			if (string.IsNullOrEmpty(mountName)) return false;
 
 			// Handle Blood Elf Paladin mount name differences
 			if (me.Race == WoWRace.BloodElf && me.Class == WoWClass.Paladin)
@@ -356,28 +383,75 @@ namespace Styx.Logic
 
 			Lua.DoString(string.Format("CallCompanion('MOUNT', {0})", GetMountIndex(mountName)));
 
+			// Smart wait — distinguish "mount cast in flight" (keep waiting) from "cast never STARTED"
+			// (a race ate it: GCD from a just-fired buff, another cast, a server rejection) and from
+			// "cast started then died" (interrupted by damage/movement). The old blind !Mounted loop
+			// couldn't tell these apart, so a race-lost attempt burned the full 6.5s in silence. Every
+			// failure path LOGS WHY (races must be visible) and sets a SHORT retry cooldown.
 			int startTime = Environment.TickCount;
 			string lastError = me.LastRedErrorMessage;
+			bool sawCast = false;
+			int castEndedAt = 0;
 
 			while (!me.Mounted && Environment.TickCount - startTime < 6500)
 			{
 				if (me.Combat)
-					break;
+				{
+					Logging.WriteDebug("[Mount] mount attempt aborted — entered combat.");
+					_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(1);
+					return false;
+				}
 
 				if (!string.IsNullOrEmpty(lastError) && me.LastRedErrorMessage != lastError)
 				{
 					Logging.Write("You can't mount here.");
 					AddCantMountSpot(me.Location);
-					break;
+					_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(1);
+					return false;
 				}
 
-				StyxWoW.Sleep(250);
+				if (me.IsCasting)
+				{
+					sawCast = true;           // mount cast is genuinely in flight — wait it out
+					castEndedAt = 0;
+				}
+				else if (sawCast)
+				{
+					// Cast finished; give me.Mounted a moment to reflect before calling it interrupted.
+					if (castEndedAt == 0)
+						castEndedAt = Environment.TickCount;
+					else if (Environment.TickCount - castEndedAt > 800)
+					{
+						Logging.Write("[Mount] mount cast ended without mounting — interrupted (hit/moved)? Retrying in 1s.");
+						_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(1);
+						return false;
+					}
+				}
+				else if (Environment.TickCount - startTime > 600)
+				{
+					// RACE CONDITION MARKER: CallCompanion went out but no cast ever began. The usual
+					// culprit is the GCD of a spell cast moments earlier (pre-buff shield etc.) — the
+					// MountUp defer-guard should catch those; anything landing here is a new race.
+					Logging.Write("[Mount] mount cast never STARTED ({0}ms) — GCD={1}, casting={2}, lastError='{3}'. Retrying in 1s.",
+						Environment.TickCount - startTime, SpellManager.GlobalCooldown, me.IsCasting, me.LastRedErrorMessage);
+					_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(1);
+					return false;
+				}
+
+				StyxWoW.Sleep(100);
+			}
+
+			if (!me.Mounted)
+			{
+				Logging.Write("[Mount] not mounted after 6.5s despite a completed-looking cast — retrying in 5s.");
+				_nextMountAttemptAt = DateTime.UtcNow.AddSeconds(5);
+				return false;
 			}
 
 			// Mount succeeded — any stale cant-mount spots near this location are now invalid.
 			// (e.g. spots recorded during a previous combat pass at this exact location)
-			if (me.Mounted)
-				RemoveCantMountSpotsNear(me.Location, 10f);
+			RemoveCantMountSpotsNear(me.Location, 10f);
+			return true;
 		}
 
 		/// <summary>
