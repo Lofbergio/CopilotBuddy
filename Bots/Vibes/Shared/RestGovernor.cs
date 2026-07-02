@@ -55,6 +55,9 @@ namespace Bots.Vibes.Shared
         private bool _reflectionFailed;
         private object _routineSettings;
         private PropertyInfo _minHealthProp, _minManaProp;
+        private PropertyInfo _restWiredProp, _restLatchProp;
+        private bool _restWiredWritten;
+        private bool _lastLatchWritten;
 
         // Restock seeding (FoodAmount/DrinkAmount) — opt-in. VibeGrinder seeds via GrindAreaSynthesizer, so
         // only VibeQuester (which has no synthesizer) asks the governor to do it.
@@ -82,6 +85,13 @@ namespace Bots.Vibes.Shared
         // survival net so a bot that never sets them still won't death-march.
         public int SuppressedFloorHealth { get; set; } = 30;
         public int SuppressedFloorMana { get; set; } = 10;
+
+        // The owner's ACTUAL rest latch (VibeGrinder's _resting), pushed each Pulse. When supplied (non-null)
+        // it's bridged into the routine's settings (GVSettings.BotRestLatchWired/BotIsResting) so the routine
+        // stops INFERRING "we're resting" from POI/movement — inference dropped rest totems during POI-less
+        // travel, while stuck (!IsMoving), and while mounted (the cast dismounted the bot; log _1644 22:51).
+        // Owners without a latch (VibeQuester) leave it null → the routine keeps its own fallback inference.
+        public bool? RoutineRestLatch { get; set; }
 
         public void Pulse(LocalPlayer me)
         {
@@ -112,6 +122,8 @@ namespace Bots.Vibes.Shared
                     _minHealth = h;
                     _minMana = m;
                 }
+
+                WriteRestLatch();
             }
             catch (Exception ex)
             {
@@ -244,9 +256,45 @@ namespace Bots.Vibes.Shared
             _routineSettings = inst;
             _minHealthProp = hp;
             _minManaProp = mp;
+            // Optional rest-latch bridge (GoodVibes has these; Singular doesn't — fine, both null then).
+            _restWiredProp = t.GetProperty("BotRestLatchWired", BindingFlags.Public | BindingFlags.Instance);
+            _restLatchProp = t.GetProperty("BotIsResting", BindingFlags.Public | BindingFlags.Instance);
             _reflectionResolved = true;
             Log("bound to " + label + " settings — governing rest thresholds");
             return true;
+        }
+
+        // Owner Stop: un-wire so a DIFFERENT botbase (plain LevelBot etc.) started later in the same CB
+        // session doesn't leave the routine trusting a latch nobody updates anymore.
+        public void ReleaseRestLatch()
+        {
+            RoutineRestLatch = null;
+            if (!_restWiredWritten || _restWiredProp == null) return;
+            try { _restWiredProp.SetValue(_routineSettings, false); } catch { }
+            _restWiredWritten = false;
+        }
+
+        // Push the owner's rest latch into the routine (change-only writes). Wired flips once, on the first
+        // pulse with a supplied latch — from then on the routine trusts BotIsResting over its own inference.
+        private void WriteRestLatch()
+        {
+            if (RoutineRestLatch == null || _restWiredProp == null || _restLatchProp == null) return;
+            try
+            {
+                if (!_restWiredWritten)
+                {
+                    _restWiredProp.SetValue(_routineSettings, true);
+                    _restWiredWritten = true;
+                    _lastLatchWritten = !RoutineRestLatch.Value;   // force the first latch write below
+                    Log("rest latch wired into the routine — it stops inferring rest from POI/movement");
+                }
+                if (_lastLatchWritten != RoutineRestLatch.Value)
+                {
+                    _restLatchProp.SetValue(_routineSettings, RoutineRestLatch.Value);
+                    _lastLatchWritten = RoutineRestLatch.Value;
+                }
+            }
+            catch (Exception ex) { Log("rest latch write failed: " + ex.Message); }
         }
 
         // True if the standalone QuestGovernor plugin is loaded and enabled — it stays the writer then.
