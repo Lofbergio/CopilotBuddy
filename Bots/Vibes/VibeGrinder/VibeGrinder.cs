@@ -933,6 +933,13 @@ namespace Bots.VibeGrinder
                 if (BotPoi.Current.Type == PoiType.Kill || OnVendorRun())
                     return;
 
+                //  - Pending LOOT: corpses hit the loot list a beat AFTER combat ends, so the rest latch used
+                //    to fire first, SafeRest walked 38yd AWAY from the corpses, the loot POI then dragged us
+                //    straight back — a 76yd round-trip for nothing with Mana Spring churn in the middle (log
+                //    2026-07-02_1346). Loot first (seconds, and corpses expire), THEN rest where the loot ends.
+                if (LootTargeting.Instance.FirstObject != null || BotPoi.Current.Type == PoiType.Loot)
+                    return;
+
                 bool need = RestNeeded(me);
                 if (need)
                 {
