@@ -1296,7 +1296,14 @@ namespace Bots.VibeGrinder
                 bool inevitable = ulevel > safeLevel && ulevel <= inevitableLevel
                                   && u.Distance <= u.MyAggroRange + VibeGrinderSettings.Instance.PreemptAggroBuffer
                                   && System.Math.Abs(u.Location.Z - me.Location.Z) < 5f;
-                if (!attackingUs && !pathClear && !inevitable) continue;
+                // Commitment hysteresis: the COMMITTED mob stays surfaced regardless of the radius. A mob
+                // wandering ON the 40yd boundary otherwise flaps candidate↔gone every pulse — ACQUIRE, "no
+                // longer a candidate" 0.25s later, back to hotspot travel, re-ACQUIRE 4s later, ~7s/cycle
+                // for a full minute (Highland Strider at 39.3-40.0yd, log 2026-07-02_1644 22:52). Real
+                // cancellers stay real: death/blacklist still drop it (blacklist is checked above), and the
+                // no-progress give-up clock still expires an unreachable one.
+                bool committed = _committedGuid != 0 && u.Guid == _committedGuid;
+                if (!attackingUs && !pathClear && !inevitable && !committed) continue;
 
                 outgoing.Add(obj);
                 surfaced++;
@@ -1381,6 +1388,7 @@ namespace Bots.VibeGrinder
             }
             Vendors.OnVendorItems -= OnVendorSweep;
             Vendors.OnMailItems -= OnMailSweep;
+            _restGovernor?.ReleaseRestLatch();   // don't leave the routine trusting a latch nobody updates
             Supervision.TrekSafety.Clear();   // restore any hazard-marked navmesh polys
             _synth?.RestoreCharacterSettings();   // undo the global FoodAmount/DrinkAmount seeding
             GrindMobsRepository.Shutdown();   // release the DB handle so a later Start re-opens cleanly
@@ -1393,7 +1401,11 @@ namespace Bots.VibeGrinder
             if (me == null) return;   // null on loading screens / zone transitions
 
             Navigator.PathPrecision = System.Math.Clamp(me.MovementInfo.CurrentSpeed * 0.15f, 1.5f, 10f);
-            if (_restGovernor != null) _restGovernor.Suppressed = _vendorRun;   // no resting mid-errand (the routine's pull still runs)
+            if (_restGovernor != null)
+            {
+                _restGovernor.Suppressed = _vendorRun;        // no resting mid-errand (the routine's pull still runs)
+                _restGovernor.RoutineRestLatch = _resting;    // the routine's rest totem drops only inside a REAL rest
+            }
             _restGovernor?.Pulse(me);
             if (_supervisor != null) _supervisor.RestingLatch = _resting;   // stall watchdog can't see a no-consumable rest otherwise
             _supervisor?.Pulse();
