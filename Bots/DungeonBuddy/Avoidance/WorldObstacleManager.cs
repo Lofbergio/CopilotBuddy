@@ -109,6 +109,26 @@ namespace Bots.DungeonBuddy.Avoidance
                            go.DisplayId != 0;
                 },
                 () => 1.5f));
+
+            // Seasonal event decorations (Generic type, blizz-internal name suffix per festival —
+            // Midsummer = "- MFF"). Spawned by the server only WHILE the event runs, so they have
+            // client collision but are absent from the navmesh (mmaps are extracted without events
+            // active): the pathfinder draws straight lines through them and the character wedges on
+            // geometry navigation can't see — Hammerfall's MFF ribbon poles/banners produced stuck
+            // loops at the same spot for minutes (log 2026-07-02_1644 22:50-22:52, 493 stucks/6h).
+            // Suffix match covers every piece of a festival's set; off-season they don't exist, so
+            // the predicate never fires. Add the other festivals' suffixes here if they bite.
+            AvoidanceManager.Add(new AvoidInfo(
+                always,
+                obj =>
+                {
+                    var go = obj as Styx.WoWInternals.WoWObjects.WoWGameObject;
+                    if (go == null || !go.IsValid || go.SubType != Styx.WoWGameObjectType.Generic)
+                        return false;
+                    string n = go.Name;
+                    return !string.IsNullOrEmpty(n) && n.EndsWith("- MFF", StringComparison.Ordinal);
+                },
+                () => 2.0f));
         }
     }
 }
