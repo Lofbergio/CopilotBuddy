@@ -620,6 +620,9 @@ namespace Styx.Logic
 			if (DismountPending)
 				return false;
 
+			// Ghost Wolf/Travel Form travelers fall out here (not "mounted") — deliberate, NOT a gap: the
+			// client auto-cancels those forms on the first spellcast, exactly like auto-dismount, so the
+			// kill-POI path needs no shift-out logic. Don't add one.
 			if (!me.Mounted)
 				return false;
 
