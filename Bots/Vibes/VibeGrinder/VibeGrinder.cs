@@ -1228,8 +1228,12 @@ namespace Bots.VibeGrinder
             double surfaceR = VibeGrinderSettings.Instance.IncidentalHostileRadius;
             if (surfaceR <= 0) surfaceR = Targeting.PullDistance > 0 ? Targeting.PullDistance : 28;
             int safeLevel = me.Level + VibeGrinderSettings.Instance.PathHostileLevelMargin;
+            // Upper bound of the "inevitable fight" band (see below). Derived from DangerLevelMargin so the two
+            // systems always meet: anything ABOVE it near kill positions already made the spot Dangerous at
+            // selection (OverlevelHostileInAggro); anything at/below it that we're bubble-deep in is ours to fight.
+            int inevitableLevel = me.Level + VibeGrinderSettings.Instance.DangerLevelMargin;
             ulong petGuid = me.GotAlivePet && me.Pet != null ? me.Pet.Guid : 0;
-            int surfaced = 0, defensive = 0;
+            int surfaced = 0, defensive = 0, inevitableN = 0;
 
             foreach (WoWObject obj in incoming)
             {
@@ -1248,17 +1252,28 @@ namespace Bots.VibeGrinder
                 // but still defend if it's on us). Defensive ignores both gates — fight what's hitting us.
                 int ulevel = (int)u.Level;
                 bool pathClear = u.Distance <= surfaceR && ulevel > 0 && ulevel <= safeLevel;
-                if (!attackingUs && !pathClear) continue;
+                // Inevitable fight: a hostile in the (L+PathHostileLevelMargin, L+DangerLevelMargin] band —
+                // too high for pathClear, too low for OverlevelHostileInAggro to have rejected the spot — was
+                // invisible to BOTH systems, so we camped inside its aggro bubble and it added onto a fight
+                // (Kenata Dabyrie, L+4, in the farmhouse — log 2026-07-02_1513 15:22). When we're standing in
+                // its bubble the fight is coming regardless (a wall only postpones it via LoS), so surface it
+                // and let nearest-first acquire take it 1v1 at full resources instead. Z-separation ≥5yd is
+                // real protection (server blocks proximity aggro past ~3yd of Z) — a cliff mob stays ignored.
+                bool inevitable = ulevel > safeLevel && ulevel <= inevitableLevel
+                                  && u.Distance <= u.MyAggroRange + VibeGrinderSettings.Instance.PreemptAggroBuffer
+                                  && System.Math.Abs(u.Location.Z - me.Location.Z) < 5f;
+                if (!attackingUs && !pathClear && !inevitable) continue;
 
                 outgoing.Add(obj);
                 surfaced++;
                 if (attackingUs) defensive++;
+                else if (inevitable && !pathClear) inevitableN++;
             }
 
             if (surfaced > 0 && (!_surfaceLogSw.IsRunning || _surfaceLogSw.Elapsed.TotalSeconds >= 3))
             {
-                Logging.WriteDebug("[VibeGrinder/Hostiles] surfaced {0} incidental hostile(s) ({1} attacking us).",
-                    surfaced, defensive);
+                Logging.WriteDebug("[VibeGrinder/Hostiles] surfaced {0} incidental hostile(s) ({1} attacking us{2}).",
+                    surfaced, defensive, inevitableN > 0 ? ", " + inevitableN + " inevitable over-level" : "");
                 _surfaceLogSw.Restart();
             }
         }
