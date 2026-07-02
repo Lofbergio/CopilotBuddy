@@ -145,6 +145,8 @@ namespace Bots.VibeGrinder.Supervision
             _hardAnchor = StyxWoW.Me?.Location ?? WoWPoint.Empty;
             _swimBlocks = 0;
             _killsSinceInstall = 0;
+            _preSelected = null;   // a new spot invalidates any pre-pick made from the old one
+            _nextPreSelectAt = DateTime.UtcNow.AddSeconds(60);
         }
 
         public void RecordKill()
@@ -687,7 +689,49 @@ namespace Bots.VibeGrinder.Supervision
             if (S.EnableDepletionRelocate && _sinceInstall.Elapsed.TotalSeconds > 90 && Depleted())
                 return Relocate("spot depleted") ? RunStatus.Success : RunStatus.Failure;
 
+            // Fluid doctrine (pre-compute the next action): SelectBest blocks the worker thread 1-2.4s, and
+            // running it AT relocation time froze the bot mid-world at every camp switch. When the spot is
+            // ALMOST depleted (few valid targets left) and we're calm (this method only runs out of combat),
+            // pre-pick the next spot now — the eventual Relocate() then consumes a ready answer instantly.
+            MaybePreSelectNextSpot(me);
             return RunStatus.Failure;
+        }
+
+        // Pre-selected next spot (see EvaluateDiscretionary) — consumed by Relocate(), invalidated on install.
+        private GrindSpot _preSelected;
+        private DateTime _preSelectedAt = DateTime.MinValue;
+        private DateTime _nextPreSelectAt = DateTime.MinValue;
+
+        private void MaybePreSelectNextSpot(LocalPlayer me)
+        {
+            if (!S.EnableDepletionRelocate || _preSelected != null) return;
+            if (DateTime.UtcNow < _nextPreSelectAt) return;
+            if (_sinceInstall.Elapsed.TotalSeconds < 60) return;
+            if (ValidTargetsNearSpot(S.DepletionRecheckBuffer) > 2) return;   // spot still has legs — no need yet
+            _nextPreSelectAt = DateTime.UtcNow.AddSeconds(45);                // bound the scan cost while it stays thin
+
+            var exclude = ActiveBlacklist();
+            exclude.Add((_current.Centroid, S.GrindRadius));
+            GrindSpot next = _selector.SelectBest(me.MapId, me.Location, me.Level, exclude, _crowdCaution);
+            if (next == null || next.Centroid.DistanceSqr(_current.Centroid) <= S.GrindRadius * S.GrindRadius)
+                return;
+            _preSelected = next;
+            _preSelectedAt = DateTime.UtcNow;
+            Logging.Write("[VibeGrinder] Pre-selected the next spot ({0:F0}yd away) — relocation will be instant.",
+                me.Location.Distance(next.Centroid));
+        }
+
+        /// <summary>Fresh, still-valid pre-selected spot or null. Consumes the cache.</summary>
+        private GrindSpot TakePreSelected(float minDistFromCurrent)
+        {
+            GrindSpot cached = _preSelected;
+            _preSelected = null;
+            if (cached == null) return null;
+            if ((DateTime.UtcNow - _preSelectedAt).TotalMinutes > 3) return null;             // stale — world moved on
+            if (cached.Centroid.DistanceSqr(_current.Centroid) <= minDistFromCurrent * minDistFromCurrent) return null;
+            foreach (var (center, radius) in ActiveBlacklist())                                // blacklisted since picked?
+                if (cached.Centroid.Distance(center) <= radius) return null;
+            return cached;
         }
 
         private bool IntrusionTripped()
@@ -800,11 +844,20 @@ namespace Bots.VibeGrinder.Supervision
             // pass a bigger radius so the next pick can't land back on the same strip.
             float r = blacklistRadius > 0f ? blacklistRadius : S.GrindRadius;
 
-            // Exclude the current centroid plus the active blacklist from the search.
-            var exclude = ActiveBlacklist();
-            exclude.Add((_current.Centroid, r));
-
-            GrindSpot next = _selector.SelectBest(me.MapId, me.Location, me.Level, exclude, _crowdCaution);
+            // Instant path: a fresh pre-selected spot (computed during the calm almost-depleted window) skips
+            // the 1-2.4s SelectBest freeze entirely. Falls through to the live scan when absent/stale.
+            GrindSpot next = TakePreSelected(r);
+            if (next != null)
+            {
+                Logging.Write("[VibeGrinder] Using pre-selected spot for '{0}' — instant relocate.", reason);
+            }
+            else
+            {
+                // Exclude the current centroid plus the active blacklist from the search.
+                var exclude = ActiveBlacklist();
+                exclude.Add((_current.Centroid, r));
+                next = _selector.SelectBest(me.MapId, me.Location, me.Level, exclude, _crowdCaution);
+            }
             if (next == null || next.Centroid.DistanceSqr(_current.Centroid) <= r * r)
             {
                 Logging.Write("[VibeGrinder] {0}: no better spot available — staying put.", reason);

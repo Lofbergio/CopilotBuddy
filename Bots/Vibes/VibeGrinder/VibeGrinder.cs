@@ -38,6 +38,16 @@ namespace Bots.VibeGrinder
         private RestGovernor _restGovernor;
         private PrioritySelector _root;
         private BotEvents.Player.MobKilledDelegate _onKill;
+
+        // Pull-failure events (fluid doctrine: the client TELLS us why a pull isn't working — don't burn the
+        // 20s give-up clock inferring it). UI_ERROR_MESSAGE while pre-combat committed: "line of sight" /
+        // "invalid target"-class errors count toward a FAST give-up (2 strikes → same blacklist+re-pick path
+        // as the clock). English-client text match — this server/client is English. Handler fires from the
+        // main Pulse event pump (same thread as the tree; no locking needed).
+        private LuaEventHandlerDelegate _onUiError;
+        private int _pullErrorCount;
+        private string _lastPullError;
+        private DateTime _pullErrorAt = DateTime.MinValue;
         private bool _spotInstalled;
         private ulong _peelGuid;        // committed transit-peel target (see TransitPeel) — don't re-pick per tick
         private ulong _committedGuid;   // committed grind-pull target (see ApplyPullCommitment)
@@ -214,6 +224,23 @@ namespace Bots.VibeGrinder
 
             _onKill = args => _supervisor.RecordKill();
             BotEvents.Player.OnMobKilled += _onKill;
+
+            _onUiError = (sender, e) =>
+            {
+                if (_committedGuid == 0 || StyxWoW.Me == null || StyxWoW.Me.Combat) return;   // only pre-combat pull attempts
+                string msg = e.Args.Length > 0 ? e.Args[0] as string : null;
+                if (string.IsNullOrEmpty(msg)) return;
+                // Errors that mean THIS pull can't work from here (out-of-range is excluded — movement fixes that).
+                if (msg.IndexOf("line of sight", StringComparison.OrdinalIgnoreCase) >= 0
+                    || msg.IndexOf("Invalid target", StringComparison.OrdinalIgnoreCase) >= 0
+                    || msg.IndexOf("can't attack", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    _pullErrorCount++;
+                    _lastPullError = msg;
+                    _pullErrorAt = DateTime.Now;
+                }
+            };
+            Lua.Events.AttachEvent("UI_ERROR_MESSAGE", _onUiError);
 
             // Loot disposition: VibeGrinder owns sell/mail item selection via ItemDisposition (one source
             // of truth, category-aware). The sell hook protects everything that isn't Vendor; the mail hook
@@ -602,7 +629,20 @@ namespace Bots.VibeGrinder
                         _committedTimer.Restart();
                     _committedLastDist = d;
 
-                    if (_committedTimer.Elapsed.TotalSeconds > s.PullCommitMaxSeconds)
+                    // FAST give-up on client-reported pull failures (UI_ERROR_MESSAGE handler, see Start): two
+                    // LoS/invalid-target errors within 6s mean this pull cannot work from here — resolve NOW
+                    // with the reason verbatim instead of letting the 20s clock discover it (fluid doctrine).
+                    if (!opened && _pullErrorCount >= 2 && (DateTime.Now - _pullErrorAt).TotalSeconds < 6)
+                    {
+                        Logging.Write(System.Drawing.Color.Khaki,
+                            "[VibeGrinder/Commit] GIVE UP FAST on {0} — client reported '{1}' ×{2} — blacklisting 2m.",
+                            held.Name, _lastPullError, _pullErrorCount);
+                        Blacklist.Add(_committedGuid, System.TimeSpan.FromMinutes(2));
+                        _pullErrorCount = 0;
+                        valid = false;
+                    }
+
+                    if (valid && _committedTimer.Elapsed.TotalSeconds > s.PullCommitMaxSeconds)
                     {
                         // DIAG (Bug-A): give-up is the dominant failure (87/run). Capture WHY: which mob we
                         // were locked to, how far, its reaction, and the nearest hostile that existed — a
@@ -639,22 +679,49 @@ namespace Bots.VibeGrinder
             if (_committedGuid == 0 && !_resting && !RestNeeded(me))
             {
                 float buryFloor = -s.NeutralNearHostileVeto * 0.5f;   // below this = a buried neutral; skip it
+                // Fluid doctrine (lookahead): validate the pick is PATHABLE before committing. Without this an
+                // unreachable mob (ledge/roof/mesh hole) was only discovered by walking at it for
+                // PullCommitMaxSeconds of no progress — the DOMINANT failure mode (the give-up diag counted
+                // 87/run). One GeneratePath per acquire (~ms) turns that 20s inference into an instant fact:
+                // reject → short blacklist (it may wander somewhere reachable) → try the next-nearest THIS
+                // tick. Bounded at 3 pathfinds/tick; a mob already ON us is never rejected (it reached us —
+                // rejecting it would leash us off a live attacker). The 20s give-up clock stays as backstop.
+                var rejected = new System.Collections.Generic.HashSet<ulong>();
                 Targeting.TargetPriority pick = null;
-                double nearest = double.MaxValue;
-                for (int i = 0; i < units.Count; i++)
+                for (int attempt = 0; attempt < 3 && pick == null; attempt++)
                 {
-                    var c = units[i];
-                    if (c.Object == null || c.Score < buryFloor) continue;
-                    WoWUnit cu = c.Object.ToUnit();
-                    if (cu == null || cu.Dead) continue;   // a just-killed corpse lingers a frame in the list — don't re-commit to it
-                    double d = c.Object.Distance;
-                    if (d < nearest) { nearest = d; pick = c; }
+                    double nearest = double.MaxValue;
+                    for (int i = 0; i < units.Count; i++)
+                    {
+                        var c = units[i];
+                        if (c.Object == null || c.Score < buryFloor || rejected.Contains(c.Object.Guid)) continue;
+                        WoWUnit cu = c.Object.ToUnit();
+                        if (cu == null || cu.Dead) continue;   // a just-killed corpse lingers a frame in the list — don't re-commit to it
+                        double d = c.Object.Distance;
+                        if (d < nearest) { nearest = d; pick = c; }
+                    }
+                    if (pick == null) break;
+
+                    WoWUnit pu = pick.Object.ToUnit();
+                    if (pu != null && !pu.IsTargetingMeOrPet)
+                    {
+                        WoWPoint[] path = Navigator.GeneratePath(me.Location, pu.Location);
+                        if (path == null || path.Length == 0)
+                        {
+                            Logging.Write(System.Drawing.Color.Khaki,
+                                "[VibeGrinder/Commit] REJECT {0} (d={1:F1}) — no path to it; trying next-nearest.",
+                                pu.Name, pu.Distance);
+                            Blacklist.Add(pu.Guid, System.TimeSpan.FromSeconds(45));
+                            rejected.Add(pick.Object.Guid);
+                            pick = null;
+                        }
+                    }
                 }
                 if (pick == null)
                     for (int i = 0; i < units.Count; i++)
                     {
                         WoWUnit cu = units[i].Object?.ToUnit();
-                        if (cu == null || cu.Dead) continue;
+                        if (cu == null || cu.Dead || rejected.Contains(cu.Guid)) continue;
                         if (pick == null || units[i].Score > pick.Score) pick = units[i];
                     }
 
@@ -663,6 +730,7 @@ namespace Bots.VibeGrinder
                     _committedGuid = pick.Object.Guid;
                     _committedTimer.Restart();
                     _committedLastDist = double.MaxValue;
+                    _pullErrorCount = 0;   // fresh commit → fresh error strikes
                     WoWUnit bu = pick.Object.ToUnit();
                     if (bu != null)
                         Logging.Write(System.Drawing.Color.Khaki,
@@ -1239,6 +1307,11 @@ namespace Bots.VibeGrinder
             {
                 BotEvents.Player.OnMobKilled -= _onKill;
                 _onKill = null;
+            }
+            if (_onUiError != null)
+            {
+                Lua.Events.DetachEvent("UI_ERROR_MESSAGE", _onUiError);
+                _onUiError = null;
             }
             Vendors.OnVendorItems -= OnVendorSweep;
             Vendors.OnMailItems -= OnMailSweep;
