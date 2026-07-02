@@ -1535,9 +1535,16 @@ namespace Bots.Grind
                         new ActionSetPoi(ctx => new BotPoi(StyxWoW.Me.CurrentTarget, PoiType.Kill))
                     ))
                 ),
-                // Move to hotspot if needed
+                // Move to hotspot if needed — but STAND DOWN while an engageable FirstUnit exists (the same
+                // ShouldMoveCloserToTarget predicate the approach branch uses). During a new-spot trek
+                // (HotspotChanged) this branch used to own every tick a target sat beyond PullDistance, so the
+                // find-target gate (≤PullDistance) could never be reached and the bot beelined THROUGH hostiles
+                // (observed 2026-07-02_1310: committed target pinned at 39.9yd, never approached). The old code
+                // masked it by mounting for every trek + ShouldDismount's hotspot-with-target branch; with
+                // player-style pulls (cast-to-dismount) and the mount lookahead keeping us on foot near
+                // hostiles, the approach branch below must be allowed to close the last yards first.
                 new DecoratorIsNotPoiType(PoiType.Kill, new Decorator(
-                    ctx => ShouldMoveToHotspot(),
+                    ctx => ShouldMoveToHotspot() && !ShouldMoveCloserToTarget(),
                     new TreeSharp.Action(ctx =>
                     {
                         GrindArea grindArea = StyxWoW.AreaManager?.CurrentGrindArea;
