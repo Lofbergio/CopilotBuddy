@@ -1218,21 +1218,19 @@ namespace Bots.Grind
                                                 {
                                                     if (!NeedToMail())
                                                         return false;
-                                                    var mailbox = ProfileManager.CurrentProfile?.MailboxManager?.GetClosestMailbox();
-                                                    if (mailbox == null)
-                                                        return false;
-                                                    // Store mailbox in context for ActionSetPoi
-                                                    if (ctx is Dictionary<string, object> dict)
-                                                        dict["_mailbox"] = mailbox;
-                                                    return true;
+                                                    // Stash in a field, NOT the tick context: nothing ever passes a
+                                                    // Dictionary as ctx here, so the old "ctx is Dictionary" hand-off was
+                                                    // always false and ActionSetPoi silently returned the CURRENT poi —
+                                                    // the Mail POI could never be set and mailing was dead code
+                                                    // ("[NeedToMail] YES" → "POI is not Mail", log 2026-07-02_1644 22:51).
+                                                    _mailboxForPoi = ProfileManager.CurrentProfile?.MailboxManager?.GetClosestMailbox();
+                                                    return _mailboxForPoi != null;
                                                 },
                                                 new Sequence(
                                                     new ActionSetPoi(ctx =>
-                                                    {
-                                                        if (ctx is Dictionary<string, object> dict && dict.TryGetValue("_mailbox", out var mb) && mb is Mailbox mailbox)
-                                                            return new BotPoi(mailbox.Location, PoiType.Mail);
-                                                        return BotPoi.Current;
-                                                    })
+                                                        _mailboxForPoi != null
+                                                            ? new BotPoi(_mailboxForPoi.Location, PoiType.Mail)
+                                                            : BotPoi.Current)
                                                 )
                                             ),
                                             new DecoratorContinue(
@@ -1465,6 +1463,29 @@ namespace Bots.Grind
             return need;
         }
 
+        // Hand-off between the mail decorator and its ActionSetPoi — the tick ctx is NOT a dictionary
+        // (see the comment at the decorator), so a field carries the resolved mailbox across the two nodes.
+        private static Mailbox _mailboxForPoi;
+
+        // Mail-run pressure trips when free slots fall below this share of carried capacity.
+        private const int MailFreeSlotsPressurePct = 25;
+
+        private static uint TotalBagSlots(LocalPlayer me)
+        {
+            try
+            {
+                uint total = me.Inventory.Backpack.Slots;
+                for (uint i = 0U; i < 4U; i++)
+                {
+                    WoWContainer bag = me.GetBagAtIndex(i);
+                    if (bag != null)
+                        total += bag.Slots;
+                }
+                return total;
+            }
+            catch { return 0; }
+        }
+
         private static bool NeedToMail()
         {
             LocalPlayer me = StyxWoW.Me;
@@ -1485,18 +1506,21 @@ namespace Bots.Grind
                 return false;
             }
 
-            // Two ways to qualify (both hardcoded HB thresholds, not settings): a mailbox within 200yd, or bags
-            // under 30 free. In normal grinding neither holds (you sell trash so bags stay >30 free, and vendors
-            // aren't usually within 200yd of a mailbox) — which is why mail runs ~never fire. See Loot/CLAUDE.md.
+            // Two ways to qualify: a mailbox within 200yd (opportunistic — we're in town anyway), or bag
+            // PRESSURE. Pressure is a PERCENTAGE of carried capacity, not HB's flat "< 30 free": a leveler
+            // with ~40-60 total slots was either never under it or permanently under it depending on bags —
+            // a flat count can't mean "getting full" across bag setups. See Loot/CLAUDE.md.
             double dist = closestMailbox.Location.Distance(me.Location);
             uint freeBags = me.FreeBagSlots;
+            uint totalBags = TotalBagSlots(me);
             bool levelOk = me.Level >= currentProfile.MinMailLevel;
             bool near = dist < 200.0;
-            bool bagsFull = freeBags < 30;
+            bool bagsFull = totalBags > 0 && freeBags < totalBags * MailFreeSlotsPressurePct / 100.0;
             bool need = levelOk && (near || bagsFull);
             LogDecision("mail", string.Format(
-                "[NeedToMail] {0} — level {1}>=min{2}:{3} AND (closestMailbox {4:F0}yd<200:{5} OR freeBags {6}<30:{7})",
-                need ? "YES" : "no", me.Level, currentProfile.MinMailLevel, levelOk, dist, near, freeBags, bagsFull));
+                "[NeedToMail] {0} — level {1}>=min{2}:{3} AND (closestMailbox {4:F0}yd<200:{5} OR free {6}/{7} <{8}%:{9})",
+                need ? "YES" : "no", me.Level, currentProfile.MinMailLevel, levelOk, dist, near,
+                freeBags, totalBags, MailFreeSlotsPressurePct, bagsFull));
             return need;
         }
 
