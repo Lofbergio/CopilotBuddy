@@ -71,10 +71,23 @@ namespace Styx.Logic
 			}
 		}
 
+		// Dismount-in-flight latch. me.Mounted is a memory read that stays TRUE for ~2-4 ticks after the
+		// Dismount() Lua executes (server ack lag), so the not-mounted guard below can't catch re-entry:
+		// per-tick callers (ShouldDismount → ActionSetTarget/ActionPull, Navigator, StuckHandler…) re-issued
+		// Dismount() into that window — the first call dismounts, every repeat draws the red "You are not
+		// mounted so you can't dismount" chat error (observed 3× per pull, i.e. all session long). While a
+		// dismount is pending, both Dismount and ShouldDismount stand down. Time-based is safe: you cannot
+		// be mounted again within the window (mounting itself is a 3s cast).
+		private static DateTime _dismountIssuedAt = DateTime.MinValue;
+		private static bool DismountPending => (DateTime.UtcNow - _dismountIssuedAt).TotalMilliseconds < 1500;
+
 		public static void Dismount(string reason)
 		{
 			LocalPlayer? me = Me;
 			if (me == null) return;
+
+			if (DismountPending)
+				return;
 
 			// Nothing to dismount (not mounted, not in flight form) → return WITHOUT logging or issuing the Lua.
 			// The log + Lua used to run regardless: callers fire Dismount on a stale me.Mounted (true for a tick
@@ -84,6 +97,7 @@ namespace Styx.Logic
 			if (!(me.Mounted || shapeshift == ShapeshiftForm.FlightForm || shapeshift == ShapeshiftForm.EpicFlightForm))
 				return;
 
+			_dismountIssuedAt = DateTime.UtcNow;
 			Logging.WriteDebug(string.IsNullOrEmpty(reason) ? "Stop and dismount." : $"Stop and dismount. Reason: {reason}");
 
 			// HB 4.3.4: no descent loop — just stop and dismount.
@@ -599,6 +613,11 @@ namespace Styx.Logic
 		{
 			LocalPlayer? me = Me;
 			if (me == null)
+				return false;
+
+			// A dismount is already in flight — me.Mounted just hasn't caught up. Answering true here re-logs
+			// the reason ("Dismount to kill bot poi." ×3) and re-triggers the callers every tick of the window.
+			if (DismountPending)
 				return false;
 
 			if (!me.Mounted)
