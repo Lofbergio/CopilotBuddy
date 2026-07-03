@@ -62,13 +62,6 @@ namespace CopilotBuddy.UI
         /// <summary>Character-dependent init (Phase B) has run — it must run exactly once.</summary>
         private bool _characterInitDone;
 
-        /// <summary>
-        /// /allowglue: permit attaching to a WoW that sits at the login screen (Relogger scenario).
-        /// Character-dependent init is deferred until in-world (see CompleteCharacterInit).
-        /// </summary>
-        private static bool AllowGlueAttach =>
-            Environment.GetCommandLineArgs().Any(s => s.Equals("/allowglue", StringComparison.OrdinalIgnoreCase));
-
         #endregion
 
         #region Constructor
@@ -206,7 +199,7 @@ namespace CopilotBuddy.UI
                         }
                         else
                         {
-                            // /allowglue attach: per-character settings, class-based routine selection
+                            // Glue-screen attach: per-character settings, class-based routine selection
                             // and the enabled-plugins list all need a character — defer until stably
                             // in-world (the Relogger drives the login when enabled).
                             Logging.Write("Attached at the login screen — character init deferred until in-world.");
@@ -415,7 +408,8 @@ namespace CopilotBuddy.UI
         /// Logic:
         ///   1. Check /pid= command line arg for explicit process selection
         ///   2. Find all Wow.exe processes matching build 12340
-        ///   3. Filter: logged in + not claimed by another CopilotBuddy (via mutex)
+        ///   3. Filter: not claimed by another CopilotBuddy (via mutex). In-game clients win;
+        ///      login-screen clients are attachable only when no in-game one exists (Relogger).
         ///   4. If 0 available: show error
         ///   5. If 1 available: auto-attach
         ///   6. If 2+: show ProcessSelectorWindow
@@ -482,18 +476,17 @@ namespace CopilotBuddy.UI
                 return false;
             }
 
-            // Step 2: Filter by logged-in state + mutex availability
-            var available = new List<KeyValuePair<int, Mutex>>();
+            // Step 2: Filter by mutex availability; note logged-in state per process.
+            // Login-screen clients are attachable (the Relogger logs in; character init defers
+            // until in-world) — but an in-game client always wins: glue processes are only
+            // kept when NO logged-in client exists.
+            var available = new List<(int Pid, Mutex Mutex, bool LoggedIn)>();
             foreach (var proc in candidates)
             {
                 try
                 {
                     using var tempMemory = new Memory(proc.Id);
-
-                    // Check if player is logged in (/allowglue permits login-screen attach for the Relogger)
                     bool isLoggedIn = tempMemory.Read<byte>(Styx.Offsets.GlobalOffsets.InGame) != 0;
-                    if (!isLoggedIn && !AllowGlueAttach)
-                        continue;
 
                     // Try to claim the process via mutex
                     var mutex = ProcessMutex.Create(proc.Id, out bool createdNew);
@@ -504,14 +497,21 @@ namespace CopilotBuddy.UI
                         continue;
                     }
 
-                    available.Add(new KeyValuePair<int, Mutex>(proc.Id, mutex));
+                    available.Add((proc.Id, mutex, isLoggedIn));
                 }
                 catch { /* Process exited or memory read failed */ }
             }
 
+            if (available.Any(a => a.LoggedIn) && available.Any(a => !a.LoggedIn))
+            {
+                foreach (var glue in available.Where(a => !a.LoggedIn))
+                    glue.Mutex.Close();
+                available.RemoveAll(a => !a.LoggedIn);
+            }
+
             if (available.Count == 0)
             {
-                Logging.WriteQuiet(Colors.Red, "No available WoW processes. They may not be logged in or already attached by another CopilotBuddy.");
+                Logging.WriteQuiet(Colors.Red, "No available WoW processes. They may already be attached by another CopilotBuddy.");
                 Dispatcher.Invoke(() => SetStatus("No available WoW"));
                 return false;
             }
@@ -519,14 +519,14 @@ namespace CopilotBuddy.UI
             // Step 3: Auto-attach if only one, otherwise show selector
             if (available.Count == 1)
             {
-                _selectedWoWProc = available[0].Key;
-                _processMutex = available[0].Value;
+                _selectedWoWProc = available[0].Pid;
+                _processMutex = available[0].Mutex;
             }
             else
             {
                 // Release all mutexes — ProcessSelectorWindow will acquire its own
-                foreach (var kvp in available)
-                    kvp.Value.Close();
+                foreach (var entry in available)
+                    entry.Mutex.Close();
 
                 // Show selector on UI thread (HB 4.3.4 pattern)
                 _selectedWoWProc = null;
@@ -570,15 +570,6 @@ namespace CopilotBuddy.UI
             try
             {
                 var memory = new Memory(wowPid);
-
-                // Verify still logged in before committing (/allowglue permits login-screen attach)
-                if (memory.Read<byte>(Styx.Offsets.GlobalOffsets.InGame) == 0 && !AllowGlueAttach)
-                {
-                    memory.Dispose();
-                    Logging.Write(Colors.Red, "Process ID {0} is not logged in game!", wowPid);
-                    Dispatcher.Invoke(() => SetStatus("Not logged in"));
-                    return false;
-                }
 
                 ObjectManager.Initialize(memory);
 

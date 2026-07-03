@@ -7,7 +7,7 @@ namespace CopilotBuddy.Watchdog;
 /// External process supervisor for CopilotBuddy — deliberately dumb: it knows nothing
 /// about the game, only processes and the heartbeat.json CB writes every 5s.
 ///
-///  - WoW dead  → kill orphaned CB, relaunch WoW, relaunch CB with /pid= /allowglue
+///  - WoW dead  → kill orphaned CB, relaunch WoW, relaunch CB with /pid=
 ///    (CB attaches at the login screen; its Relogger does the actual login).
 ///  - CB dead, or heartbeat stale (hang) → relaunch CB against the running WoW.
 ///  - Heartbeat state "GaveUp" (fatal login error / give-up window expired) → stand down;
@@ -287,11 +287,11 @@ internal static class Program
             Process.Start(new ProcessStartInfo
             {
                 FileName = config.CbPath,
-                Arguments = $"/pid={wowPid} /allowglue",
+                Arguments = $"/pid={wowPid}",
                 WorkingDirectory = Path.GetDirectoryName(config.CbPath)!,
                 UseShellExecute = true,
             });
-            Log($"CB launched with /pid={wowPid} /allowglue.");
+            Log($"CB launched with /pid={wowPid}.");
         }
         catch (Exception ex)
         {
