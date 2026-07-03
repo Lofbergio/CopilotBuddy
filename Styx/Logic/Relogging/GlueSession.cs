@@ -139,17 +139,23 @@ return picked", Lua.Escape(realmName)));
             return false;
         }
 
+        public enum EnterWorldResult { Sent, ListEmpty, NotFound }
+
         /// <summary>
         /// At character select, picks the character by name (empty = keep current selection) and enters world.
-        /// Returns false when a name was configured but not found on the list.
+        /// ListEmpty ≠ NotFound: during a worldserver boot the char list populates ASYNCHRONOUSLY (and stays
+        /// empty while the world is still down) — reading that as "character doesn't exist" turned every 3am
+        /// server restart into a terminal GiveUp for a named-character config. Only a POPULATED list that
+        /// lacks the name is a real NotFound.
         /// </summary>
-        public static bool EnterWorld(string characterName)
+        public static EnterWorldResult EnterWorld(string characterName)
         {
             var vals = Lua.GetReturnValues(string.Format(@"
 local target='{0}'
 local n=(GetNumCharacters and GetNumCharacters()) or 0
 local idx=0
 if target~='' then
+  if n==0 then return 'empty',n end
   for i=1,n do local nm=GetCharacterInfo(i); if nm and nm:lower()==target:lower() then idx=i end end
   if idx==0 then return 'notfound',n end
   if CharacterSelect_SelectCharacter then CharacterSelect_SelectCharacter(idx) else SelectCharacter(idx) end
@@ -157,14 +163,17 @@ end
 if EnterWorld then EnterWorld() end
 return 'ok',n", Lua.Escape(characterName)));
             Invalidate();
-            if (vals != null && vals.Count > 0 && vals[0] == "notfound")
+            string r = vals != null && vals.Count > 0 ? vals[0] : "ok";
+            if (r == "empty")
+                return EnterWorldResult.ListEmpty;
+            if (r == "notfound")
             {
                 Logging.Write(System.Windows.Media.Colors.Red,
                     "[Relogger] Character '{0}' not found at character select ({1} on list).",
                     characterName, vals.Count > 1 ? vals[1] : "?");
-                return false;
+                return EnterWorldResult.NotFound;
             }
-            return true;
+            return EnterWorldResult.Sent;
         }
 
         private static void Invalidate() => _cached = new GlueSnapshot { TakenUtc = DateTime.MinValue };

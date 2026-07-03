@@ -238,12 +238,20 @@ namespace Styx.Logic.Relogging
                     break;
 
                 case GlueScreen.CharSelect:
-                    if (!GlueSession.EnterWorld(RelogSettings.Instance.CharacterName))
+                    switch (GlueSession.EnterWorld(RelogSettings.Instance.CharacterName))
                     {
-                        GiveUp(string.Format("character '{0}' not found at character select", RelogSettings.Instance.CharacterName));
-                        return;
+                        case GlueSession.EnterWorldResult.NotFound:
+                            // Populated list without our name — a real config error, never a boot race.
+                            GiveUp(string.Format("character '{0}' not found at character select", RelogSettings.Instance.CharacterName));
+                            return;
+                        case GlueSession.EnterWorldResult.ListEmpty:
+                            // Worldserver still booting — char list not populated yet. Wait; the charselect
+                            // dwell (45s) paces retries via the normal backoff, never a give-up.
+                            break;
+                        default:
+                            Logging.Write("[Relogger] Entering world...");
+                            break;
                     }
-                    Logging.Write("[Relogger] Entering world...");
                     break;
 
                 case GlueScreen.CharCreate:
