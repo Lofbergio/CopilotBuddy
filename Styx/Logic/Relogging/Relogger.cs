@@ -50,7 +50,9 @@ namespace Styx.Logic.Relogging
         private static DateTime _inWorldSinceUtc = DateTime.MinValue;
         private static bool _worldEnteredRaised;
 
-        private static readonly int[] BackoffLadderSeconds = { 15, 30, 60, 120, 300 };
+        // First rung 5s (was 15): the client needs ~2s from dialog-dismissed to login-sent — a fast first
+        // retry costs nothing and a real outage climbs the ladder anyway (verified live 2026-07-04).
+        private static readonly int[] BackoffLadderSeconds = { 5, 15, 30, 60, 120, 300 };
         private const int WorldStableSeconds = 5;
 
         // Dialog text classification (English client — same caveat as UI_ERROR_MESSAGE matching).
@@ -277,6 +279,16 @@ namespace Styx.Logic.Relogging
                 }
             }
 
+            // Connection-progress dialog: its only button IS Cancel (which=CANCEL — "Connecting…",
+            // "Authenticating…", "Success!"). Dismissing it CLICKS CANCEL and aborts a login that was
+            // succeeding — verified live 2026-07-03 23:50: "Success!" dismissed → stuck at Login →
+            // "Session Expired" → 8 min of failed attempts. Never touch it; wait it out.
+            if (snap.DialogWhich == "CANCEL")
+            {
+                _screenEnteredUtc = DateTime.UtcNow;
+                return true;
+            }
+
             foreach (var fragment in InProgressDialogFragments)
             {
                 if (text.Contains(fragment))
@@ -285,6 +297,17 @@ namespace Styx.Logic.Relogging
                     _screenEnteredUtc = DateTime.UtcNow;
                     return true;
                 }
+            }
+
+            // Post-DC informational dialog ("You have been disconnected...", which=DISCONNECTED): dismiss
+            // for FREE — counting it as a failed attempt made the very FIRST login sit out a full ladder
+            // step (observed 18s) before typing credentials, for a dialog that isn't a failure of OURS.
+            if (snap.DialogWhich == "DISCONNECTED" || text.Contains("disconnected"))
+            {
+                GlueSession.DismissDialog();
+                _screenEnteredUtc = DateTime.UtcNow;
+                _loginSentUtc = DateTime.MinValue;   // credentials go in on the very next tick
+                return true;
             }
 
             // Unknown dialog — log the EXACT text (this is how the fragment lists grow), dismiss, back off.

@@ -631,8 +631,11 @@ namespace CopilotBuddy.UI
 
             // Disable all plugins so overlay/hotkeys and plugin-owned resources are released.
             // IsTearingDown keeps these cleanup-disables from wiping the saved EnabledPlugins list.
+            // Snapshot the list: closing the window during a deferred Phase B (glue-attach relog) races
+            // plugin INIT still adding to it — live enumeration threw Collection-was-modified mid-teardown
+            // (log 2026-07-04_0002 00:03:15) and aborted the rest of Window_Closing.
             Styx.Plugins.PluginManager.IsTearingDown = true;
-            foreach (var pluginContainer in Styx.Plugins.PluginManager.Plugins)
+            foreach (var pluginContainer in Styx.Plugins.PluginManager.Plugins.ToArray())
             {
                 pluginContainer.Enabled = false;
             }
