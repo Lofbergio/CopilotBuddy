@@ -355,12 +355,14 @@ namespace Bots.Grind
                                     {
                                         var entry = GossipFrame.Instance.GossipOptionEntries
                                             .FirstOrDefault(e => e.Type == GossipEntry.GossipEntryType.Healer);
-                                        if (entry.Index != 0)
+                                        if (entry.Type == GossipEntry.GossipEntryType.Healer)
                                             GossipFrame.Instance.SelectGossipOption(entry.Index);
+                                        else if (GossipFrame.Instance.GossipOptionEntries?.Count > 0)
+                                            GossipFrame.Instance.SelectGossipOption(0);
                                     })
                                 ),
                                 // StaticPopup1 path: click the "Resurrect" button
-                                new TreeSharp.Action(ctx => Lua.DoString("StaticPopup1Button1:Click()")),
+                                new TreeSharp.Action(ctx => Lua.DoString("if StaticPopup1 and StaticPopup1:IsVisible() then StaticPopup1Button1:Click() else AcceptResurrect() end")),
                                 // HB 4.3.4 smethod_80 — reset state regardless of which path triggered
                                 new TreeSharp.Action(ctx =>
                                 {
