@@ -524,7 +524,9 @@ namespace Bots.Grind
                                     catch { }
                                 }),
                                 // Popup path + generic accept-resurrect, then XP-loss confirm.
-                                new TreeSharp.Action(ctx => Lua.DoString("if StaticPopup1Button1 then StaticPopup1Button1:Click() end")),
+                                // Gate on visibility (upstream ab74be1) — a hidden StaticPopup1Button1 still
+                                // exists and Click() would fire whatever stale dialog it last held.
+                                new TreeSharp.Action(ctx => Lua.DoString("if StaticPopup1 and StaticPopup1:IsVisible() then StaticPopup1Button1:Click() end")),
                                 new TreeSharp.Action(ctx => Lua.DoString("if AcceptResurrect then AcceptResurrect() end")),
                                 new TreeSharp.Action(ctx =>
                                 {
