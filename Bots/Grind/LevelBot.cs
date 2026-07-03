@@ -1242,7 +1242,17 @@ namespace Bots.Grind
                                             new ActionAlwaysFail()
                                         ))),
                                         // Mail
-                                        new DecoratorIsPoiType(PoiType.Mail, new Sequence(
+                                        // Mail — like Buy, require the MAIL frame to actually be open. Without the
+                                        // gate this action ran in the very tick the Mail POI was created — at the
+                                        // VENDOR, 90yd from the mailbox, merchant frame still up — so MailAllItems
+                                        // attached nothing (SendMail no-ops with the frame closed), burned its 10s
+                                        // confirm-timeout and cleared the POI before the move branch ever saw it
+                                        // (log 2026-07-02_2313 01:14:10). Gated, the tick ends instead, the outer
+                                        // move branch walks to the mailbox (a location-only Mail POI resolves
+                                        // AsObject to the nearest mailbox gameobject on arrival), the interact
+                                        // opens the mail frame, and THEN this mails for real.
+                                        new DecoratorIsPoiType(PoiType.Mail,
+                                            new Decorator(ctx => MailFrame.Instance.IsVisible, new Sequence(
                                             new ActionDebugString("Mailing items"),
                                             new ActionSetActivity("Mailing Items"),
                                             new TreeSharp.Action(ctx => Vendors.MailAllItems()),
@@ -1255,7 +1265,7 @@ namespace Bots.Grind
                                                 )
                                             ),
                                             new ActionClearPoi("Done mailing")
-                                        )),
+                                        ))),
                                         // Buy — like Sell/Repair, require the MERCHANT frame (not just any
                                         // vendor/gossip frame) to be open + populated before buying. Without
                                         // this the bot ran BuyItems a tick after Interact, while only the
