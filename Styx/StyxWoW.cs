@@ -101,17 +101,11 @@ namespace Styx
         public static bool IsInWorld => IsInGame && GameState != GameState.Zoning;
 
         /// <summary>
-        /// FEAT-19: Gets the current glue (login) screen state.
-        /// Returns GlueScreen.Unknown when in-game.
+        /// Gets the current glue (login) screen state, detected via GlueXML frame visibility
+        /// (one injected Lua roundtrip, cached ~1s). Returns GlueScreen.Unknown when in-game
+        /// or on loading/connecting screens where no glue frame is shown.
         /// </summary>
-        public static GlueScreen GlueState
-        {
-            get
-            {
-                if (IsInGame) return GlueScreen.Unknown;
-                return GlueScreen.Login;
-            }
-        }
+        public static GlueScreen GlueState => Logic.Relogging.GlueSession.Query().Screen;
 
         /// <summary>
         /// FEAT-44: Provides access to the WoW camera.

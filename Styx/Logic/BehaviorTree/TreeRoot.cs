@@ -262,7 +262,8 @@ namespace Styx.Logic.BehaviorTree
 		// moment we're back in world. Drives the log throttle (here) and the auto-stop (RunTickBody).
 		private static readonly Stopwatch _notInWorld = new Stopwatch();
 		private static int _notInWorldLastLogSec;
-		// A real outage won't self-resolve (no relog logic), so stop rather than spin idle for hours.
+		// A real outage won't self-resolve unless the Relogger is recovering (see RunTickBody),
+		// so stop rather than spin idle for hours.
 		private const double NotInWorldStopMinutes = 5.0;
 
 		/// <summary>
@@ -294,6 +295,12 @@ namespace Styx.Logic.BehaviorTree
 					Logging.Write("Still not in game after {0}s.", sec);
 				}
 			}
+
+			// "Only hook this location for relogging purposes" — this IS the relog hook.
+			// Drives the glue login on the worker thread while the bot stays alive;
+			// RunTickBody's auto-stop stands down while it recovers.
+			Relogging.Relogger.Tick();
+
 			return true; // not in game → skip tick
 		}
 
@@ -440,10 +447,11 @@ namespace Styx.Logic.BehaviorTree
 				return;
 			}
 
-			// Sustained "not in game" (disconnect / client crash / stuck loading) won't self-resolve — we
-			// have no relog logic — so stop cleanly instead of spinning idle for hours. Brief gaps
-			// (zoning/taxi/loading) reset the timer (InGameCheckAsync). Mirrors the process-exit stop above.
-			if (_notInWorld.Elapsed.TotalMinutes >= NotInWorldStopMinutes)
+			// Sustained "not in game" (disconnect / client crash / stuck loading) won't self-resolve
+			// unless the Relogger is driving recovery — while it is, stand down (its own give-up
+			// window bounds the wait; on GaveUp IsActivelyRecovering drops and this stop fires).
+			// Brief gaps (zoning/taxi/loading) reset the timer (InGameCheckAsync).
+			if (_notInWorld.Elapsed.TotalMinutes >= NotInWorldStopMinutes && !Relogging.Relogger.IsActivelyRecovering)
 			{
 				Logging.Write(Colors.Orange, "Not in game for {0:F0}+ min (likely disconnected/crashed). Stopping bot — relog, then restart it.", NotInWorldStopMinutes);
 				_notInWorld.Reset();
