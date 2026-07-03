@@ -220,7 +220,7 @@
                         <!-- ═══ COMBAT ═══ -->
                         <GroupBox Header="{loc:Resx GroupCombatLoot}">
                             <StackPanel Margin="4">
-                                <CheckBox x:Name="chkLootMobs" Content="{loc:Resx SkillMining}"
+                                <CheckBox x:Name="chkLootMobs" Content="{loc:Resx ChkLootMobs}"
                                           Margin="0,4" IsChecked="{Binding LootMobs, Mode=TwoWay}"/>
                                 <CheckBox x:Name="chkIgnoreElites" Content="{loc:Resx ChkIgnoreElites}"
                                           Margin="0,4" IsChecked="{Binding IgnoreElites, Mode=TwoWay}"/>
