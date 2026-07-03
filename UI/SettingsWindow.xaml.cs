@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using MahApps.Metro.Controls;
 using Styx.Helpers;
+using Styx.Logic.Relogging;
 using Styx;
 
 namespace CopilotBuddy.UI
@@ -16,12 +17,17 @@ namespace CopilotBuddy.UI
         {
             InitializeComponent();
             
-            // Set DataContext to enable bindings to CharacterSettings and StyxSettings
+            // Set DataContext to enable bindings to CharacterSettings and StyxSettings.
+            // CharSettings is null until character init (glue-screen attach) — those bindings stay inert.
             DataContext = new SettingsDataContext
             {
                 CharSettings = CharacterSettings.Instance,
-                StyxSettings = StyxSettings.Instance
+                StyxSettings = StyxSettings.Instance,
+                RelogSettings = RelogSettings.Instance
             };
+
+            // PasswordBox does not support binding; round-trip the DPAPI-backed value by hand.
+            pwdRelogPassword.Password = RelogSettings.Instance.Password;
 
             // Initialize log level ComboBox
             InitializeLogLevelComboBox();
@@ -116,10 +122,15 @@ namespace CopilotBuddy.UI
 
         private void btnSaveAndClose_Click(object sender, RoutedEventArgs e)
         {
-            // Save both settings
-            CharacterSettings.Instance.Save();
+            // Save all settings (CharacterSettings doesn't exist yet when opened at the glue screen)
+            CharacterSettings.Instance?.Save();
             StyxSettings.Instance.Save();
-            
+
+            RelogSettings.Instance.Password = pwdRelogPassword.Password;
+            RelogSettings.Instance.Save();
+            // Re-saving relogger settings clears a GaveUp latch (fixed credentials = fresh start).
+            Relogger.Reset();
+
             // Close the window
             Close();
         }
@@ -169,5 +180,6 @@ namespace CopilotBuddy.UI
     {
         public CharacterSettings? CharSettings { get; set; }
         public StyxSettings? StyxSettings { get; set; }
+        public RelogSettings? RelogSettings { get; set; }
     }
 }

@@ -22,6 +22,7 @@ using Styx.CommonBot;
 using Styx.Helpers;
 using Styx.Logic.BehaviorTree;
 using Styx.Logic.Profiles;
+using Styx.Logic.Relogging;
 using Styx.WoWInternals;
 
 using WpfFontFamily = System.Windows.Media.FontFamily;
@@ -57,6 +58,16 @@ namespace CopilotBuddy.UI
         /// HB 4.3.4 pattern.
         /// </summary>
         private int? _selectedWoWProc;
+
+        /// <summary>Character-dependent init (Phase B) has run — it must run exactly once.</summary>
+        private bool _characterInitDone;
+
+        /// <summary>
+        /// /allowglue: permit attaching to a WoW that sits at the login screen (Relogger scenario).
+        /// Character-dependent init is deferred until in-world (see CompleteCharacterInit).
+        /// </summary>
+        private static bool AllowGlueAttach =>
+            Environment.GetCommandLineArgs().Any(s => s.Equals("/allowglue", StringComparison.OrdinalIgnoreCase));
 
         #endregion
 
@@ -185,95 +196,28 @@ namespace CopilotBuddy.UI
                         BotEvents.OnBotStarted += BotEvents_OnBotStarted;
                         BotEvents.OnBotStopped += BotEvents_OnBotStopped;
 
-                        // Log character info (HB 4.3.4 pattern after attach)
-                        if (ObjectManager.Me != null)
-                        {
-                            Logging.Write("Character is a level {0} {1} {2}",
-                                ObjectManager.Me.Level,
-                                ObjectManager.Me.Race,
-                                ObjectManager.Me.Class);
-                            // Honorbuddy 3.3.5a simply logged RealZoneText
-                            Logging.Write("Current zone is {0}", ObjectManager.Me.RealZoneText);
-                        }
+                        // Phase A (character-free): heartbeat + relog service run even at the glue screen.
+                        Heartbeat.Start();
+                        Relogger.Initialize();
 
-                        // Reinitialize and load settings for this character (HB 4.3.4 pattern)
-                        LoadSettings();
-
-                        // Initialize Combat Routines (compile and load from Routines folder)
-                        // This must be done AFTER attachment when ObjectManager.Me is available
-                        try
+                        if (StyxWoW.IsInGame)
                         {
-                            Styx.Logic.Combat.RoutineManager.Init();
+                            CompleteCharacterInit();
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            Logging.Write(Colors.Red, "Failed to initialize combat routines: {0}", ex.Message);
-                            Logging.WriteException(ex);
-                        }
-
-                        // Load additional bots from Bots folder (external/custom bots)
-                        try
-                        {
-                            string botsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Bots");
-                            if (Directory.Exists(botsPath))
+                            // /allowglue attach: per-character settings, class-based routine selection
+                            // and the enabled-plugins list all need a character — defer until stably
+                            // in-world (the Relogger drives the login when enabled).
+                            Logging.Write("Attached at the login screen — character init deferred until in-world.");
+                            Dispatcher.Invoke(() =>
                             {
-                                BotManager.Instance.LoadBots(botsPath);
-                            }
+                                SetStatus("Waiting for login...");
+                                // Settings stays reachable at the glue screen so the Relogger can be configured.
+                                btnSettings.IsEnabled = true;
+                            });
+                            Relogger.WorldEntered += OnFirstWorldEntered;
                         }
-                        catch (Exception ex)
-                        {
-                            Logging.WriteException(ex);
-                        }
-
-                        // Initialize plugins (compile and load from Plugins folder)
-                        try
-                        {
-                            Logging.Write("Initializing Plugins...");
-                            
-                            // Pre-load System.Drawing.Common for plugin compilation
-                            try
-                            {
-                                // Force load System.Drawing.Common into AppDomain
-                                var _ = System.Drawing.Font.FromHdc(IntPtr.Zero);
-                            }
-                            catch { /* Ignore, just ensure assembly is loaded */ }
-                            
-                            // Load previously enabled plugins from CharacterSettings
-                            var enabledPlugins = CharacterSettings.Instance.EnabledPlugins ?? new string[0];
-                            Styx.Plugins.PluginManager.Initialize(enabledPlugins);
-                        }
-                        catch (Exception ex)
-                        {
-                            Logging.Write(Colors.Red, "Failed to initialize plugins: {0}", ex.Message);
-                            Logging.WriteException(ex);
-                        }
-
-                        Dispatcher.Invoke(() =>
-                        {
-                            // Populate bot selector with all loaded bots (built-in + external)
-                            cmbBotSelector.Items.Clear();
-                            foreach (var bot in BotManager.Instance.Bots)
-                            {
-                                cmbBotSelector.Items.Add(bot.Key);
-                            }
-                            
-                            // Restore last selected bot (HB 4.3.4 pattern)
-                            if (cmbBotSelector.Items.Count > 0)
-                            {
-                                int selectedIndex = CharacterSettings.Instance.SelectedBotIndex;
-                                if (selectedIndex < 0 || selectedIndex >= cmbBotSelector.Items.Count)
-                                {
-                                    // Invalid index, reset to 0
-                                    CharacterSettings.Instance.SelectedBotIndex = 0;
-                                    selectedIndex = 0;
-                                }
-                                cmbBotSelector.SelectedIndex = selectedIndex;
-                            }
-
-                            ToggleButtons(true);
-                            SetStatus("CopilotBuddy Startup Complete");
-                            _infoTimer.Start();
-                        });
                     }
                     else
                     {
@@ -295,6 +239,173 @@ namespace CopilotBuddy.UI
                     });
                 }
             });
+        }
+
+        /// <summary>Deferred Phase B trigger for glue-screen attaches. Runs exactly once.</summary>
+        private void OnFirstWorldEntered()
+        {
+            Relogger.WorldEntered -= OnFirstWorldEntered;
+            Task.Run(() =>
+            {
+                try
+                {
+                    CompleteCharacterInit();
+                }
+                catch (Exception ex)
+                {
+                    Logging.WriteException(ex);
+                }
+            });
+        }
+
+        /// <summary>
+        /// Phase B: everything that needs a character in-world — per-character settings,
+        /// class-based routine selection, drop-in bot compilation, the per-character
+        /// enabled-plugins list, and the bot selector. Auto-start (when configured) fires
+        /// only at the very end, so it can never race the loaders.
+        /// </summary>
+        private void CompleteCharacterInit()
+        {
+            if (_characterInitDone)
+                return;
+            _characterInitDone = true;
+
+            // Log character info (HB 4.3.4 pattern after attach)
+            if (ObjectManager.Me != null)
+            {
+                Logging.Write("Character is a level {0} {1} {2}",
+                    ObjectManager.Me.Level,
+                    ObjectManager.Me.Race,
+                    ObjectManager.Me.Class);
+                // Honorbuddy 3.3.5a simply logged RealZoneText
+                Logging.Write("Current zone is {0}", ObjectManager.Me.RealZoneText);
+            }
+
+            // Reinitialize and load settings for this character (HB 4.3.4 pattern)
+            LoadSettings();
+
+            // Initialize Combat Routines (compile and load from Routines folder)
+            // This must be done AFTER attachment when ObjectManager.Me is available
+            try
+            {
+                Styx.Logic.Combat.RoutineManager.Init();
+            }
+            catch (Exception ex)
+            {
+                Logging.Write(Colors.Red, "Failed to initialize combat routines: {0}", ex.Message);
+                Logging.WriteException(ex);
+            }
+
+            // Load additional bots from Bots folder (external/custom bots)
+            try
+            {
+                string botsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Bots");
+                if (Directory.Exists(botsPath))
+                {
+                    BotManager.Instance.LoadBots(botsPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.WriteException(ex);
+            }
+
+            // Initialize plugins (compile and load from Plugins folder)
+            try
+            {
+                Logging.Write("Initializing Plugins...");
+
+                // Pre-load System.Drawing.Common for plugin compilation
+                try
+                {
+                    // Force load System.Drawing.Common into AppDomain
+                    var _ = System.Drawing.Font.FromHdc(IntPtr.Zero);
+                }
+                catch { /* Ignore, just ensure assembly is loaded */ }
+
+                // Load previously enabled plugins from CharacterSettings
+                var enabledPlugins = CharacterSettings.Instance.EnabledPlugins ?? new string[0];
+                Styx.Plugins.PluginManager.Initialize(enabledPlugins);
+            }
+            catch (Exception ex)
+            {
+                Logging.Write(Colors.Red, "Failed to initialize plugins: {0}", ex.Message);
+                Logging.WriteException(ex);
+            }
+
+            Dispatcher.Invoke(() =>
+            {
+                // Populate bot selector with all loaded bots (built-in + external)
+                cmbBotSelector.Items.Clear();
+                foreach (var bot in BotManager.Instance.Bots)
+                {
+                    cmbBotSelector.Items.Add(bot.Key);
+                }
+
+                // Restore last selected bot (HB 4.3.4 pattern)
+                if (cmbBotSelector.Items.Count > 0)
+                {
+                    int selectedIndex = CharacterSettings.Instance.SelectedBotIndex;
+                    if (selectedIndex < 0 || selectedIndex >= cmbBotSelector.Items.Count)
+                    {
+                        // Invalid index, reset to 0
+                        CharacterSettings.Instance.SelectedBotIndex = 0;
+                        selectedIndex = 0;
+                    }
+                    cmbBotSelector.SelectedIndex = selectedIndex;
+                }
+
+                ToggleButtons(true);
+                SetStatus("CopilotBuddy Startup Complete");
+                _infoTimer.Start();
+
+                TryAutoStart();
+            });
+        }
+
+        /// <summary>
+        /// Auto-start (Relogger setting), fired once at the very end of Phase B: every loader
+        /// has finished and the bot selector is populated, so a start from here cannot race
+        /// initialization. Unresolvable configuration is FATAL (GaveUp) — never a retry loop.
+        /// </summary>
+        private void TryAutoStart()
+        {
+            if (!RelogSettings.Instance.AutoStartBot)
+                return;
+
+            string overrideName = RelogSettings.Instance.BotBase;
+            if (!string.IsNullOrEmpty(overrideName))
+            {
+                int idx = -1;
+                for (int i = 0; i < cmbBotSelector.Items.Count; i++)
+                {
+                    if (string.Equals(cmbBotSelector.Items[i]?.ToString(), overrideName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        idx = i;
+                        break;
+                    }
+                }
+                if (idx < 0)
+                {
+                    Relogger.GiveUp($"AutoStart: botbase '{overrideName}' not found among loaded botbases");
+                    return;
+                }
+                cmbBotSelector.SelectedIndex = idx;
+            }
+
+            if (BotManager.Current == null)
+            {
+                Relogger.GiveUp("AutoStart: no botbase selected");
+                return;
+            }
+            if (Styx.Logic.Combat.RoutineManager.Current == null)
+            {
+                Relogger.GiveUp($"AutoStart: no combat routine loaded for class {ObjectManager.Me?.Class.ToString() ?? "?"}");
+                return;
+            }
+
+            Logging.Write(Colors.LimeGreen, "[Relogger] Auto-starting botbase '{0}'.", BotManager.Current.Name);
+            StartBot();
         }
 
         /// <summary>
@@ -379,9 +490,9 @@ namespace CopilotBuddy.UI
                 {
                     using var tempMemory = new Memory(proc.Id);
 
-                    // Check if player is logged in
+                    // Check if player is logged in (/allowglue permits login-screen attach for the Relogger)
                     bool isLoggedIn = tempMemory.Read<byte>(Styx.Offsets.GlobalOffsets.InGame) != 0;
-                    if (!isLoggedIn)
+                    if (!isLoggedIn && !AllowGlueAttach)
                         continue;
 
                     // Try to claim the process via mutex
@@ -460,8 +571,8 @@ namespace CopilotBuddy.UI
             {
                 var memory = new Memory(wowPid);
 
-                // Verify still logged in before committing
-                if (memory.Read<byte>(Styx.Offsets.GlobalOffsets.InGame) == 0)
+                // Verify still logged in before committing (/allowglue permits login-screen attach)
+                if (memory.Read<byte>(Styx.Offsets.GlobalOffsets.InGame) == 0 && !AllowGlueAttach)
                 {
                     memory.Dispose();
                     Logging.Write(Colors.Red, "Process ID {0} is not logged in game!", wowPid);

@@ -279,6 +279,47 @@
                        Text="{loc:Resx LblLanguageRestart}"/>
           </Grid>
         </GroupBox>
+
+        <!-- Relogger GroupBox (account-level settings; password stored DPAPI-encrypted) -->
+        <GroupBox x:Name="gbRelogger" Header="Relogger"
+                  Foreground="White" Height="199" Width="452" Margin="4">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <CheckBox x:Name="chkRelogEnabled" Content="Enable relogging" Foreground="White"
+                      Margin="8,8,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"
+                      IsChecked="{Binding Path=RelogSettings.Enabled, Mode=TwoWay}"/>
+            <Label Content="Account" Foreground="White"
+                   Margin="8,28,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"/>
+            <TextBox x:Name="txtRelogAccount" Margin="8,52,8,0" VerticalAlignment="Top"
+                     Text="{Binding Path=RelogSettings.AccountName, Mode=TwoWay}"/>
+            <Label Content="Password (stored encrypted)" Foreground="White"
+                   Margin="8,76,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"/>
+            <PasswordBox x:Name="pwdRelogPassword" Margin="8,100,8,0" VerticalAlignment="Top"/>
+            <CheckBox x:Name="chkRelogAutoStart" Content="Auto-start bot when in world" Foreground="White"
+                      Margin="8,134,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"
+                      IsChecked="{Binding Path=RelogSettings.AutoStartBot, Mode=TwoWay}"/>
+            <Label Grid.Column="1" Content="Realm (empty = first found)" Foreground="White"
+                   Margin="8,2,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"/>
+            <TextBox Grid.Column="1" x:Name="txtRelogRealm" Margin="8,26,8,0" VerticalAlignment="Top"
+                     Text="{Binding Path=RelogSettings.RealmName, Mode=TwoWay}"/>
+            <Label Grid.Column="1" Content="Character (empty = current selection)" Foreground="White"
+                   Margin="8,50,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"/>
+            <TextBox Grid.Column="1" x:Name="txtRelogCharacter" Margin="8,74,8,0" VerticalAlignment="Top"
+                     Text="{Binding Path=RelogSettings.CharacterName, Mode=TwoWay}"/>
+            <Label Grid.Column="1" Content="Botbase (empty = last used)" Foreground="White"
+                   Margin="8,98,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"/>
+            <TextBox Grid.Column="1" x:Name="txtRelogBotBase" Margin="8,122,8,0" VerticalAlignment="Top"
+                     Text="{Binding Path=RelogSettings.BotBase, Mode=TwoWay}"/>
+            <Label Grid.Column="1" Content="Give up after (minutes)" Foreground="White"
+                   Margin="8,146,0,0" VerticalAlignment="Top" HorizontalAlignment="Left"/>
+            <TextBox Grid.Column="1" x:Name="txtRelogGiveUp" Margin="0,150,8,0" VerticalAlignment="Top"
+                     HorizontalAlignment="Right" Width="50"
+                     Text="{Binding Path=RelogSettings.GiveUpAfterMinutes, Mode=TwoWay}"/>
+          </Grid>
+        </GroupBox>
       </WrapPanel>
     </ScrollViewer>
   </Grid>
