@@ -52,6 +52,8 @@ namespace CopilotBuddy.UI
 		{
 			// The TwoWay binding already handles the state change
 			// This method can be used for additional actions
+			if (PluginManager.IsBuildingPlugins)
+				return; // refresh teardown flips stale checkboxes — not a user action, don't narrate it
 			if (sender is System.Windows.Controls.CheckBox checkBox && checkBox.DataContext is PluginContainer container)
 			{
 				if (container.Enabled)
