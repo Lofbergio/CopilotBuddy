@@ -203,6 +203,10 @@ namespace CopilotBuddy.UI
                             // and the enabled-plugins list all need a character — defer until stably
                             // in-world (the Relogger drives the login when enabled).
                             Logging.Write("Attached at the login screen — character init deferred until in-world.");
+                            if (RelogSettings.Instance.IsUsable)
+                                Logging.Write("The Relogger will log in automatically.");
+                            else
+                                Logging.Write("Log in to a character to finish initialization — the Start button unlocks once in-world. (Or configure the Relogger under Settings.)");
                             Dispatcher.Invoke(() =>
                             {
                                 SetStatus("Waiting for login...");
