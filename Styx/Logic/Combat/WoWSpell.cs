@@ -124,23 +124,23 @@ namespace Styx.Logic.Combat
             get { return _spellEntry.Category; }
         }
 
-        // ⚠ BROKEN — DO NOT CONSUME (2026-07-02). _spellEntry (row.GetStruct<SpellEntry>) misreads client
-        // memory: the in-game Spell row is NOT the flat Spell.dbc record (only field 0/Id matches; Deadly
-        // Poison read Dispel=1025 vs the file's 4, and a raw dump showed floats/pointers where file columns
-        // should be — see the AuraScanDebug plugin findings). EVERY _spellEntry-backed property here is
-        // garbage: DispelType, School, Category, MaxStackCount, baseLevel, DurationIndex, rangeIndex, the
-        // effect arrays… Properties that WORK use other paths (GetSpellInfo cache: CastTime/MaxRange/
-        // PowerCost; Spells.bin: Name/Rank; ASM: Cooldown; Lua: CanCast). Consumers were rerouted: cleanse
-        // reads UnitDebuff (Lua debuffType), immunity-learning takes school from combat-log payloads.
-        // Fixing this properly means reverse-engineering the client's real in-memory SpellRec layout.
+        // ⚠ _spellEntry (row.GetStruct<SpellEntry>) is BROKEN — DO NOT CONSUME (2026-07-02). It misreads
+        // client memory: the in-game Spell row is NOT the flat Spell.dbc record (only field 0/Id matches;
+        // Deadly Poison read Dispel=1025 vs the file's 4, and a raw dump showed floats/pointers where file
+        // columns should be — see the AuraScanDebug plugin findings). Any _spellEntry-backed property is
+        // garbage: Category, MaxStackCount, baseLevel, DurationIndex, rangeIndex, the effect arrays…
+        // Properties that WORK use other paths: GetSpellInfo cache (CastTime/MaxRange/PowerCost),
+        // Spells.bin (Name/Rank — and since SPDB v2: School/DispelType/Mechanic, joined offline from the
+        // real Spell.dbc by Tools/gen_spells_bin.py), ASM (Cooldown), Lua (CanCast). Fixing _spellEntry
+        // properly means reverse-engineering the client's real in-memory SpellRec layout.
         public WoWDispelType DispelType
         {
-            get { return (WoWDispelType)_spellEntry.Dispel; }
+            get { return (WoWDispelType)(SpellDb.GetSpell(_id)?.Dispel ?? 0); }
         }
 
         public WoWSpellMechanic Mechanic
         {
-            get { return (WoWSpellMechanic)_spellEntry.Mechanic; }
+            get { return (WoWSpellMechanic)(SpellDb.GetSpell(_id)?.Mechanic ?? 0); }
         }
 
         public uint MaxTargets
@@ -393,7 +393,7 @@ namespace Styx.Logic.Combat
 
         public WoWSpellSchool School
         {
-            get { return (WoWSpellSchool)_spellEntry.SchoolMask; }
+            get { return (WoWSpellSchool)(SpellDb.GetSpell(_id)?.SchoolMask ?? 0); }   // SPDB v2 (real Spell.dbc), not the broken _spellEntry
         }
 
         /// <summary>

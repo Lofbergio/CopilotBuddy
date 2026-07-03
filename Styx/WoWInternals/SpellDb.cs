@@ -26,6 +26,12 @@ namespace Styx.WoWInternals
             public int Id { get; set; }
             public string Name { get; set; } = "";
             public string Rank { get; set; } = "";
+            // SPDB v2 fields, joined from the 3.3.5a Spell.dbc by Tools/gen_spells_bin.py. These exist
+            // because the client's in-memory Spell row is NOT the flat dbc record (see WoWSpell.cs) —
+            // static file data is the only trustworthy source for them. 0 on a v1 file.
+            public int SchoolMask { get; set; }
+            public int Dispel { get; set; }
+            public int Mechanic { get; set; }
         }
 
         /// <summary>
@@ -75,16 +81,17 @@ namespace Styx.WoWInternals
                     throw new Exception("Spells.bin is not in correct format (expected SPDB header)");
                 }
 
-                // Read version (should be 1.0f)
+                // v1 = id/name/rank; v2 appends schoolMask/dispel/mechanic per spell.
                 float version = reader.ReadSingle();
-                if (version != 1f)
+                if (version != 1f && version != 2f)
                 {
                     Logging.Write("[SpellDb] Warning: Unknown Spells.bin version: {0}", version);
                 }
+                bool v2 = version >= 2f;
 
                 // Read spell count
                 int spellCount = reader.ReadInt32();
-                
+
                 // Skip reserved int
                 reader.ReadInt32();
 
@@ -97,7 +104,13 @@ namespace Styx.WoWInternals
                         Name = reader.ReadString(),
                         Rank = reader.ReadString()
                     };
-                    
+                    if (v2)
+                    {
+                        spell.SchoolMask = reader.ReadInt32();
+                        spell.Dispel = reader.ReadInt32();
+                        spell.Mechanic = reader.ReadInt32();
+                    }
+
                     if (_spells != null && !_spells.ContainsKey(spell.Id))
                     {
                         _spells.Add(spell.Id, spell);
