@@ -1284,8 +1284,14 @@ namespace Bots.VibeGrinder
                 bool attackingUs = u.CurrentTargetGuid == me.Guid || (petGuid != 0 && u.CurrentTargetGuid == petGuid);
                 // Path-clear is gated to level-safe in-range hostiles (level 0 = ?? → never proactively pull,
                 // but still defend if it's on us). Defensive ignores both gates — fight what's hitting us.
+                // BAND-bounded below too (same TargetMinLevel band the mounted find-target checks): with no
+                // floor, a below-band roadside mob (Witherbark Troll[31] vs a 36) got surfaced + committed,
+                // and the mounted Kill-POI conversion then refused it on the level filter — the approach↔
+                // hotspot oscillation (log 2026-07-03_1458 15:15+). Greens have no grind value anyway; if
+                // one body-pulls, attackingUs surfaces it and we defend.
                 int ulevel = (int)u.Level;
-                bool pathClear = u.Distance <= surfaceR && ulevel > 0 && ulevel <= safeLevel;
+                int floorLevel = me.Level - VibeGrinderSettings.Instance.LevelBandBelow;
+                bool pathClear = u.Distance <= surfaceR && ulevel >= floorLevel && ulevel <= safeLevel;
                 // Inevitable fight: a hostile in the (L+PathHostileLevelMargin, L+DangerLevelMargin] band —
                 // too high for pathClear, too low for OverlevelHostileInAggro to have rejected the spot — was
                 // invisible to BOTH systems, so we camped inside its aggro bubble and it added onto a fight

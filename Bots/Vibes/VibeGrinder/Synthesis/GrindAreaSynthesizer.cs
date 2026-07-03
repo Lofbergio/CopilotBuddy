@@ -26,6 +26,7 @@ namespace Bots.VibeGrinder.Synthesis
         // permanently overwrite a user's deliberate 0 = "never buy consumables").
         private int _origPullDistance = -1;
         private bool? _origRessAtSpiritHealers;
+        private bool? _origKillBetweenHotspots;
 
         public GrindAreaSynthesizer(MailboxService mailboxes)
         {
@@ -93,6 +94,16 @@ namespace Bots.VibeGrinder.Synthesis
             // graveyard (normal deaths still corpse-run) — which then frees the supervisor to relocate.
             _origRessAtSpiritHealers = CharacterSettings.Instance.RessAtSpiritHealers;
             CharacterSettings.Instance.RessAtSpiritHealers = true;
+
+            // Route-killing while MOUNTED. ApplyPullCommitment deliberately commits to on-route mobs, but
+            // stock DecoratorNeedToFindTarget refuses to convert an in-range FirstUnit to a Kill POI while
+            // mounted unless the mob is near the DESTINATION hotspot — or KillBetweenHotspots is on. With it
+            // off, a mid-trek commit oscillates around PullDistance forever: approach while >27yd, hotspot-
+            // move once <27yd, re-path each flip (Witherbark/Boulderfist treks, log 2026-07-03_1458 15:15+).
+            // The find-target level filter still applies, paired with the band-bounded surfacing in
+            // IncludeNearbyHostiles so the two can't disagree.
+            _origKillBetweenHotspots = StyxSettings.Instance.KillBetweenHotspots;
+            StyxSettings.Instance.KillBetweenHotspots = true;
 
             ProfileManager.UseSyntheticProfile(_profile);
         }
@@ -163,6 +174,7 @@ namespace Bots.VibeGrinder.Synthesis
         {
             if (_origPullDistance >= 0) { CharacterSettings.Instance.PullDistance = _origPullDistance; _origPullDistance = -1; }
             if (_origRessAtSpiritHealers.HasValue) { CharacterSettings.Instance.RessAtSpiritHealers = _origRessAtSpiritHealers.Value; _origRessAtSpiritHealers = null; }
+            if (_origKillBetweenHotspots.HasValue) { StyxSettings.Instance.KillBetweenHotspots = _origKillBetweenHotspots.Value; _origKillBetweenHotspots = null; }
         }
     }
 }
