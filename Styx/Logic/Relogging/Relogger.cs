@@ -118,23 +118,35 @@ namespace Styx.Logic.Relogging
 
         private static void WatchWorldStability()
         {
-            if (ObjectManager.Wow == null)
+            if (ObjectManager.Wow == null || _worldEnteredRaised)
                 return;
 
-            if (StyxWoW.IsInWorld)
-            {
-                if (_inWorldSinceUtc == DateTime.MinValue)
-                    _inWorldSinceUtc = DateTime.UtcNow;
-                else if (!_worldEnteredRaised && (DateTime.UtcNow - _inWorldSinceUtc).TotalSeconds >= WorldStableSeconds)
-                {
-                    _worldEnteredRaised = true;
-                    WorldEntered?.Invoke();
-                }
-            }
-            else
+            if (!StyxWoW.IsInWorld)
             {
                 _inWorldSinceUtc = DateTime.MinValue;
-                _worldEnteredRaised = false;
+                return;
+            }
+
+            // The bot pulsator (which normally drives ObjectManager.Update → populates Me) isn't
+            // running yet, and Update() was a no-op at the glue attach. Pump it here so Me becomes
+            // live after a fresh login — otherwise Phase B's LoadSettings early-returns on a null Me
+            // and CharacterSettings.Instance stays null (plugin init + bot selector then NRE).
+            try { ObjectManager.Update(); } catch { /* transient read during zone-in */ }
+
+            // Gate on Me, not just the InGame byte: that flag flips true before the object manager
+            // has enumerated the local player.
+            if (ObjectManager.Me == null)
+            {
+                _inWorldSinceUtc = DateTime.MinValue;
+                return;
+            }
+
+            if (_inWorldSinceUtc == DateTime.MinValue)
+                _inWorldSinceUtc = DateTime.UtcNow;
+            else if ((DateTime.UtcNow - _inWorldSinceUtc).TotalSeconds >= WorldStableSeconds)
+            {
+                _worldEnteredRaised = true;
+                WorldEntered?.Invoke();
             }
         }
 

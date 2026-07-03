@@ -265,21 +265,34 @@ namespace CopilotBuddy.UI
         {
             if (_characterInitDone)
                 return;
+
+            // The whole chain below is per-character and dereferences CharacterSettings.Instance —
+            // require a live Me first. WorldEntered already gates on this, but a direct in-world
+            // attach could still reach here mid zone-in; bail and let the caller retry rather than
+            // half-initialize (a null Instance NRE'd plugin init AND the bot selector, crashing CB).
+            if (ObjectManager.Me == null)
+            {
+                Logging.Write(Colors.Orange, "Character not ready yet (Me is null) — deferring character init.");
+                return;
+            }
             _characterInitDone = true;
 
             // Log character info (HB 4.3.4 pattern after attach)
-            if (ObjectManager.Me != null)
-            {
-                Logging.Write("Character is a level {0} {1} {2}",
-                    ObjectManager.Me.Level,
-                    ObjectManager.Me.Race,
-                    ObjectManager.Me.Class);
-                // Honorbuddy 3.3.5a simply logged RealZoneText
-                Logging.Write("Current zone is {0}", ObjectManager.Me.RealZoneText);
-            }
+            Logging.Write("Character is a level {0} {1} {2}",
+                ObjectManager.Me.Level,
+                ObjectManager.Me.Race,
+                ObjectManager.Me.Class);
+            // Honorbuddy 3.3.5a simply logged RealZoneText
+            Logging.Write("Current zone is {0}", ObjectManager.Me.RealZoneText);
 
             // Reinitialize and load settings for this character (HB 4.3.4 pattern)
             LoadSettings();
+            if (CharacterSettings.Instance == null)
+            {
+                Logging.Write(Colors.Red, "Character settings failed to load — aborting character init.");
+                _characterInitDone = false;
+                return;
+            }
 
             // Initialize Combat Routines (compile and load from Routines folder)
             // This must be done AFTER attachment when ObjectManager.Me is available
