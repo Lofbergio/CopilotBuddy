@@ -26,9 +26,7 @@
             <ListBox.ItemTemplate>
                 <DataTemplate>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch">
-                        <CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}"
-                                  Checked="Plugin_CheckedChanged"
-                                  Unchecked="Plugin_CheckedChanged"/>
+                        <CheckBox IsChecked="{Binding Enabled, Mode=TwoWay}"/>
                         <Label HorizontalAlignment="Stretch" Content="{Binding Name}"/>
                     </StackPanel>
                 </DataTemplate>

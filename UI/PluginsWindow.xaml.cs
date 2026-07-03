@@ -48,25 +48,6 @@ namespace CopilotBuddy.UI
 			}
 		}
 
-		private void Plugin_CheckedChanged(object sender, RoutedEventArgs e)
-		{
-			// The TwoWay binding already handles the state change
-			// This method can be used for additional actions
-			if (PluginManager.IsBuildingPlugins)
-				return; // refresh teardown flips stale checkboxes — not a user action, don't narrate it
-			if (sender is System.Windows.Controls.CheckBox checkBox && checkBox.DataContext is PluginContainer container)
-			{
-				if (container.Enabled)
-				{
-					Logging.Write($"Plugin '{container.Name}' enabled.");
-				}
-				else
-				{
-					Logging.Write($"Plugin '{container.Name}' disabled.");
-				}
-			}
-		}
-
 		private void BtnSettings_Click(object sender, RoutedEventArgs e)
 		{
 			if (lstPlugins.SelectedItem is PluginContainer container && container.WantButton)
@@ -139,6 +120,10 @@ namespace CopilotBuddy.UI
 			{
 				Logging.WriteException(ex);
 			}
+
+			// Detach bindings — a closed window otherwise keeps zombie TwoWay bindings to the
+			// live containers until GC, reacting to every Enabled flip made after it closed.
+			lstPlugins.ItemsSource = null;
 
 			base.OnClosing(e);
 		}
