@@ -126,6 +126,12 @@ namespace Styx.Plugins
             try
             {
                 IsBuildingPlugins = true;
+
+                // Tear down old instances before dropping them — enabled plugins own live
+                // timers/Lua-event handlers that would keep running the old build alongside
+                // the recompiled one. (UpdateEnabledPlugins is a no-op while building.)
+                foreach (PluginContainer container in Plugins)
+                    container.Enabled = false;
                 Plugins.Clear();
 
                 // Force garbage collection to release old plugin assemblies

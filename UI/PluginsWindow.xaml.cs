@@ -19,6 +19,11 @@ namespace CopilotBuddy.UI
 
 		private void LoadPlugins()
 		{
+			// PluginManager.Plugins is the same List instance across refreshes; re-assigning it
+			// is a WPF no-op that leaves the pre-recompile containers on screen — the checkbox
+			// would then enable the STALE instance from the old assembly. Null first to force
+			// item regeneration.
+			lstPlugins.ItemsSource = null;
 			lstPlugins.ItemsSource = PluginManager.Plugins;
 			
 			if (PluginManager.Plugins.Count == 0)
@@ -95,8 +100,6 @@ namespace CopilotBuddy.UI
 
 				// Reload UI
 				LoadPlugins();
-
-				Logging.Write("Plugins refreshed successfully.");
 			}
 			catch (Exception ex)
 			{
