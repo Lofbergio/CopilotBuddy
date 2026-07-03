@@ -1362,7 +1362,7 @@ namespace Bots.VibeGrinder
             // selection (OverlevelHostileInAggro); anything at/below it that we're bubble-deep in is ours to fight.
             int inevitableLevel = me.Level + VibeGrinderSettings.Instance.DangerLevelMargin;
             ulong petGuid = me.GotAlivePet && me.Pet != null ? me.Pet.Guid : 0;
-            int surfaced = 0, defensive = 0, inevitableN = 0;
+            int surfaced = 0, defensive = 0, inevitableN = 0, greenN = 0;
 
             foreach (WoWObject obj in incoming)
             {
@@ -1397,6 +1397,17 @@ namespace Bots.VibeGrinder
                 bool inevitable = ulevel > safeLevel && ulevel <= inevitableLevel
                                   && u.Distance <= u.MyAggroRange + VibeGrinderSettings.Instance.PreemptAggroBuffer
                                   && System.Math.Abs(u.Location.Z - me.Location.Z) < 5f;
+                // Downward twin (user 2026-07-03: "either keep running or fight them when you get into
+                // combat"): a BELOW-band hostile has no grind value, but ON FOOT inside its aggro bubble
+                // the fight has already started — we just can't see it. Invisibility produced the
+                // incoherent Sentry-camp loop (log 2026-07-03_1847 23:26): outran the aggro mid-transit,
+                // then blindly body-pulled the same camp at the destination spot. Bubble-gated so distant
+                // greens stay invisible (no Witherbark green-chasing regression), and NOT while mounted —
+                // mounted = outrun it; surfacing mid-ride would steer the ride into the green, the exact
+                // mounted-refusal oscillation the band floor was added to kill.
+                bool unavoidable = !me.Mounted && ulevel > 0 && ulevel < floorLevel
+                                   && u.Distance <= u.MyAggroRange + VibeGrinderSettings.Instance.PreemptAggroBuffer
+                                   && System.Math.Abs(u.Location.Z - me.Location.Z) < 5f;
                 // Commitment hysteresis: the COMMITTED mob stays surfaced regardless of the radius. A mob
                 // wandering ON the 40yd boundary otherwise flaps candidate↔gone every pulse — ACQUIRE, "no
                 // longer a candidate" 0.25s later, back to hotspot travel, re-ACQUIRE 4s later, ~7s/cycle
@@ -1404,18 +1415,21 @@ namespace Bots.VibeGrinder
                 // cancellers stay real: death/blacklist still drop it (blacklist is checked above), and the
                 // no-progress give-up clock still expires an unreachable one.
                 bool committed = _committedGuid != 0 && u.Guid == _committedGuid;
-                if (!attackingUs && !pathClear && !inevitable && !committed) continue;
+                if (!attackingUs && !pathClear && !inevitable && !unavoidable && !committed) continue;
 
                 outgoing.Add(obj);
                 surfaced++;
                 if (attackingUs) defensive++;
                 else if (inevitable && !pathClear) inevitableN++;
+                else if (unavoidable && !pathClear) greenN++;
             }
 
             if (surfaced > 0 && (!_surfaceLogSw.IsRunning || _surfaceLogSw.Elapsed.TotalSeconds >= 3))
             {
-                Logging.WriteDebug("[VibeGrinder/Hostiles] surfaced {0} incidental hostile(s) ({1} attacking us{2}).",
-                    surfaced, defensive, inevitableN > 0 ? ", " + inevitableN + " inevitable over-level" : "");
+                Logging.WriteDebug("[VibeGrinder/Hostiles] surfaced {0} incidental hostile(s) ({1} attacking us{2}{3}).",
+                    surfaced, defensive,
+                    inevitableN > 0 ? ", " + inevitableN + " inevitable over-level" : "",
+                    greenN > 0 ? ", " + greenN + " bubble-deep below-band" : "");
                 _surfaceLogSw.Restart();
             }
         }
