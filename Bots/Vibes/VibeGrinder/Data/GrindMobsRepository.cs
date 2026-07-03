@@ -126,6 +126,29 @@ WHERE s.map_id = @map
         }
 
         /// <summary>
+        /// Template unit_flags for one entry (-1 = unknown/DB unavailable). The DB carries the AUTHORED
+        /// intent — the live spawn can drop flags the template has (Theramore Prisoner 23720 ships 0x8100
+        /// but spawns 0x8000 live, log 2026-07-03), so live-flag checks miss what this catches.
+        /// </summary>
+        public static long GetTemplateUnitFlags(uint entry)
+        {
+            EnsureInitialized();
+            if (!_isAvailable) return -1;
+            try
+            {
+                using var cmd = new SQLiteCommand("SELECT unit_flags FROM mobs WHERE entry = @entry", _connection);
+                cmd.Parameters.AddWithValue("@entry", (long)entry);
+                object v = cmd.ExecuteScalar();
+                return v == null || v == DBNull.Value ? -1 : Convert.ToInt64(v);
+            }
+            catch (Exception ex)
+            {
+                Logging.WriteDebug("[GrindMobs] GetTemplateUnitFlags error: {0}", ex.Message);
+                return -1;
+            }
+        }
+
+        /// <summary>
         /// Total spawn count (all creatures, unfiltered) within a bounding box — the denominator
         /// for a spot's purity score. Bounding box is cheap and good enough for purity.
         /// </summary>

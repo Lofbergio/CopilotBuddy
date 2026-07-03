@@ -316,6 +316,12 @@ namespace Bots.VibeGrinder
         // pin. Drop the commitment after PullCommitMaxSeconds without engaging (unreachable → blacklist).
         [Browsable(false)] public float PullCommitBoost => 100000f;
         [Browsable(false)] public int PullCommitMaxSeconds => 20;
+        // Entry ban (the caged Theramore Prisoners, log 2026-07-03): this many DISTINCT same-entry mobs
+        // each failing an in-place engage (give-up in range/LoS without ever opening) = the NAME is
+        // unengageable here (server-LoS trap / scripted NPC) → ban the entry for EntryBanMinutes. A kill
+        // of the entry resets its strikes, so a grind mob that fails one bad corner never accumulates.
+        [Browsable(false)] public int EntryBanGiveUps => 3;
+        [Browsable(false)] public int EntryBanMinutes => 45;
         [Browsable(false)] public int PullCrowdFullLevel => 15;
         [Browsable(false)] public int PullCrowdLevelCeiling => AddAvoidanceMode == AddAvoidance.Aggressive ? 70 : 50;
         [Browsable(false)] public int PackDeathAttackers => 2;

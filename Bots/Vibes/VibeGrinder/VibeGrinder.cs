@@ -48,6 +48,18 @@ namespace Bots.VibeGrinder
         private int _pullErrorCount;
         private string _lastPullError;
         private DateTime _pullErrorAt = DateTime.MinValue;
+
+        // Entry-level ban (see RecordEntryGiveUp / VetoBannedEntries): distinct same-entry give-ups → ban
+        // the whole NAME, because a per-guid blacklist re-learns the same caged prisoner 11 times as its
+        // neighbours rotate in. _dbImmuneCache: template unit_flags per entry (live flags can LIE — the
+        // prisoners spawn 0x8000 live but carry IMMUNE_TO_PC in the template), one SQL per new entry.
+        private readonly System.Collections.Generic.Dictionary<uint, System.Collections.Generic.HashSet<ulong>> _entryGiveUps
+            = new System.Collections.Generic.Dictionary<uint, System.Collections.Generic.HashSet<ulong>>();
+        private readonly System.Collections.Generic.Dictionary<uint, DateTime> _entryBanUntil
+            = new System.Collections.Generic.Dictionary<uint, DateTime>();
+        private readonly System.Collections.Generic.Dictionary<uint, bool> _dbImmuneCache
+            = new System.Collections.Generic.Dictionary<uint, bool>();
+        private readonly System.Diagnostics.Stopwatch _entryVetoLogSw = new System.Diagnostics.Stopwatch();   // throttle entry-veto log
         private bool _spotInstalled;
         private ulong _peelGuid;        // committed transit-peel target (see TransitPeel) — don't re-pick per tick
         private ulong _committedGuid;   // committed grind-pull target (see ApplyPullCommitment)
@@ -192,6 +204,8 @@ namespace Bots.VibeGrinder
             _committedGuid = 0;
             _committedTimer.Reset();
             _committedLastDist = double.MaxValue;
+            _entryGiveUps.Clear();
+            _entryBanUntil.Clear();   // session-scoped learning; _dbImmuneCache survives (static DB truth)
             _resting = false;
             _restSpot = WoWPoint.Empty;
             _restParked = false;
@@ -230,7 +244,14 @@ namespace Bots.VibeGrinder
             // off its grind list — otherwise it body-pulls them blind (see IncludeNearbyHostiles).
             Targeting.Instance.IncludeTargetsFilter += IncludeNearbyHostiles;
 
-            _onKill = args => _supervisor.RecordKill();
+            _onKill = args =>
+            {
+                _supervisor.RecordKill();
+                // A kill of an entry proves it's engageable — clear its give-up strikes (the SwimTrap
+                // "one kill proves workable" rule), so real grind mobs can never accumulate to a ban.
+                try { if (args?.KilledMob != null) _entryGiveUps.Remove(args.KilledMob.Entry); }
+                catch { /* stale unit at the death tick — strikes just persist */ }
+            };
             BotEvents.Player.OnMobKilled += _onKill;
 
             _onUiError = (sender, e) =>
@@ -246,6 +267,11 @@ namespace Bots.VibeGrinder
                     _pullErrorCount++;
                     _lastPullError = msg;
                     _pullErrorAt = DateTime.Now;
+                    // Telemetry: the 2026-07-03 prisoner wedge burned 128 casts with ZERO strikes counted and
+                    // the dead log couldn't say why. One line per counted strike makes any future deafness
+                    // (handler gate vs event delivery) diagnosable from Logs\ alone.
+                    Logging.WriteDebug("[VibeGrinder/Commit] pull-error strike {0} on {1:X}: '{2}'",
+                        _pullErrorCount, _committedGuid, msg);
                 }
             };
             Lua.Events.AttachEvent("UI_ERROR_MESSAGE", _onUiError);
@@ -342,6 +368,13 @@ namespace Bots.VibeGrinder
             //    death-cluster escalation. See CLAUDE.md "Roaming elite/rare patrols".
             VetoElites(units);
 
+            // 0b. Nor a mob whose NAME has proven unengageable: DB-flagged immune templates (the spot
+            //     selector already excludes their spawns via the same mask — this extends that truth to
+            //     LIVE surfacing, which is flag-blind) and session entry-bans earned via RecordEntryGiveUp
+            //     (the caged Theramore Prisoners: client-LoS clear, server-LoS blocked, per-guid blacklists
+            //     re-learned the same cage 11 mobs in a row). Same single-chokepoint coverage as VetoElites.
+            VetoBannedEntries(units);
+
             // 1. Quality weighting decides which mob is the *cleanest* to open on (runs in transit too —
             //    TransitPeel relies on the resulting isolation ordering).
             ApplyCrowdAndNeutralWeighting(units, me);
@@ -394,6 +427,67 @@ namespace Bots.VibeGrinder
                     vetoed, sample);
                 _eliteVetoLogSw.Restart();
             }
+        }
+
+        // Drop DB-flagged-immune and session-banned entries from pre-combat candidates. Initiation only —
+        // the weigh hook early-returns in combat, so defense against one that somehow attacks is untouched.
+        private void VetoBannedEntries(System.Collections.Generic.List<Targeting.TargetPriority> units)
+        {
+            int vetoed = 0;
+            string sample = null;
+            for (int i = units.Count - 1; i >= 0; i--)
+            {
+                WoWUnit u = units[i].Object?.ToUnit();
+                if (u == null || u.Entry == 0) continue;
+                DateTime until;
+                bool banned = _entryBanUntil.TryGetValue(u.Entry, out until) && DateTime.Now < until;
+                if (!banned && !IsDbImmune(u.Entry)) continue;
+                if (sample == null) sample = u.Name;
+                units.RemoveAt(i);
+                vetoed++;
+            }
+            if (vetoed > 0 && (!_entryVetoLogSw.IsRunning || _entryVetoLogSw.Elapsed.TotalSeconds >= 3))
+            {
+                Logging.WriteDebug("[VibeGrinder/Hostiles] vetoed {0} banned/immune-entry candidate(s) (e.g. {1}) — won't engage.",
+                    vetoed, sample);
+                _entryVetoLogSw.Restart();
+            }
+        }
+
+        // Template unit_flags check (cached; one SQL per new entry). The DB carries the authored intent
+        // (IMMUNE_TO_PC on the prisoner template) even when the live spawn drops the flag.
+        private bool IsDbImmune(uint entry)
+        {
+            bool immune;
+            if (_dbImmuneCache.TryGetValue(entry, out immune)) return immune;
+            long flags = GrindMobsRepository.GetTemplateUnitFlags(entry);
+            immune = flags > 0 && (flags & Selection.SpotSelector.ImmuneUnitFlagMask) != 0;
+            _dbImmuneCache[entry] = immune;
+            return immune;
+        }
+
+        /// <summary>
+        /// "Mega sus" escalation (user 2026-07-03, the Theramore Prisoner cages): ONE give-up is an angle
+        /// problem; EntryBanGiveUps DISTINCT mobs of the SAME entry all failing in place means the NAME is
+        /// unengageable here → ban the entry (VetoBannedEntries consumes it). The fast path counts
+        /// unconditionally — the client explicitly said the engage can't work; the slow 20s clock only
+        /// counts with the in-place signature (in range + client-LoS true), because a give-up on a
+        /// wanderer we couldn't catch says nothing about its entry. Kills reset strikes (see _onKill).
+        /// </summary>
+        private void RecordEntryGiveUp(WoWUnit held, double d, VibeGrinderSettings s, bool clientReported)
+        {
+            if (held == null || held.Entry == 0) return;
+            if (!clientReported && (d > s.MaxPullDistance + 3 || !held.InLineOfSpellSight)) return;
+            System.Collections.Generic.HashSet<ulong> guids;
+            if (!_entryGiveUps.TryGetValue(held.Entry, out guids))
+                _entryGiveUps[held.Entry] = guids = new System.Collections.Generic.HashSet<ulong>();
+            guids.Add(held.Guid);
+            if (guids.Count < s.EntryBanGiveUps) return;
+            _entryBanUntil[held.Entry] = DateTime.Now.AddMinutes(s.EntryBanMinutes);
+            _entryGiveUps.Remove(held.Entry);
+            Logging.Write(System.Drawing.Color.Khaki,
+                "[VibeGrinder/Commit] ENTRY BAN {0} (entry {1}) — {2} distinct in-place give-ups; ignoring that name for {3}m.",
+                held.Name, held.Entry, s.EntryBanGiveUps, s.EntryBanMinutes);
         }
 
         // Pin one mob to the top of the score so it stays FirstUnit (PullCommitBoost). No-op if guid==0 or absent.
@@ -646,6 +740,7 @@ namespace Bots.VibeGrinder
                             "[VibeGrinder/Commit] GIVE UP FAST on {0} — client reported '{1}' ×{2} — blacklisting 2m.",
                             held.Name, _lastPullError, _pullErrorCount);
                         Blacklist.Add(_committedGuid, System.TimeSpan.FromMinutes(2));
+                        RecordEntryGiveUp(held, d, s, clientReported: true);
                         _pullErrorCount = 0;
                         valid = false;
                     }
@@ -661,6 +756,7 @@ namespace Bots.VibeGrinder
                             held.Name, held.MyReaction, d, _committedTimer.Elapsed.TotalSeconds,
                             me.IsMoving, held.InLineOfSpellSight, NearestHostileDesc(me), units.Count);
                         Blacklist.Add(_committedGuid, System.TimeSpan.FromMinutes(2));
+                        RecordEntryGiveUp(held, d, s, clientReported: false);
                         valid = false;
                     }
                 }
@@ -1206,8 +1302,7 @@ namespace Bots.VibeGrinder
 
             if (s.VendorAreaLevelMargin > 0)
             {
-                const long immune = 0x2L | 0x100L | 0x2000000L;   // mirrors SpotSelector.ImmuneUnitFlagMask
-                float areaLevel = GrindMobsRepository.AverageAttackableLevelNear(map, loc, s.VendorAreaScanRadius, _factions, immune);
+                float areaLevel = GrindMobsRepository.AverageAttackableLevelNear(map, loc, s.VendorAreaScanRadius, _factions, Selection.SpotSelector.ImmuneUnitFlagMask);
                 if (areaLevel > me.Level + s.VendorAreaLevelMargin)
                     return RejectVendor("area avg level {0:F0} >> mine {1} (higher-level zone)", areaLevel, me.Level);
             }
