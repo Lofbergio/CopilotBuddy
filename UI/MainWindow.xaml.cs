@@ -374,13 +374,17 @@ namespace CopilotBuddy.UI
         }
 
         /// <summary>
-        /// Auto-start (Relogger setting), fired once at the very end of Phase B: every loader
-        /// has finished and the bot selector is populated, so a start from here cannot race
-        /// initialization. Unresolvable configuration is FATAL (GaveUp) — never a retry loop.
+        /// Auto-start, fired once at the very end of Phase B: every loader has finished and the
+        /// bot selector is populated, so a start from here cannot race initialization.
+        /// Requires BOTH the launch-time /autostart flag (only the Watchdog passes it, after a
+        /// crash relaunch) AND the AutoStartBot setting — so a manual double-click never auto-starts,
+        /// only unattended recovery does. Unresolvable config is FATAL (GaveUp), never a retry loop.
         /// </summary>
         private void TryAutoStart()
         {
-            if (!RelogSettings.Instance.AutoStartBot)
+            bool launchedForAutoStart = Environment.GetCommandLineArgs()
+                .Any(s => s.Equals("/autostart", StringComparison.OrdinalIgnoreCase));
+            if (!launchedForAutoStart || !RelogSettings.Instance.AutoStartBot)
                 return;
 
             string overrideName = RelogSettings.Instance.BotBase;
