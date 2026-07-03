@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>CopilotBuddy.Watchdog</AssemblyName>
+    <RootNamespace>CopilotBuddy.Watchdog</RootNamespace>
+    <!-- Children (CopilotBuddy.exe requires admin) inherit our elevation — no UAC prompts mid-recovery. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+</Project>
