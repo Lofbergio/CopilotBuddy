@@ -15,10 +15,12 @@ namespace Styx.Logic.Inventory
     {
         // Our memory item-cache reader (ItemInfo) returns null for many consumables on this server, so
         // subclass/spell detection is blind to bought food/water (Singular kept logging "no food/drink").
-        // Detect via the game's TOOLTIP instead — the same path the UI uses — scanning each bag item for a
-        // "restores … mana/health … sec" line (mana ⇒ drink, health ⇒ food). One cached Lua scan (≤1/sec)
-        // answers all callers; map matches back to WoWItems by Entry (a reliable memory field). This is CB
-        // answering "what's the best food/drink", which the routine relies on.
+        // Detect via the game's TOOLTIP instead — the same path the UI uses. The marker is the seated-use
+        // line ("Use: Must remain seated while drinking. Restores X mana over Y sec."): mana ⇒ drink,
+        // health ⇒ food. It must be THAT line — a loose any-line "mana…sec" match classified mp5 GEAR as
+        // water ("Equip: Restores 5 mana per 5 sec.", Deathchill Armor 2026-07-04) and the bot chain-
+        // "drank" an equippable rare. One cached Lua scan (≤1/sec) answers all callers; map matches back
+        // to WoWItems by Entry (a reliable memory field).
         private static readonly System.Diagnostics.Stopwatch _scanAge = new System.Diagnostics.Stopwatch();
         private static List<KeyValuePair<uint, int>> _cacheFood = new List<KeyValuePair<uint, int>>();
         private static List<KeyValuePair<uint, int>> _cacheDrink = new List<KeyValuePair<uint, int>>();
@@ -35,20 +37,21 @@ for bag=0,4 do
       local id = tonumber(string.match(link,'item:(%d+)'))
       if id then
         tip:SetOwner(UIParent,'ANCHOR_NONE') tip:ClearLines() tip:SetBagItem(bag,slot)
-        local hasMana,hasHealth,overTime,req = false,false,false,0
+        local hasMana,hasHealth,req = false,false,0
         for l=1,tip:NumLines() do
           local fs = _G['CopilotBuddyScanTipTextLeft'..l]
           local t = fs and fs:GetText()
           if t then
             local lt = string.lower(t)
-            if string.find(lt,'mana',1,true) then hasMana=true end
-            if string.find(lt,'health',1,true) then hasHealth=true end
-            if string.find(lt,'sec',1,true) then overTime=true end
+            if string.find(lt,'must remain seated',1,true) then
+              if string.find(lt,'mana',1,true) then hasMana=true end
+              if string.find(lt,'health',1,true) then hasHealth=true end
+            end
             local r = string.match(t,'Requires Level (%d+)')
             if r then req = tonumber(r) end
           end
         end
-        if overTime and req <= pl then
+        if req <= pl then
           if hasMana then d = d..id..':'..req..',' end
           if hasHealth then f = f..id..':'..req..',' end
         end
