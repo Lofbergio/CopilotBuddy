@@ -57,8 +57,8 @@ namespace Styx.Logic.Combat
             NoCaster = 8,
             /// <summary>The aura can be cancelled by the player.</summary>
             Cancellable = 16,
-            /// <summary>The aura has no duration (permanent until cancelled/removed).</summary>
-            NoDuration = 32,
+            /// <summary>Duration/EndTime fields are valid — 3.3.5a AFLAG_DURATION. Set on TIMED auras, clear on permanent ones.</summary>
+            Duration = 32,
             /// <summary>Unknown flag (often indicates passive).</summary>
             Unknown = 64,
             /// <summary>The aura is harmful (debuff).</summary>
@@ -200,8 +200,11 @@ namespace Styx.Logic.Combat
         
         /// <summary>
         /// Gets whether this aura has no duration (permanent).
+        /// 3.3.5a: 0x20 is AFLAG_DURATION ("duration fields valid"), NOT "no duration" — the inverted
+        /// reading made every timed aura report TimeLeft=MaxValue and every permanent one 0 (via
+        /// EndTime=0), starving rotations built on remaining-time (log 2026-07-04_0742).
         /// </summary>
-        public bool HasNoDuration => (Flags & AuraFlags.NoDuration) != 0;
+        public bool HasNoDuration => (Flags & AuraFlags.Duration) == 0;
         
         /// <summary>
         /// Gets whether this aura has a known caster.
