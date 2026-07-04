@@ -409,11 +409,15 @@ namespace Styx.Logic
         /// </summary>
         private static void HandleTaxiMapOpened(object sender, LuaEventArgs e)
         {
+            // Not a bot-initiated open (user at a flight master, or another module) → bail BEFORE the
+            // try/finally. This guard used to sit inside the try, so the finally's Hide() closed EVERY
+            // taxi map the moment anything pumped Lua events — even a plugin's own-timer pump with the
+            // bot stopped (GuildRecruiter). Also spares an unrelated BotPoi from the finally's Clear.
+            if (!CharacterSettings.Instance.UseFlightPaths || BotPoi.Current.Type != PoiType.Fly)
+                return;
+
             try
             {
-                if (!CharacterSettings.Instance.UseFlightPaths || BotPoi.Current.Type != PoiType.Fly)
-                    return;
-
                 Logging.Write("TaxiMap opened — updating known nodes list.");
 
                 // Use the taxi frame's own node list (Lua: NumTaxiNodes/TaxiNodeGetType/TaxiNodeName) as the
