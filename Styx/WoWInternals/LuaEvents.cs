@@ -252,6 +252,13 @@ namespace Styx.WoWInternals
                     }
                 }
             }
+            catch (ThreadInterruptedException)
+            {
+                // TreeRoot.Stop() interrupts the worker thread. Eating that interrupt here consumed the
+                // stop entirely — a worker wedged under this method became unkillable and CB zombied
+                // ("Bot thread hung during window close" ×3, log 2026-07-04_1057). Let it propagate.
+                throw;
+            }
             catch (Exception ex)
             {
                 Logging.WriteDebug("LuaEvents.ProcessEvents exception: " + ex.Message);

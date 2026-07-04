@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace CopilotBuddy.Watchdog;
@@ -10,7 +11,10 @@ namespace CopilotBuddy.Watchdog;
 ///  - WoW dead  → kill orphaned CB, relaunch WoW, relaunch CB with /pid= /autostart
 ///    (CB attaches at the login screen; its Relogger logs in; /autostart resumes the bot —
 ///    a manual double-click has no flag, so it never auto-starts).
-///  - CB dead, or heartbeat stale (hang) → relaunch CB against the running WoW.
+///  - WoW frozen (window "Not Responding" for WowHungSeconds) → power-cycle the pair. The
+///    process is alive and CB's heartbeat stays fresh, so no other check can see this.
+///  - CB dead, heartbeat stale (hang), or ZOMBIE (alive + fresh heartbeat but no main window
+///    for CbZombieSeconds — a wedged worker that ate its stop) → relaunch CB against the running WoW.
 ///  - Heartbeat state "GaveUp" (fatal login error / give-up window expired) → stand down;
 ///    power-cycling a credential error is exactly the churn this design forbids.
 ///  - Restart budget per target per rolling hour; 10 min of "InWorld" clears the books.
@@ -23,7 +27,9 @@ internal static class Program
         int CheckIntervalSeconds = 10,
         int HeartbeatStaleSeconds = 60,
         int MaxRestartsPerHour = 3,
-        int InWorldResetMinutes = 10);
+        int InWorldResetMinutes = 10,
+        int WowHungSeconds = 60,    // sustained "Not Responding" before a power-cycle; 0 = off
+        int CbZombieSeconds = 60);  // sustained windowless-but-alive CB before a restart; 0 = off
 
     private sealed record HeartbeatData(DateTime TimestampUtc, string State, bool BotRunning, int Pid, int WowPid, string GaveUpReason)
     {
@@ -36,6 +42,8 @@ internal static class Program
     private static readonly List<DateTime> _wowRestarts = new();
     private static readonly List<DateTime> _cbRestarts = new();
     private static DateTime _inWorldSinceUtc = DateTime.MinValue;
+    private static DateTime _wowHungSinceUtc = DateTime.MinValue;
+    private static DateTime _cbWindowlessSinceUtc = DateTime.MinValue;
     private static bool _gaveUpLogged;
     private static bool _budgetLogged;
     private static string _logPath = "";
@@ -166,20 +174,76 @@ internal static class Program
             return;
         }
 
+        // A FROZEN client is invisible to every other check: the process is alive and CB's heartbeat
+        // stays fresh (its writer thread doesn't need the game's render thread), but EndScene never
+        // fires again — the bot is dead in the water until a human notices (35-min hangs observed
+        // 2026-07-04; the 3.3.5a client freezes even unattended, ~10 hang events in the WER history).
+        // IsHungAppWindow is the Task-Manager "Not Responding" test (no message pump for >5s); require
+        // it SUSTAINED so a long loading hitch can't false-positive, then power-cycle the PAIR on the
+        // WoW budget — same doctrine as the relogger escalation: restart beats decoding the state.
+        if (config.WowHungSeconds > 0 && wow.MainWindowHandle != IntPtr.Zero && IsHungAppWindow(wow.MainWindowHandle))
+        {
+            if (_wowHungSinceUtc == DateTime.MinValue)
+            {
+                _wowHungSinceUtc = DateTime.UtcNow;
+                Log($"WoW window (pid {wow.Id}) is not responding — power-cycling in {config.WowHungSeconds}s unless it recovers.");
+            }
+            else if ((DateTime.UtcNow - _wowHungSinceUtc).TotalSeconds >= config.WowHungSeconds)
+            {
+                if (!TrySpendBudget(_wowRestarts, config.MaxRestartsPerHour, "WoW"))
+                    return;
+                _wowHungSinceUtc = DateTime.MinValue;
+                Log($"WoW hung for {config.WowHungSeconds}+s — killing CB + WoW, relaunching both.");
+                KillIfAlive(cb, "CB (client hung)");
+                KillIfAlive(wow, "WoW (hung)");
+
+                var revivedWow = LaunchAndWaitForWow(config);
+                if (revivedWow == null)
+                {
+                    Log("WoW did not come up within 120s — will retry next pass.");
+                    return;
+                }
+                LaunchCb(config, revivedWow.Id);
+                return;
+            }
+        }
+        else
+        {
+            _wowHungSinceUtc = DateTime.MinValue;
+        }
+
+        // A ZOMBIE CB: main window closed but the process survived (a wedged worker thread that also
+        // swallowed its stop interrupt — observed 2026-07-04 10:58). Its heartbeat THREAD keeps writing
+        // fresh beats, so staleness cannot see this; the process list cannot either. Windowless-but-
+        // alive sustained past CbZombieSeconds = dead to the user AND holding the EndScene hook —
+        // restart it. (CB has no window for a moment during startup; the sustain gate covers that.)
+        bool cbZombie = false;
+        if (config.CbZombieSeconds > 0 && cb != null && cb.MainWindowHandle == IntPtr.Zero)
+        {
+            if (_cbWindowlessSinceUtc == DateTime.MinValue)
+                _cbWindowlessSinceUtc = DateTime.UtcNow;
+            cbZombie = (DateTime.UtcNow - _cbWindowlessSinceUtc).TotalSeconds >= config.CbZombieSeconds;
+        }
+        else
+        {
+            _cbWindowlessSinceUtc = DateTime.MinValue;
+        }
+
         bool cbDead = cb == null;
         bool cbHung = cb != null && (heartbeat == null || !IsFresh(heartbeat, config));
 
         // A fresh "Relogging" heartbeat means a login is in progress (server boot can take
         // minutes) — that is healthy, and cbHung is already false by the freshness check.
-        if (cbDead || cbHung)
+        if (cbDead || cbHung || cbZombie)
         {
             if (!TrySpendBudget(_cbRestarts, config.MaxRestartsPerHour, "CB"))
                 return;
+            _cbWindowlessSinceUtc = DateTime.MinValue;
 
-            Log(cbDead
-                ? "CB is not running — relaunching against the live WoW."
+            Log(cbDead ? "CB is not running — relaunching against the live WoW."
+                : cbZombie ? $"CB is a zombie (alive, heartbeat fresh, no main window for {config.CbZombieSeconds}+s) — restarting it."
                 : $"CB heartbeat stale (last: {heartbeat?.TimestampUtc:HH:mm:ss}Z) — presumed hung, restarting it.");
-            KillIfAlive(cb, "CB (hung)");
+            KillIfAlive(cb, cbZombie ? "CB (zombie)" : "CB (hung)");
             LaunchCb(config, wow.Id);
         }
     }
@@ -329,6 +393,9 @@ internal static class Program
             Log($"CB launch failed: {ex.Message}");
         }
     }
+
+    [DllImport("user32.dll")]
+    private static extern bool IsHungAppWindow(IntPtr hWnd);
 
     private static void Log(string message)
     {
