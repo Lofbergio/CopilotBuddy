@@ -46,12 +46,13 @@ namespace Styx.Logic.Relogging
                 catch { /* process gone mid-read */ }
 
                 string json = string.Format(CultureInfo.InvariantCulture,
-                    "{{\"timestampUtc\":\"{0:O}\",\"state\":\"{1}\",\"botRunning\":{2},\"pid\":{3},\"wowPid\":{4},\"gaveUpReason\":\"{5}\"}}",
+                    "{{\"timestampUtc\":\"{0:O}\",\"state\":\"{1}\",\"botRunning\":{2},\"pid\":{3},\"wowPid\":{4},\"wantsClientRestart\":{5},\"gaveUpReason\":\"{6}\"}}",
                     DateTime.UtcNow,
                     state,
                     TreeRoot.State == TreeRootState.Running ? "true" : "false",
                     Process.GetCurrentProcess().Id,
                     wowPid,
+                    Relogger.WantsClientRestart ? "true" : "false",
                     Relogger.GaveUpReason.Replace("\\", "\\\\").Replace("\"", "\\\""));
 
                 File.WriteAllText(FilePath, json);

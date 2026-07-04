@@ -25,7 +25,12 @@ internal static class Program
         int MaxRestartsPerHour = 3,
         int InWorldResetMinutes = 10);
 
-    private sealed record HeartbeatData(DateTime TimestampUtc, string State, bool BotRunning, int Pid, int WowPid, string GaveUpReason);
+    private sealed record HeartbeatData(DateTime TimestampUtc, string State, bool BotRunning, int Pid, int WowPid, string GaveUpReason)
+    {
+        // Escalation flag from the Relogger: "I can't recover this glue state in-process — restart
+        // the client." Missing in heartbeats from older CB builds → defaults false.
+        public bool WantsClientRestart { get; init; }
+    }
 
     private static readonly string[] WowProcessNames = { "Wow", "WoW", "Luacct" };
     private static readonly List<DateTime> _wowRestarts = new();
@@ -117,6 +122,29 @@ internal static class Program
         else
         {
             _inWorldSinceUtc = DateTime.MinValue;
+        }
+
+        // Relogger escalation: CB is alive and honest about being beaten — the glue state is one it
+        // cannot recover in-process (stale auth session, wedged dialog, half-up realm). A fresh client
+        // resets all of it. Spend the WoW budget: this is a full power-cycle, same crash-loop cap.
+        if (cb != null && heartbeat != null && IsFresh(heartbeat, config) && heartbeat.WantsClientRestart)
+        {
+            if (!TrySpendBudget(_wowRestarts, config.MaxRestartsPerHour, "WoW"))
+                return;
+
+            Log("CB requests a full client restart (relogger cannot recover the glue state) — killing CB + WoW, relaunching both.");
+            KillIfAlive(cb, "CB (escalation)");
+            KillIfAlive(wow, "WoW (escalation)");
+
+            var freshWow = LaunchAndWaitForWow(config);
+            if (freshWow == null)
+            {
+                Log("WoW did not come up within 120s — will retry next pass.");
+                return;
+            }
+
+            LaunchCb(config, freshWow.Id);
+            return;
         }
 
         if (wow == null)
@@ -270,8 +298,10 @@ internal static class Program
                     return null;
                 if (wow.MainWindowHandle != IntPtr.Zero)
                 {
-                    Log($"WoW up (pid {wow.Id}) — settling 15s before attaching CB.");
-                    Thread.Sleep(15000);
+                    // 5s, not 15: the window handle means the D3D device already exists — the client
+                    // needs a beat to reach the login screen, not a coffee break (user-verified 2026-07-04).
+                    Log($"WoW up (pid {wow.Id}) — settling 5s before attaching CB.");
+                    Thread.Sleep(5000);
                     return wow;
                 }
             }

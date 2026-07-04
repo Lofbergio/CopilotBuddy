@@ -61,6 +61,15 @@ namespace Styx.Logic.Relogging
         [DefaultValue(120)]
         public int GiveUpAfterMinutes { get; set; } = 120;
 
+        /// <summary>
+        /// Escalation: after this long recovering without reaching the world, ask the Watchdog for a
+        /// full client restart (fresh WoW = fresh auth session, no stuck dialogs/screens — the blunt
+        /// answer to any glue state we can't classify). 0 = never. Requires the Watchdog running.
+        /// </summary>
+        [Setting]
+        [DefaultValue(10)]
+        public int ClientRestartAfterMinutes { get; set; } = 10;
+
         /// <summary>Cleartext password view over the DPAPI blob (current Windows user only).</summary>
         public string Password
         {

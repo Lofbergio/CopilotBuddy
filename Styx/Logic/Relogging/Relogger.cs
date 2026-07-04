@@ -81,6 +81,14 @@ namespace Styx.Logic.Relogging
         public static RelogState State => _state;
         public static string GaveUpReason => _gaveUpReason;
 
+        /// <summary>
+        /// Escalation flag, published via heartbeat.json: recovery has run ClientRestartAfterMinutes
+        /// without reaching the world — whatever the glue state is, we can't fix it from in-process
+        /// (fresh client = fresh auth session, no stuck dialog/screen). The WATCHDOG does the deed
+        /// (CB cannot re-attach to a new WoW process); we keep trying meanwhile. Cleared on success.
+        /// </summary>
+        public static bool WantsClientRestart { get; private set; }
+
         /// <summary>True while enabled and driving recovery — TreeRoot suppresses its not-in-world auto-stop on this.</summary>
         public static bool IsActivelyRecovering => _state == RelogState.Recovering;
 
@@ -106,6 +114,7 @@ namespace Styx.Logic.Relogging
             _gaveUpReason = "";
             _failedAttempts = 0;
             _backoffUntilUtc = DateTime.MinValue;
+            WantsClientRestart = false;
         }
 
         private static void TimerTick()
@@ -192,6 +201,7 @@ namespace Styx.Logic.Relogging
                     _state = RelogState.Idle;
                     _failedAttempts = 0;
                     _backoffUntilUtc = DateTime.MinValue;
+                    WantsClientRestart = false;
                 }
                 return;
             }
@@ -207,6 +217,7 @@ namespace Styx.Logic.Relogging
                 _screenEnteredUtc = DateTime.UtcNow;
                 _loginSentUtc = DateTime.MinValue;
                 _cancelDialogSinceUtc = DateTime.MinValue;
+                WantsClientRestart = false;
                 Logging.Write(Colors.Orange, "[Relogger] Not in world — relogger engaged.");
             }
 
@@ -218,6 +229,21 @@ namespace Styx.Logic.Relogging
             {
                 GiveUp(string.Format("no successful login for {0} minutes", RelogSettings.Instance.GiveUpAfterMinutes));
                 return;
+            }
+
+            // ESCALATION: past this point we stop pretending to understand the glue state — whatever
+            // it is (stale session, wedged dialog, half-up realm), a FRESH CLIENT fixes it. Flag the
+            // watchdog (heartbeat) for a full WoW+CB restart and keep trying meanwhile. Don't try to
+            // enumerate broken states — every 3am produced a novel one; time-without-world is the
+            // only classifier that covers them all.
+            int restartAfter = RelogSettings.Instance.ClientRestartAfterMinutes;
+            if (restartAfter > 0 && !WantsClientRestart
+                && (DateTime.UtcNow - _recoveryStartedUtc).TotalMinutes >= restartAfter)
+            {
+                WantsClientRestart = true;
+                Logging.Write(Colors.Orange,
+                    "[Relogger] No world for {0} min — requesting a full client restart from the Watchdog (glue attempts continue meanwhile).",
+                    restartAfter);
             }
 
             if (DateTime.UtcNow < _backoffUntilUtc)
