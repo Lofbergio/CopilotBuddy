@@ -33,12 +33,16 @@ namespace Styx.Logic.Relogging
         private static GlueSnapshot _cached = new GlueSnapshot { TakenUtc = DateTime.MinValue };
 
         // One script returns everything: screen, dialog state, char list, server name.
+        // OVERLAYS FIRST: RealmList (and CharacterCreate) render on TOP of a still-IsShown backdrop
+        // frame — with AccountLogin checked first, a realm list open over the login screen read as
+        // 'login' and the relogger typed credentials at realm select instead of picking the realm
+        // (07:06:42 in log 2026-07-04_0013, the 3am half-up server: auth up, realm still down).
         private const string SnapshotScript = @"
 local s='unknown'
-if AccountLogin and AccountLogin:IsShown() then s='login'
-elseif RealmList and RealmList:IsShown() then s='realmlist'
+if RealmList and RealmList:IsShown() then s='realmlist'
 elseif CharacterCreate and CharacterCreate:IsShown() then s='charcreate'
-elseif CharacterSelect and CharacterSelect:IsShown() then s='charselect' end
+elseif CharacterSelect and CharacterSelect:IsShown() then s='charselect'
+elseif AccountLogin and AccountLogin:IsShown() then s='login' end
 local d,dt,dw=0,'',''
 if GlueDialog and GlueDialog:IsShown() then
   d=1
