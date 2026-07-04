@@ -46,6 +46,14 @@ namespace Styx.Logic.Relogging
         private static DateTime _loginSentUtc = DateTime.MinValue;
         private static readonly Random _jitter = new Random();
 
+        // Watch on the which=CANCEL (connection-progress) dialog: waiting on it is right, waiting FOREVER
+        // is not — a half-up server left "Connecting…" on screen for 3.5 HOURS while the wait refreshed the
+        // dwell clock every tick, so neither the dwell nor the give-up window (both FailAttempt-driven)
+        // could ever fire (log 2026-07-04_0013, 03:32→07:06). Queue dialogs are exempt (legit long waits).
+        private const int CancelDialogTimeoutSeconds = 90;
+        private static DateTime _cancelDialogSinceUtc = DateTime.MinValue;
+        private static string _cancelDialogText = "";
+
         // In-world stability watcher (for deferred character init)
         private static DateTime _inWorldSinceUtc = DateTime.MinValue;
         private static bool _worldEnteredRaised;
@@ -198,7 +206,18 @@ namespace Styx.Logic.Relogging
                 _lastScreen = GlueScreen.Unknown;
                 _screenEnteredUtc = DateTime.UtcNow;
                 _loginSentUtc = DateTime.MinValue;
+                _cancelDialogSinceUtc = DateTime.MinValue;
                 Logging.Write(Colors.Orange, "[Relogger] Not in world — relogger engaged.");
+            }
+
+            // ABSOLUTE give-up window — evaluated every tick, not only in FailAttempt: a stuck
+            // in-progress state starved FailAttempt (and thus the window) for 3.5h straight
+            // (log 2026-07-04_0013). A queue longer than the window is knowingly sacrificed —
+            // raise GiveUpAfterMinutes on queue-heavy servers.
+            if ((DateTime.UtcNow - _recoveryStartedUtc).TotalMinutes >= RelogSettings.Instance.GiveUpAfterMinutes)
+            {
+                GiveUp(string.Format("no successful login for {0} minutes", RelogSettings.Instance.GiveUpAfterMinutes));
+                return;
             }
 
             if (DateTime.UtcNow < _backoffUntilUtc)
@@ -281,13 +300,35 @@ namespace Styx.Logic.Relogging
 
             // Connection-progress dialog: its only button IS Cancel (which=CANCEL — "Connecting…",
             // "Authenticating…", "Success!"). Dismissing it CLICKS CANCEL and aborts a login that was
-            // succeeding — verified live 2026-07-03 23:50: "Success!" dismissed → stuck at Login →
-            // "Session Expired" → 8 min of failed attempts. Never touch it; wait it out.
+            // succeeding (2026-07-03 23:50: "Success!" dismissed → "Session Expired" → 8 min of retries).
+            // So wait — but BOUNDED: a half-up server can leave it on screen forever (the 3.5h hang,
+            // 2026-07-04 03:32). Past the timeout, cancelling is correct — the handshake is dead anyway.
+            // Queue dialogs wait indefinitely (a login queue is real progress).
             if (snap.DialogWhich == "CANCEL")
             {
                 _screenEnteredUtc = DateTime.UtcNow;
+                if (text.Contains("queue"))
+                {
+                    _cancelDialogSinceUtc = DateTime.MinValue;
+                    return true;
+                }
+                if (_cancelDialogSinceUtc == DateTime.MinValue || snap.DialogText != _cancelDialogText)
+                {
+                    _cancelDialogSinceUtc = DateTime.UtcNow;   // new dialog (or text changed) — fresh window
+                    _cancelDialogText = snap.DialogText;
+                }
+                else if ((DateTime.UtcNow - _cancelDialogSinceUtc).TotalSeconds > CancelDialogTimeoutSeconds)
+                {
+                    Logging.Write(Colors.Orange, "[Relogger] Connection dialog \"{0}\" stuck for {1}s — cancelling the dead handshake.",
+                        snap.DialogText, CancelDialogTimeoutSeconds);
+                    GlueSession.DismissDialog();
+                    _cancelDialogSinceUtc = DateTime.MinValue;
+                    _loginSentUtc = DateTime.MinValue;
+                    FailAttempt(string.Format("connection dialog \"{0}\" timed out", snap.DialogText));
+                }
                 return true;
             }
+            _cancelDialogSinceUtc = DateTime.MinValue;   // any non-CANCEL dialog ends the watch
 
             foreach (var fragment in InProgressDialogFragments)
             {
@@ -302,11 +343,16 @@ namespace Styx.Logic.Relogging
             // Post-DC informational dialog ("You have been disconnected...", which=DISCONNECTED): dismiss
             // for FREE — counting it as a failed attempt made the very FIRST login sit out a full ladder
             // step (observed 18s) before typing credentials, for a dialog that isn't a failure of OURS.
+            // LOGGED, and it only re-arms the login when none is in flight: the dialog can pop a tick
+            // AFTER we already sent credentials, and the silent reset+resend interrupted that handshake
+            // (the 03:04:59/03:05:01 double-send → "Session Expired" churn, log 2026-07-04_0013).
             if (snap.DialogWhich == "DISCONNECTED" || text.Contains("disconnected"))
             {
+                Logging.Write("[Relogger] Dismissing disconnect notice (free — no backoff).");
                 GlueSession.DismissDialog();
                 _screenEnteredUtc = DateTime.UtcNow;
-                _loginSentUtc = DateTime.MinValue;   // credentials go in on the very next tick
+                if ((DateTime.UtcNow - _loginSentUtc).TotalSeconds > 10)
+                    _loginSentUtc = DateTime.MinValue;   // no attempt in flight — credentials next tick
                 return true;
             }
 
