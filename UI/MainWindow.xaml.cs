@@ -671,6 +671,19 @@ namespace CopilotBuddy.UI
             // UISettings is already flushed above with the correct geometry.
             SaveSettings();
 
+            // Release the injection NOW, deterministically. The EndScene restore otherwise runs in
+            // ExecutorRand's FINALIZER during shutdown GC — and WPF's teardown FailFast ("callback on
+            // a garbage collected delegate", 6× on 2026-07-05 alone) can kill the process first,
+            // leaving the client hooked into a dead CB (the 10:26 frozen-client incident). With the
+            // hook restored here, a late WPF exit-crash is cosmetic. AFTER plugin disable + SaveSettings
+            // (both may still need Lua), BEFORE anything that can tear down WPF.
+            try
+            {
+                _executor?.Dispose();
+                _executor = null;
+            }
+            catch { /* already detached or WoW gone — nothing left to restore */ }
+
             // Release process mutex so another CopilotBuddy can claim this WoW
             try
             {
