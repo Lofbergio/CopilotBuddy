@@ -21,9 +21,14 @@ namespace Styx.Common
         public string Name { get; private set; }
         internal bool IsRegistered { get; set; }
 
+        // ReferenceEquals, NOT ==: the overloaded operator routes through object.Equals → virtual
+        // Equals → back here — infinite recursion that stack-overflowed the whole app the moment
+        // List<Hotkey>.Remove compared two distinct instances (HotkeysManager.Unregister on bot stop).
         public bool Equals(Hotkey other)
         {
-            return other != null && (this == other || (Id == other.Id && string.Equals(Name, other.Name)));
+            if (other is null) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return Id == other.Id && string.Equals(Name, other.Name);
         }
 
         public override string ToString()
@@ -45,7 +50,7 @@ namespace Styx.Common
 
         public override bool Equals(object obj)
         {
-            return obj != null && (this == obj || (!(obj.GetType() != GetType()) && Equals((Hotkey)obj)));
+            return obj is Hotkey other && Equals(other);
         }
 
         public override int GetHashCode()
@@ -55,12 +60,12 @@ namespace Styx.Common
 
         public static bool operator ==(Hotkey left, Hotkey right)
         {
-            return object.Equals(left, right);
+            return ReferenceEquals(left, right) || (left is not null && left.Equals(right));
         }
 
         public static bool operator !=(Hotkey left, Hotkey right)
         {
-            return !object.Equals(left, right);
+            return !(left == right);
         }
     }
 }

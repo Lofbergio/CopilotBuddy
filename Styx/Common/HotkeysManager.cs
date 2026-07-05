@@ -119,26 +119,35 @@ namespace Styx.Common
             var localList = new List<Hotkey>();
             for (;;)
             {
-                lock (_lock)
+                // Raw background thread: on .NET Core an unhandled exception here (e.g. a hotkey
+                // CALLBACK throwing) is process-fatal — catch, log, keep the loop alive.
+                try
                 {
-                    while (_registerQueue.Count > 0)
-                        RegisterHotkeyInternal(_registerQueue.Dequeue());
-                    while (_unregisterQueue.Count > 0)
-                        UnregisterHotkeyInternal(_unregisterQueue.Dequeue());
-                    localList.Clear();
-                    localList.AddRange(_hotkeys);
-                }
+                    lock (_lock)
+                    {
+                        while (_registerQueue.Count > 0)
+                            RegisterHotkeyInternal(_registerQueue.Dequeue());
+                        while (_unregisterQueue.Count > 0)
+                            UnregisterHotkeyInternal(_unregisterQueue.Dequeue());
+                        localList.Clear();
+                        localList.AddRange(_hotkeys);
+                    }
 
-                if (GetForegroundWindow() != _windowHandle)
-                {
-                    foreach (Hotkey hotkey in localList)
-                        UnregisterHotkeyInternal(hotkey);
+                    if (GetForegroundWindow() != _windowHandle)
+                    {
+                        foreach (Hotkey hotkey in localList)
+                            UnregisterHotkeyInternal(hotkey);
+                    }
+                    else
+                    {
+                        foreach (Hotkey hotkey in localList)
+                            RegisterHotkeyInternal(hotkey);
+                        ProcessMessages(localList);
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    foreach (Hotkey hotkey in localList)
-                        RegisterHotkeyInternal(hotkey);
-                    ProcessMessages(localList);
+                    Logging.WriteException(ex);
                 }
 
                 Thread.Sleep(100);
