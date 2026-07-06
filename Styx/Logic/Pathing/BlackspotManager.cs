@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Xml.Linq;
 using Styx.Helpers;
@@ -70,6 +71,14 @@ namespace Styx.Logic.Pathing
         /// Maximum polygons to query for a single blackspot.
         /// </summary>
         private const int MaxPolygonsPerBlackspot = 8192;
+
+        /// <summary>
+        /// Vertical half-extent for blackspot poly queries. A blackspot is a 2D "avoid this column":
+        /// callers routinely hand us a mob's Z that sits far above the walkable mesh (a flyer, a
+        /// cliff-dweller), so we search the whole column and let QueryPolygons find the ground polys
+        /// regardless of input Z. Same value NavigatorTerrainHeightProvider uses for height sampling.
+        /// </summary>
+        private const float BlackspotVerticalSearchExtent = 50000f;
         
         /// <summary>
         /// Whether the blackspot area cost has been initialized.
@@ -330,16 +339,69 @@ namespace Styx.Logic.Pathing
 
             lock (_lock)
             {
-                foreach (var spot in blackspots)
+                foreach (var raw in blackspots)
                 {
+                    // Anchor the stored Z onto the mesh: callers pass a mob's Z (often high above the
+                    // ground) and the runtime cylinder test (IsInBlackspot/Contains) checks |dz| <= Height,
+                    // so a bad Z means the spot never repels the bot even once it's marked.
+                    var spot = SnapToGround(raw);
                     if (!_blackspots.Contains(spot))
                     {
                         _blackspots.Add(spot);
-                        
+
                         // Mark navmesh polygons for this blackspot
                         MarkBlackspotPolygons(spot);
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Snaps a blackspot's Z onto the nearest walkable mesh height under its X/Y (its "ground"),
+        /// picking the layer closest to the caller's Z. Returns the spot unchanged if the mesh isn't
+        /// loaded there yet — the poly-marking pass (column query) still handles path routing.
+        /// </summary>
+        private static Blackspot SnapToGround(Blackspot spot)
+        {
+            try
+            {
+                if (!Navigator.IsNavigatorLoaded)
+                    return spot;
+
+                uint mapId = StyxWoW.Me?.MapId ?? 0;
+                if (mapId == 0)
+                    return spot;
+
+                var center = new Vector3(spot.Location.X, spot.Location.Y, 0f);
+                var extents = new Vector3(1f, 1f, BlackspotVerticalSearchExtent);
+                PolygonReference[] polys = Navigator.TripperNavigator.QueryPolygons(mapId, center, extents, 256);
+
+                float best = float.NaN;
+                foreach (PolygonReference poly in polys)
+                {
+                    // ClosestPointOnPolyBoundary returns center itself when (x,y) is over the poly's
+                    // footprint, so a ~0 distance means this poly is a real floor candidate here.
+                    if (!Navigator.TripperNavigator.ClosestPointOnPolyBoundary(mapId, poly, center, out Vector3 onPoly))
+                        continue;
+                    if (Vector3.DistanceSquared(onPoly, center) > 0.005f)
+                        continue;
+                    if (!Navigator.TripperNavigator.GetPolyHeight(mapId, poly, center, out float h))
+                        continue;
+
+                    if (float.IsNaN(best) || Math.Abs(h - spot.Location.Z) < Math.Abs(best - spot.Location.Z))
+                        best = h;
+                }
+
+                if (float.IsNaN(best))
+                    return spot;
+
+                spot.Location = new WoWPoint(spot.Location.X, spot.Location.Y, best);
+                return spot;
+            }
+            catch (Exception ex)
+            {
+                Logging.WriteDebug($"[Blackspot] SnapToGround failed at {spot.Location}: {ex.Message}");
+                return spot;
             }
         }
         
@@ -476,12 +538,13 @@ namespace Styx.Logic.Pathing
                 };
                 
                 // Native QueryPolygons converts WoW extents to Detour extents as (Y, Z, X).
-                // Pass WoW-space half extents: horizontal radius on X/Y, vertical height on Z.
+                // Horizontal radius on X/Y; vertical extent spans the whole column so a bad (in-air)
+                // input Z can't make the query miss the ground polys — the generator must not fail on Z.
                 var extents = new NativeMethods.XYZ
                 {
                     X = spot.Radius,
                     Y = spot.Radius,
-                    Z = spot.Height
+                    Z = BlackspotVerticalSearchExtent
                 };
                 
                 // Allocate unmanaged memory for polygon refs (ulong = 8 bytes)
@@ -493,9 +556,11 @@ namespace Styx.Logic.Pathing
                 
                 if (polyCount <= 0)
                 {
-                    // Tiles might not be loaded yet; retry on tile-loaded/map-change, not every pathfind.
+                    // Genuinely no polys (tile not loaded here yet); retried on the next pathfind.
+                    // Debug-only: EnsureBlackspotsMarked re-runs this every pathfind, so a visible
+                    // log here spams thousands of identical lines for one unresolvable spot.
                     _failedBlackspotMarks.Add(spot);
-                    Logging.Write($"Warning: QueryPolygons failed while applying blackspot {spot.Location} with radius {spot.Radius} - tile not loaded?");
+                    Logging.WriteDebug($"[Blackspot] QueryPolygons found no polys at {spot.Location} r{spot.Radius} - tile not loaded yet?");
                     return;
                 }
                 
@@ -713,6 +778,32 @@ namespace Styx.Logic.Pathing
                 
                 SaveGlobalBlackspots();
                 Logging.Write($"[Blackspot] Added global blackspot at {blackspot.Blackspot.Location} (radius {blackspot.Blackspot.Radius})");
+            }
+        }
+
+        /// <summary>
+        /// Promotes a spot to a persisted global blackspot (survives restarts). Unlike AddGlobalBlackspot
+        /// this dedups against existing GLOBAL spots only — not the session store — so a caller can promote
+        /// a proven wedge while its session mark still stands without the IsBlackspotted guard swallowing it.
+        /// </summary>
+        public static void PromoteToGlobalBlackspot(WoWPoint location, float radius, float height)
+        {
+            EnsureAreaCostInitialized();
+            uint mapId = StyxWoW.Me?.MapId ?? 0;
+
+            lock (_lock)
+            {
+                foreach (var g in _globalBlackspots)
+                {
+                    if (g.MapId == mapId && IsInBlackspot(location, g.Blackspot, radius))
+                        return; // already covered by a persisted global here
+                }
+
+                var gb = new GlobalBlackspot(location, radius, height, mapId);
+                _globalBlackspots.Add(gb);
+                MarkBlackspotPolygons(gb.Blackspot);
+                SaveGlobalBlackspots();
+                Logging.Write($"[Blackspot] Promoted wedge to persistent global at {location} (radius {radius})");
             }
         }
 

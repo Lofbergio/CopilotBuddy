@@ -36,7 +36,9 @@ namespace Bots.VibeGrinder.Selection
         /// Blacklisted centroids (recently abandoned) are excluded; if that empties the field, the
         /// blacklist is cleared and the search retried once.
         /// </summary>
-        public GrindSpot SelectBest(uint mapId, WoWPoint playerLoc, int playerLevel, IEnumerable<(WoWPoint center, float radius)> blacklist, double caution = 1.0)
+        // maxTravelOverride > 0 widens the travel cap for this call only (the flight far-spot fallback searches
+        // the whole continent); 0 = normal S.MaxTravelDistance. Everything else is unchanged.
+        public GrindSpot SelectBest(uint mapId, WoWPoint playerLoc, int playerLevel, IEnumerable<(WoWPoint center, float radius)> blacklist, double caution = 1.0, float maxTravelOverride = 0f)
         {
             var blocked = blacklist != null ? blacklist.ToList() : new List<(WoWPoint center, float radius)>();
 
@@ -49,11 +51,11 @@ namespace Bots.VibeGrinder.Selection
 
             foreach (int tol in ladder)
             {
-                GrindSpot best = Search(mapId, playerLoc, playerLevel, blocked, caution, tol);
+                GrindSpot best = Search(mapId, playerLoc, playerLevel, blocked, caution, tol, maxTravelOverride);
                 if (best == null && blocked.Count > 0)
                 {
                     Styx.Helpers.Logging.Write("[VibeGrinder] No spot outside blacklist; clearing it and retrying once.");
-                    best = Search(mapId, playerLoc, playerLevel, new List<(WoWPoint center, float radius)>(), caution, tol);
+                    best = Search(mapId, playerLoc, playerLevel, new List<(WoWPoint center, float radius)>(), caution, tol, maxTravelOverride);
                 }
                 if (best != null)
                 {
@@ -68,8 +70,9 @@ namespace Bots.VibeGrinder.Selection
             return null;
         }
 
-        private GrindSpot Search(uint mapId, WoWPoint playerLoc, int playerLevel, List<(WoWPoint center, float radius)> blocked, double caution, int pathGauntletTolerance)
+        private GrindSpot Search(uint mapId, WoWPoint playerLoc, int playerLevel, List<(WoWPoint center, float radius)> blocked, double caution, int pathGauntletTolerance, float maxTravelOverride = 0f)
         {
+            float maxTravel = maxTravelOverride > 0f ? maxTravelOverride : S.MaxTravelDistance;
             bool scarce = playerLevel <= S.ScarcityLevelCeiling;
             // Scarce: halve the density requirement (floor of 2 — a lone spawn isn't a "spot").
             int minMobs = scarce ? Math.Max(2, S.MinMobsPerSpot / 2) : S.MinMobsPerSpot;
@@ -98,10 +101,12 @@ namespace Bots.VibeGrinder.Selection
             Logging.WriteDebug("[VibeGrinder] {0} clusters from {1} spawns (minMobs={2}, scarce={3}).",
                 clusters.Count, eligible.Count, minMobs, scarce);
 
-            // Learned-capability weight on hostile crowding: innate squishiness (level taper) ×
-            // how badly we've been dying to packs (caution). 0 above the level ceiling or when the
-            // toon's proven it can cleave. Confidence-ready: once caution dips below 1, this relaxes.
-            float crowdWeight = S.CrowdLevelScale(playerLevel) * (float)caution;
+            // Learned-fear weight on hostile crowding: caution ONLY — deliberately NOT the pull-side
+            // CrowdLevelScale level taper (decoupled 2026-07-05). That taper reasons about winning a
+            // fight you chose ("you have AoE, density is upside"); it says nothing about walking/roaming
+            // NEAR a static swarm — and at L47 it had gutted this penalty to 9% while a 41-mob camp
+            // out-scored the safe pick 4:1. Confidence-ready: once caution dips below 1, this relaxes.
+            float crowdWeight = (float)caution;
 
             // Phase 1 — cheap rank, no navigation (reachability is gated in phase 2 via GeneratePath,
             // which works at Start; CanNavigateFully needs a provider that isn't wired until ticks).
@@ -113,7 +118,7 @@ namespace Bots.VibeGrinder.Selection
                 if (IsBlacklisted(c.Centroid, blocked)) { dropBlacklist++; continue; }
 
                 float dist = playerLoc.Distance2D(c.Centroid);
-                if (dist > S.MaxTravelDistance) { dropFar++; continue; }
+                if (dist > maxTravel) { dropFar++; continue; }
 
                 int totalNear = GrindMobsRepository.CountSpawnsNear(mapId, c.Centroid, S.GrindRadius);
                 float purity = totalNear <= 0 ? 1f : (float)c.Members.Count / totalNear;
@@ -208,6 +213,24 @@ namespace Bots.VibeGrinder.Selection
                 bool contested = HostilePlayersNear(sc.Cluster.Centroid, S.GrindRadius) > 0;
                 SpotClass cls = DangerEvaluator.Classify(sc.Threat, sc.GuardPack, pathDanger, contested);
 
+                // BUBBLE-KNOT gate (2026-07-05, Lost Rigger): the threat sum structurally can't see
+                // at-level normal packs (its SQL is rank≥1 OR over-level), and the 12yd knot metric is
+                // blind to 17-18yd aggro bubbles at 15-25yd spacing — 41 pirates rated hostilePack=5 and
+                // the neighboring "Safe" pick's roam ring interleaved with the camp. This asks the real
+                // question at every KILL POSITION: how many hostiles' server aggro bubbles cover it? The
+                // wide query (GrindRadius+60) makes a lethal ADJACENT camp count against our edge members
+                // too — the neighborhood check and the pack check are the same math. Survival gate: never
+                // level-tapered, never relaxed by the ladder.
+                int bubbles = 0;
+                if (cls != SpotClass.Dangerous && S.SpotBubbleDangerCount > 0)
+                {
+                    List<MobSpawn> nearHostiles = GrindMobsRepository.QueryHostileSpawnsNear(
+                        mapId, sc.Cluster.Centroid, S.GrindRadius + 60f, _factions, playerLevel - 5);
+                    bubbles = WorstBubbleOverlap(sc.Cluster.Members, nearHostiles, playerLevel);
+                    if (bubbles >= S.SpotBubbleDangerCount)
+                        cls = SpotClass.Dangerous;
+                }
+
                 // Hard body-pull gate: an over-level hostile sitting in aggro range of a kill position
                 // will drag in (from beyond our pull range) every loot walk — and we can't clear it.
                 bool aggroBubble = cls != SpotClass.Dangerous &&
@@ -229,8 +252,8 @@ namespace Bots.VibeGrinder.Selection
                 }
 
                 Logging.WriteDebug(
-                    "[VibeGrinder]  cand#{0} score={1:F1} avgLvl={2:F1} threat={3:F1} guardPack={4} hostilePack={5} aggroBubble={6} gauntlet={7} pathDanger={8:F1} contested={9} mobs={10} dist={11:F0} -> {12} @ {13}",
-                    i, sc.Score, sc.AvgLevel, sc.Threat, sc.GuardPack, sc.HostilePack, aggroBubble, gauntlet, pathDanger, contested, sc.Cluster.Members.Count,
+                    "[VibeGrinder]  cand#{0} score={1:F1} avgLvl={2:F1} threat={3:F1} guardPack={4} hostilePack={5} bubbles={6} aggroBubble={7} gauntlet={8} pathDanger={9:F1} contested={10} mobs={11} dist={12:F0} -> {13} @ {14}",
+                    i, sc.Score, sc.AvgLevel, sc.Threat, sc.GuardPack, sc.HostilePack, bubbles, aggroBubble, gauntlet, pathDanger, contested, sc.Cluster.Members.Count,
                     playerLoc.Distance2D(sc.Cluster.Centroid), cls, sc.Cluster.Centroid);
 
                 if (cls == SpotClass.Dangerous) { dangerousDropped++; continue; }
@@ -309,6 +332,33 @@ namespace Bots.VibeGrinder.Selection
                     if (j == i) continue;
                     if (!_factions.HostileFactions.Contains(members[j].Faction)) continue;
                     if (members[i].Point.DistanceSqr(members[j].Point) <= r2) n++;
+                }
+                if (n > worst) worst = n;
+            }
+            return worst;
+        }
+
+        /// <summary>
+        /// Worst bubble overlap in a cluster: the max count of hostile spawns whose SERVER aggro bubble
+        /// (TrekSafety.ServerAggroRadius — the one DB-space copy of the AzerothCore formula — plus
+        /// ExposurePad) covers any single member point, i.e. the most company any one kill position buys.
+        /// Hostiles come UNFILTERED by rank/level (at-level normals are exactly what the threat sum can't
+        /// see). Z≥5yd skips — cliffs genuinely protect. Selection-side twin of the pull-side FightExposure.
+        /// </summary>
+        private static int WorstBubbleOverlap(List<MobSpawn> members, List<MobSpawn> hostiles, int playerLevel)
+        {
+            if (hostiles.Count == 0) return 0;
+            float pad = S.ExposurePad;
+            int worst = 0;
+            foreach (MobSpawn m in members)
+            {
+                int n = 0;
+                foreach (MobSpawn h in hostiles)
+                {
+                    float bubble = Supervision.TrekSafety.ServerAggroRadius(h.MaxLevel, playerLevel) + pad;
+                    if (h.Point.DistanceSqr(m.Point) <= bubble * bubble
+                        && Math.Abs(h.Point.Z - m.Point.Z) < 5f)
+                        n++;
                 }
                 if (n > worst) worst = n;
             }

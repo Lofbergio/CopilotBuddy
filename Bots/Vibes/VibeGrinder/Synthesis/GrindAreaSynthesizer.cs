@@ -25,6 +25,7 @@ namespace Bots.VibeGrinder.Synthesis
         // Originals of the global CharacterSettings we seed, so Stop() can restore them (don't
         // permanently overwrite a user's deliberate 0 = "never buy consumables").
         private int _origPullDistance = -1;
+        private bool? _origFindVendors;
         private bool? _origRessAtSpiritHealers;
         private bool? _origKillBetweenHotspots;
 
@@ -70,6 +71,9 @@ namespace Bots.VibeGrinder.Synthesis
                 new XElement("MailPurple", false));
             _profile = new Profile(xml, null) { Name = "VibeGrinder (synthetic)" };
             // Empty VendorManager + this flag => vendor tree auto-resolves sell/repair/food from data.bin.
+            // Captured/restored like the others — a profile-driven botbase run after us may rely on its
+            // authored <Vendor> entries only (this leaked true permanently before; audit 2026-07-05).
+            _origFindVendors ??= CharacterSettings.Instance.FindVendorsAutomatically;
             CharacterSettings.Instance.FindVendorsAutomatically = true;
 
             // Food/water restock amounts are USER-controlled (CharacterSettings.FoodAmount/DrinkAmount). We no
@@ -175,6 +179,7 @@ namespace Bots.VibeGrinder.Synthesis
             if (_origPullDistance >= 0) { CharacterSettings.Instance.PullDistance = _origPullDistance; _origPullDistance = -1; }
             if (_origRessAtSpiritHealers.HasValue) { CharacterSettings.Instance.RessAtSpiritHealers = _origRessAtSpiritHealers.Value; _origRessAtSpiritHealers = null; }
             if (_origKillBetweenHotspots.HasValue) { StyxSettings.Instance.KillBetweenHotspots = _origKillBetweenHotspots.Value; _origKillBetweenHotspots = null; }
+            if (_origFindVendors.HasValue) { CharacterSettings.Instance.FindVendorsAutomatically = _origFindVendors.Value; _origFindVendors = null; }
         }
     }
 }

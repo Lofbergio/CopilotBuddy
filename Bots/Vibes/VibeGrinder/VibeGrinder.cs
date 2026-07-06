@@ -65,11 +65,14 @@ namespace Bots.VibeGrinder
         private ulong _committedGuid;   // committed grind-pull target (see ApplyPullCommitment)
         private readonly System.Diagnostics.Stopwatch _committedTimer = new System.Diagnostics.Stopwatch();
         private double _committedLastDist = double.MaxValue;   // last distance to committed mob (progress watchdog)
+        private bool _committedProgressed;      // made ANY approach progress / opened on the current commit? (experimental drop-ban gate)
+        private string _committedName;          // last-committed mob name — held is null at the drop, so stash it for the ban log
         private readonly System.Diagnostics.Stopwatch _selectRetry = new System.Diagnostics.Stopwatch();
         private readonly System.Diagnostics.Stopwatch _safeRest = new System.Diagnostics.Stopwatch();
         private readonly System.Diagnostics.Stopwatch _restMoveSw = new System.Diagnostics.Stopwatch();   // safe-spot walk cap (see SafeRestReposition)
         private readonly System.Diagnostics.Stopwatch _surfaceLogSw = new System.Diagnostics.Stopwatch();   // throttle incidental-hostile log
         private readonly System.Diagnostics.Stopwatch _eliteVetoLogSw = new System.Diagnostics.Stopwatch();   // throttle elite-veto log
+        private readonly System.Diagnostics.Stopwatch _playerVetoLogSw = new System.Diagnostics.Stopwatch();   // throttle player/pet-veto log
         private bool _resting;                  // committed rest state (sticky: enter at Min*, exit at RestDonePct/cap)
         private WoWPoint _restSpot = WoWPoint.Empty;   // committed safe-rest destination (picked once per rest)
         private bool _restParked;               // positioning decision made for this rest — stop re-picking (see SafeRestReposition)
@@ -78,7 +81,21 @@ namespace Bots.VibeGrinder
         private DateTime _vendorHoldUntil = DateTime.MinValue;   // hold the latch this long past the last vendor-POI/combat tick (rides out peel fights + brief POI gaps)
         private readonly System.Diagnostics.Stopwatch _vendorWatchdog = new System.Diagnostics.Stopwatch();   // abort a stuck errand (unreachable vendor / broke)
         private DateTime _engageUntil = DateTime.MinValue;   // ENGAGING activity latch held until here (see Engaging + CLAUDE.md "Stateful inter-spot movement")
+        // Set by PREEMPT DENIED / ABORT approach (Targeting pulse); consumed in Pulse() — _engageUntil
+        // itself is written ONLY in Pulse() (invariant). Without this, EngageHold's 3s grace holds us
+        // standing in the bubble web we just decided to leave.
+        private bool _breakEngageGrace;
+        private DateTime _restSkipLogAt = DateTime.MinValue;   // throttles the rest-SKIP diagnostic (condition holds many ticks)
+        // Pathability-REJECT strikes per guid (session-scoped, cleared in Start): 3 no-path rejects of the
+        // same mob = a real mesh hole, escalate past the 45s cycle. A successful path resets the guid.
+        private readonly System.Collections.Generic.Dictionary<ulong, int> _pathRejects = new();
         private uint _vendorCheckedEntry;       // last vendor entry that passed the enemy-territory safety check (re-check when it changes)
+        // Abort-streak escalation (2026-07-06: 61 COMMITs / 30 ABORTs against one wedged repair run all
+        // night — an errand that keeps aborting must change TARGET, not just retry). Deliberately NOT
+        // reset by ClearVendorRunState: the streak must survive the abort's own state reset to count it.
+        private uint _vendorAbortEntry;         // vendor entry of the last abort (streak is per-entry)
+        private int _vendorAbortStreak;         // consecutive aborts on that entry (or on Mail when entry==0)
+        private PoiType _vendorRunType;         // errand type captured at COMMIT (POI may be anything by abort time)
         private const int RestHysteresisPct = 12;  // resume at Min*+this (modest hysteresis), NOT a flat 85% top-off
         private const int RestMaxSeconds = 60;  // safety cap: if not recovered by now, give up resting and resume
                                                 // (60 not 45: a no-drink mana caster recovers mana on natural regen
@@ -104,14 +121,37 @@ namespace Bots.VibeGrinder
                 if (_root == null)
                 {
                     _root = new PrioritySelector(
+                        // SURVIVAL FIRST, before the spot-install bootstrap: death handling and drowning need no
+                        // spot, and a character that STARTS dead (or in draining water) with no eligible spot was
+                        // otherwise a permanent ghost — the bootstrap gate owned every tick (audit 2026-07-05).
+                        LevelBot.CreateDeathBehavior(),
+                        // Not drowning outranks everything below (grind/vendor/rest/combat). Surfaces
+                        // if the breath bar is draining and nearly out; falls through the instant we can breathe.
+                        new Action(ctx => SurfaceIfDrowning()),
                         // Defer spot selection to the first tick: the navmesh isn't loaded until
                         // RaiseBotStart fires (after BotBase.Start). Holds the tree until a spot
                         // is installed; once installed this gate falls through.
                         new Decorator(ctx => !_spotInstalled, new Action(ctx => EnsureSpotSelected())),
-                        LevelBot.CreateDeathBehavior(),
-                        // SURVIVAL: not drowning outranks everything below (grind/vendor/rest/combat). Surfaces
-                        // if the breath bar is draining and nearly out; falls through the instant we can breathe.
-                        new Action(ctx => SurfaceIfDrowning()),
+                        // FLIGHT TRAVEL — while a taxi hop is in progress this OWNS the tick once airborne (so the
+                        // vendor-run servicing below doesn't try to walk us back to the start-node POI) and detects
+                        // the landing. Pre-takeoff it returns Failure so the vendor-run branch does the walk-to-
+                        // master + taxi-open. Above vendor on purpose; below drowning/death (can't happen mid-air).
+                        _supervisor != null ? _supervisor.FlightTravelCheck() : new Action(ctx => RunStatus.Failure),
+                        // SURVIVAL-CRITICAL flee (pack death / death loop / camp wall) — ABOVE vendor mode and rest
+                        // on purpose (audit 2026-07-05: a post-death durability errand latched vendor mode, and the
+                        // post-res low-HP rest sat down AT the death camp — both starved this branch for minutes
+                        // while it sat lower in the tree; rest ENTER 2s after corpse grab with 43 hostiles, log
+                        // 2026-07-05_1402 14:18). Airborne ticks stay owned by FlightTravelCheck above (flying IS
+                        // leaving); a hung pre-takeoff hop returns Failure there and lands here. Gate requires
+                        // _current != null, so it's inert until the bootstrap below has installed a spot.
+                        _supervisor != null ? _supervisor.EmergencyRelocationCheck() : new Action(ctx => RunStatus.Failure),
+                        // TERMINAL-UNSTUCK HOLD — own the tick while the wedge-escape Hearthstone cast (10s) is
+                        // in flight, so roam/vendor movement (and the stuck-handler jitter it causes) can't
+                        // interrupt it. Set only by GrindSupervisor.InvokeUnstuck after a CONFIRMED geometry
+                        // wedge (movement probe failed). Below the survival flee — a wedged char can't move
+                        // anyway, and the flee must never sit behind anything; above everything that moves.
+                        new Decorator(ctx => _supervisor != null && _supervisor.UnstuckHoldActive,
+                            new Action(ctx => RunStatus.Success)),
                         // VENDOR MODE — committed errand. UpdateVendorRun() latches when a vendor need appears and
                         // HOLDS through the whole trip (incl. transient peel fights), so vendoring stops thrashing
                         // against grind/rest/roam — the bug where the bot "struggles with two decisions" (go for a
@@ -149,32 +189,31 @@ namespace Bots.VibeGrinder
                         // is over = nothing alive has us targeted (a fled runner still targets us → still blocked).
                         new Decorator(ctx => !OnVendorRun() && (!StyxWoW.Me.Combat || NoLiveAttackers()),
                             LevelBot.CreateLootBehavior()),
-                        // ...and during a VENDOR RUN ONLY, deliberately single-pull the most isolated hostile
-                        // in pull range instead of body-pulling blind into a pack. Vendor-only is load-bearing:
-                        // on a vendor run Roam's find-target + ApplyPullCommitment are DISABLED (vendor POI is
-                        // excluded from Roam, commitment is !OnVendorRun), so TransitPeel is the SOLE target
-                        // driver. On a grind trek those are active and already commit to one mob — running
-                        // TransitPeel there too put TWO drivers on one pull (TransitPeel→closest-in-LoS vs
-                        // ShouldClearPoiForBetterTarget→committed FirstUnit) and thrashed the POI between two
-                        // mobs every tick, pulling both. While grinding, foreign hostiles are instead just
-                        // SURFACED (IncludeNearbyHostiles) and the single existing commitment pulls them.
-                        new Decorator(ctx => OnVendorRun() && !StyxWoW.Me.Combat, new Action(ctx => TransitPeel())),
+                        // NOT dead code: the one-tick "decide to vendor" bootstrap. LevelBot detects the sell/
+                        // repair/mail need and sets the first vendor POI HERE; UpdateVendorRun() latches on it
+                        // next tick and the vendor-mode branch (top of this selector) owns the rest of the
+                        // errand. (A TransitPeel Decorator that used to sit above this line was unreachable —
+                        // the latched vendor-mode branch already owns every OnVendorRun tick — and was removed;
+                        // peeling happens inside that branch.)
                         LevelBot.CreateVendorBehavior(),
                         // Rest commitment: while we've decided to rest and aren't topped off yet, OWN the tick so
                         // Relocate/Roam below cannot pull us off the rest spot to grind — the rest↔roam oscillation.
                         // The actual eat/drink happens above in CombatBehavior's not-in-combat RestBehavior.
+                        // (The survival flee now sits ABOVE vendor/rest — see the EmergencyRelocationCheck near the
+                        // top of this selector; rest-ENTRY is additionally gated in UpdateRestingState.)
                         new Action(ctx => RestRoamBlock()),
-                        // SURVIVAL-CRITICAL flee (pack death / death loop) — ABOVE the ENGAGING gate on purpose:
-                        // fleeing a camp that keeps killing us OUTRANKS any kill commitment. Regression this fixes:
-                        // it used to live inside the !Engaging-gated RelocationCheck, so re-committing to a mob at
-                        // the corpse on rez starved the abandon-relocate → the bot re-fought the swarm on loop.
-                        _supervisor != null ? _supervisor.EmergencyRelocationCheck() : new Action(ctx => RunStatus.Failure),
                         // ENGAGING commitment — owns the wheel over travel so the DISCRETIONARY relocate and the
                         // kill-commit can't fight each other (see CLAUDE.md "Stateful inter-spot movement"):
                         //  (1) Don't relocate for a nearer/denser/contested spot while committed/fighting — finish
                         //      the kill, THEN re-evaluate. (The survival flee above is exempt.) Re-arms on disengage.
                         new Decorator(ctx => !Engaging,
                             _supervisor != null ? _supervisor.RelocationCheck() : new Action(ctx => RunStatus.Failure)),
+                        // Flight learning: opportunistically detour to a nearby unlearned flight master. Gated to
+                        // free travel — drowning/emergency-flee/combat/vendor/rest above all preempt it — and it
+                        // owns the tick only while walking up, then hands the interact/record to the vendor-run
+                        // servicing (it sets a Fly POI). Falls through to Roam when there's nothing to learn.
+                        new Decorator(ctx => !Engaging && !OnVendorRun() && !StyxWoW.Me.Combat,
+                            _supervisor != null ? _supervisor.FlightLearnCheck() : new Action(ctx => RunStatus.Failure)),
                         //  (2) EngageHold: during a TRANSIENT no-target gap mid-engage (commit dropped this tick,
                         //      not yet in combat — OR the post-kill combat-flag linger, when nothing above owns the
                         //      tick), OWN the tick so Roam's hotspot-move can't bolt toward the far new spot — the
@@ -196,6 +235,18 @@ namespace Bots.VibeGrinder
             // --- Start contract: clean slate. Spot selection is deferred to the first tick
             // (EnsureSpotSelected) because the navmesh isn't loaded yet during Start(). ---
             VibeGrinderSettings.Instance.Sanitize();   // clamp any out-of-range user values
+            // Flight module follows the two STANDARD checkboxes (Settings → Use/Learn Flight Paths) — the
+            // old AllowTaxiTravel master switch force-seeded both and was redundant (removed 2026-07-06).
+            Logging.Write(System.Drawing.Color.SkyBlue,
+                "[VibeGrinder/Flight] taxi travel {0}, path learning {1} (Settings → 'Use Flight Paths' / 'Learn Flight Paths'). {2} flight node(s) known.",
+                CharacterSettings.Instance.UseFlightPaths ? "ON" : "off",
+                CharacterSettings.Instance.UseFlightPaths && CharacterSettings.Instance.LearnFlightPaths ? "ON" : "off",
+                Styx.Logic.FlightPaths.XmlNodes?.Count ?? 0);
+            // A typo'd recipient silently voids mailed items for 30 days on an unattended run — make the
+            // configured name visible in every session log.
+            if (VibeGrinderSettings.Instance.EnableMailing)
+                Logging.Write("[VibeGrinder] Mailing ENABLED → recipient '{0}' (verify the spelling — returned mail takes 30 days).",
+                    CharacterSettings.Instance.MailRecipient ?? "(not set)");
             LevelBot.ResetState();
             BotPoi.Clear("VibeGrinder start");
             _root = null;
@@ -204,8 +255,14 @@ namespace Bots.VibeGrinder
             _committedGuid = 0;
             _committedTimer.Reset();
             _committedLastDist = double.MaxValue;
+            _committedProgressed = false;
+            _committedName = null;
             _entryGiveUps.Clear();
             _entryBanUntil.Clear();   // session-scoped learning; _dbImmuneCache survives (static DB truth)
+            _pathRejects.Clear();
+            // A residual strike + a fresh first error used to trip GIVE UP FAST on ONE real error this
+            // session instead of the designed two-within-6s (audit 2026-07-05).
+            _pullErrorCount = 0; _lastPullError = null; _pullErrorAt = DateTime.MinValue;
             _resting = false;
             _restSpot = WoWPoint.Empty;
             _restParked = false;
@@ -213,7 +270,11 @@ namespace Bots.VibeGrinder
             _vendorHoldUntil = DateTime.MinValue;
             _vendorWatchdog.Reset();
             _vendorCheckedEntry = 0;
+            _vendorAbortEntry = 0;
+            _vendorAbortStreak = 0;
+            _vendorRunType = PoiType.None;
             _engageUntil = DateTime.MinValue;
+            _breakEngageGrace = false;
             _safeRest.Reset();
             _selectRetry.Reset();
 
@@ -226,10 +287,10 @@ namespace Bots.VibeGrinder
             // so nothing re-grabs the trap we're fleeing (pull/peel target, rest, vendor errand).
             _supervisor.OnForceEscape = () =>
             {
-                _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue;
+                _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue; _committedProgressed = false;
                 _peelGuid = 0;
                 _resting = false;
-                _vendorRun = false;
+                ClearVendorRunState();   // ALL vendor state, not just the latch — see ClearVendorRunState
             };
             _restGovernor = new RestGovernor();   // dynamic rest thresholds; SafeRest reads these
             _restGovernor.SuppressedFloorHealth = VibeGrinderSettings.Instance.EmergencyMinHealth;   // vendor-run survival floor
@@ -266,7 +327,7 @@ namespace Bots.VibeGrinder
                 {
                     _pullErrorCount++;
                     _lastPullError = msg;
-                    _pullErrorAt = DateTime.Now;
+                    _pullErrorAt = DateTime.UtcNow;
                     // Telemetry: the 2026-07-03 prisoner wedge burned 128 casts with ZERO strikes counted and
                     // the dead log couldn't say why. One line per counted strike makes any future deafness
                     // (handler gate vs event delivery) diagnosable from Logs\ alone.
@@ -368,6 +429,14 @@ namespace Bots.VibeGrinder
             //    death-cluster escalation. See CLAUDE.md "Roaming elite/rare patrols".
             VetoElites(units);
 
+            // 0a. NEVER pre-combat commit/peel a PLAYER or a player-controlled unit (hunter pet / warlock minion /
+            //     charmed mob). On a PvP server, damaging any of them flags PvP with a REAL player who will
+            //     retaliate — an unattended bot must treat them as terrain, exactly like elites. Same single
+            //     chokepoint (early-returns in combat, so this is INITIATION only — if one's already on us the
+            //     routine still defends). Report: the bot committed to "Винус", an enemy hunter pet, and would have
+            //     opened on it (log 2026-07-04_1707).
+            VetoPlayerUnits(units);
+
             // 0b. Nor a mob whose NAME has proven unengageable: DB-flagged immune templates (the spot
             //     selector already excludes their spawns via the same mask — this extends that truth to
             //     LIVE surfacing, which is flag-blind) and session entry-bans earned via RecordEntryGiveUp
@@ -375,9 +444,13 @@ namespace Bots.VibeGrinder
             //     re-learned the same cage 11 mobs in a row). Same single-chokepoint coverage as VetoElites.
             VetoBannedEntries(units);
 
+            // ONE hostile snapshot per pulse, shared by the crowd weighting and the commit-layer exposure
+            // gates below (a second full OM sweep per pulse is the decision-time-cost smell the doctrine bans).
+            var hostiles = SnapshotHostiles();
+
             // 1. Quality weighting decides which mob is the *cleanest* to open on (runs in transit too —
             //    TransitPeel relies on the resulting isolation ordering).
-            ApplyCrowdAndNeutralWeighting(units, me);
+            ApplyCrowdAndNeutralWeighting(units, me, hostiles);
 
             // 2. Commitment pins our chosen pull so we see it through instead of re-deciding every tick.
             //    TransitPeel (vendor-run pull) commits to an in-range mob (_peelGuid); pin THAT as FirstUnit so
@@ -389,7 +462,135 @@ namespace Bots.VibeGrinder
             if (peel != null && !peel.Dead && peel.Distance <= Targeting.PullDistance * 1.5)
                 PinGuid(units, _peelGuid);
             else if (!OnVendorRun())
-                ApplyPullCommitment(units, me);
+                ApplyPullCommitment(units, me, hostiles);
+        }
+
+        // Live hostiles from the object manager — NOT just the current target list. An un-aggroed camp
+        // member isn't a candidate yet, but it WILL proximity-aggro/assist the instant we engage a mob
+        // beside it; counting only list members is how we opened on a "lone" giraffe and ate the adds.
+        private static System.Collections.Generic.List<WoWUnit> SnapshotHostiles()
+        {
+            var hostiles = new System.Collections.Generic.List<WoWUnit>();
+            foreach (WoWUnit h in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
+                if (h != null && h is not WoWPlayer && !h.Dead && !h.IsTotem && h.MyReaction <= WoWUnitReaction.Hostile)
+                    hostiles.Add(h);   // totems aren't pack adds — don't let them inflate crowd/veto counts
+            return hostiles;
+        }
+
+        /// <summary>
+        /// An out-of-band hostile we're standing bubble-deep in — the "inevitable" (over-level gap-band,
+        /// e.g. Kenata L+4) and "unavoidable" (below-band green) classes IncludeNearbyHostiles surfaces
+        /// ONLY under this condition. The fight is coming regardless (a wall just postpones it via LoS),
+        /// so these keep tier-0 pick priority and bypass the exposure gates: taking it 1v1 NOW at full
+        /// resources beats eating it as a mid-fight add. In-band mobs deliberately do NOT qualify —
+        /// walking away from an at-level camp mob that hasn't aggroed yet is allowed (the Lost Rigger fix).
+        /// </summary>
+        private static bool FightIsOurs(WoWUnit u, WoWUnit me, VibeGrinderSettings s)
+        {
+            int ulevel = (int)u.Level;
+            bool outOfBand = ulevel > me.Level + s.PathHostileLevelMargin
+                             || (ulevel > 0 && ulevel < me.Level - s.LevelBandBelow);
+            return outOfBand
+                   && u.Distance <= u.MyAggroRange + s.PreemptAggroBuffer
+                   && System.Math.Abs(u.Location.Z - me.Location.Z) < 5f;
+        }
+
+        /// <summary>
+        /// "If I fight x standing at point, how many OTHERS join?" — hostiles (≠x, not already fighting
+        /// us) whose server aggro range + ExposurePad covers the point (Z≥5 excluded — cliffs protect),
+        /// plus mobs within AssistRadius of x (coarse same-camp assist). A LOWER bound for a long fight:
+        /// real assist is faction-gated but re-broadcasts ~2s centered on the ENGAGED, MOVING mob — which
+        /// is why the mid-approach re-check exists. colliders = up to 3 names for the log (rule 5).
+        /// </summary>
+        private static int FightExposure(WoWUnit x, WoWPoint point,
+                                         System.Collections.Generic.List<WoWUnit> hostiles,
+                                         VibeGrinderSettings s, out string colliders)
+        {
+            int n = 0;
+            System.Text.StringBuilder sb = null;
+            float assistR2 = s.AssistRadius * s.AssistRadius;
+            foreach (WoWUnit h in hostiles)
+            {
+                if (h.Guid == x.Guid || h.IsTargetingMeOrPet) continue;
+                double bubble = h.MyAggroRange + s.ExposurePad;
+                bool joins = (h.Location.DistanceSqr(point) <= bubble * bubble
+                              && System.Math.Abs(h.Location.Z - point.Z) < 5f)
+                             || h.Location.DistanceSqr(x.Location) <= assistR2;
+                if (!joins) continue;
+                n++;
+                if (n <= 3)
+                {
+                    sb ??= new System.Text.StringBuilder();
+                    if (sb.Length > 0) sb.Append(", ");
+                    sb.AppendFormat("{0} d={1:F0}", h.Name, h.Location.Distance(point));
+                }
+            }
+            colliders = sb?.ToString() ?? "";
+            return n;
+        }
+
+        // Where WE stand when the opener goes out: on the approach line MaxPullDistance short of x (the
+        // mob then runs to us, so the fight sits there); already in pull range → right where we are.
+        private static WoWPoint OpenPoint(WoWUnit me, WoWUnit x, VibeGrinderSettings s)
+        {
+            WoWPoint mine = me.Location, theirs = x.Location;
+            double d = mine.Distance(theirs);
+            if (d <= s.MaxPullDistance || d < 0.01) return mine;
+            double t = (d - s.MaxPullDistance) / d;
+            return new WoWPoint((float)(mine.X + (theirs.X - mine.X) * t),
+                                (float)(mine.Y + (theirs.Y - mine.Y) * t),
+                                (float)(mine.Z + (theirs.Z - mine.Z) * t));
+        }
+
+        /// <summary>
+        /// Distinct hostiles whose aggro bubble the PATH to x crosses. The open-point gate can't see a
+        /// bubble web we'd walk THROUGH to a clean mob beyond it — that traversal (each web mob aggroing
+        /// as we cross) is the incident's other death geometry. Densifies the already-generated path at
+        /// ~8yd steps, bounded, so it costs distance checks, not pathfinds.
+        /// </summary>
+        private static int CorridorExposure(WoWPoint[] path, WoWUnit x,
+                                            System.Collections.Generic.List<WoWUnit> hostiles,
+                                            VibeGrinderSettings s, out string colliders)
+        {
+            int n = 0;
+            System.Text.StringBuilder sb = null;
+            foreach (WoWUnit h in hostiles)
+            {
+                if (h.Guid == x.Guid || h.IsTargetingMeOrPet) continue;
+                double bubble = h.MyAggroRange + s.ExposurePad;
+                double b2 = bubble * bubble;
+                bool crossed = false;
+                WoWPoint prev = path[0];
+                for (int i = 0; i < path.Length && !crossed; i++)
+                {
+                    WoWPoint seg = path[i];
+                    double segLen = prev.Distance(seg);
+                    int steps = System.Math.Min(16, (int)(segLen / 8.0) + 1);
+                    for (int k = 0; k <= steps; k++)
+                    {
+                        double t = steps == 0 ? 0 : (double)k / steps;
+                        var p = new WoWPoint((float)(prev.X + (seg.X - prev.X) * t),
+                                             (float)(prev.Y + (seg.Y - prev.Y) * t),
+                                             (float)(prev.Z + (seg.Z - prev.Z) * t));
+                        if (h.Location.DistanceSqr(p) <= b2 && System.Math.Abs(h.Location.Z - p.Z) < 5f)
+                        {
+                            crossed = true;
+                            break;
+                        }
+                    }
+                    prev = seg;
+                }
+                if (!crossed) continue;
+                n++;
+                if (n <= 3)
+                {
+                    sb ??= new System.Text.StringBuilder();
+                    if (sb.Length > 0) sb.Append(", ");
+                    sb.Append(h.Name);
+                }
+            }
+            colliders = sb?.ToString() ?? "";
+            return n;
         }
 
         /// <summary>
@@ -417,6 +618,11 @@ namespace Bots.VibeGrinder
             {
                 WoWUnit u = units[i].Object?.ToUnit();
                 if (u == null || !IsUnkillableElite(u)) continue;
+                // Never strip a mob that's ON us or the live commit: Me.Combat lags the aggro by 1-3s, and
+                // removing an already-charging elite in that window hands FirstUnit to some other mob while
+                // it closes — the leash-off class of bug (audit 2026-07-05). Losing to it deliberately beats
+                // fighting it AND whatever we switch to; the death machinery backstops.
+                if (u.IsTargetingMeOrPet || u.Guid == _committedGuid) continue;
                 if (sample == null) sample = u.Name;
                 units.RemoveAt(i);
                 vetoed++;
@@ -426,6 +632,41 @@ namespace Bots.VibeGrinder
                 Logging.WriteDebug("[VibeGrinder/Hostiles] vetoed {0} elite(s) from pull candidates (e.g. {1}) — won't engage.",
                     vetoed, sample);
                 _eliteVetoLogSw.Restart();
+            }
+        }
+
+        /// <summary>True if this unit is a player or is controlled by a player (pet / minion / charmed mob) —
+        /// something we must never PROACTIVELY engage on a PvP server. Owner walk via the core WoWUnit chain
+        /// (Charm/Summon/Created); a normal mob has none of those set → false, so real grind targets are safe.</summary>
+        private static bool IsPlayerOrPlayerControlled(WoWObject o)
+        {
+            if (o is WoWPlayer) return true;
+            WoWUnit u = o?.ToUnit();
+            if (u == null) return false;
+            try { return u.ControllingPlayer != null || u.OwnedByRoot is WoWPlayer; }
+            catch { return false; }   // OM chain lookups can throw on a stale unit — treat as not-a-player
+        }
+
+        // Drop every player + player-controlled unit from the pre-combat candidate list so nothing downstream can
+        // commit/peel/approach one (never initiate PvP). Same chokepoint + in-combat exemption as VetoElites.
+        // DELIBERATELY no attacker/commit exemption (unlike VetoElites/VetoBannedEntries): damaging an attacking
+        // player pet still flags PvP with a real player — worse than eating the pet's damage. Initiation: never.
+        private void VetoPlayerUnits(System.Collections.Generic.List<Targeting.TargetPriority> units)
+        {
+            int vetoed = 0;
+            string sample = null;
+            for (int i = units.Count - 1; i >= 0; i--)
+            {
+                if (units[i].Object == null || !IsPlayerOrPlayerControlled(units[i].Object)) continue;
+                if (sample == null) sample = units[i].Object.Name;
+                units.RemoveAt(i);
+                vetoed++;
+            }
+            if (vetoed > 0 && (!_playerVetoLogSw.IsRunning || _playerVetoLogSw.Elapsed.TotalSeconds >= 3))
+            {
+                Logging.WriteDebug("[VibeGrinder/Hostiles] vetoed {0} player/pet candidate(s) (e.g. {1}) — never proactively PvP.",
+                    vetoed, sample);
+                _playerVetoLogSw.Restart();
             }
         }
 
@@ -440,8 +681,11 @@ namespace Bots.VibeGrinder
                 WoWUnit u = units[i].Object?.ToUnit();
                 if (u == null || u.Entry == 0) continue;
                 DateTime until;
-                bool banned = _entryBanUntil.TryGetValue(u.Entry, out until) && DateTime.Now < until;
+                bool banned = _entryBanUntil.TryGetValue(u.Entry, out until) && DateTime.UtcNow < until;
                 if (!banned && !IsDbImmune(u.Entry)) continue;
+                // A banned-entry mob that's actually ON us (rare — bans exist because they can't engage) or
+                // the live commit is never stripped mid-fight; same leash-off protection as VetoElites.
+                if (u.IsTargetingMeOrPet || u.Guid == _committedGuid) continue;
                 if (sample == null) sample = u.Name;
                 units.RemoveAt(i);
                 vetoed++;
@@ -483,7 +727,7 @@ namespace Bots.VibeGrinder
                 _entryGiveUps[held.Entry] = guids = new System.Collections.Generic.HashSet<ulong>();
             guids.Add(held.Guid);
             if (guids.Count < s.EntryBanGiveUps) return;
-            _entryBanUntil[held.Entry] = DateTime.Now.AddMinutes(s.EntryBanMinutes);
+            _entryBanUntil[held.Entry] = DateTime.UtcNow.AddMinutes(s.EntryBanMinutes);
             _entryGiveUps.Remove(held.Entry);
             Logging.Write(System.Drawing.Color.Khaki,
                 "[VibeGrinder/Commit] ENTRY BAN {0} (entry {1}) — {2} distinct in-place give-ups; ignoring that name for {3}m.",
@@ -526,27 +770,19 @@ namespace Bots.VibeGrinder
         /// beside hostiles, so the mob we COMMIT to is the cleanest available. Only shapes the initial pick
         /// — once committed (ApplyPullCommitment) the bot sticks regardless of later score wobble.
         /// </summary>
-        private void ApplyCrowdAndNeutralWeighting(System.Collections.Generic.List<Targeting.TargetPriority> units, WoWUnit me)
+        private void ApplyCrowdAndNeutralWeighting(System.Collections.Generic.List<Targeting.TargetPriority> units,
+                                                   WoWUnit me, System.Collections.Generic.List<WoWUnit> hostiles)
         {
             var s = VibeGrinderSettings.Instance;
-            if (s.PullCrowdPenalty <= 0f || s.PullCrowdRadius <= 0f) return;
+            if (s.PullCrowdRadius <= 0f) return;   // AddAvoidance Off disables the whole layer
 
-            // Squishy-lowbie concern: full strength at/below PullCrowdFullLevel, tapering off by
-            // PullCrowdLevelCeiling (you have AoE/cooldowns; density is upside).
+            // Squishy-lowbie COMFORT taper — applies only to the soft tiebreaker penalty below. The hard
+            // vetoes are SURVIVAL and never taper: the old whole-method early-return at levelScale 0 turned
+            // the pack veto off at 50+, and a L47 died to an 11-mob pack while the scale sat at 0.09.
             float levelScale = s.CrowdLevelScale(me.Level);
-            if (levelScale <= 0f) return;
             // Adaptive: scale up the more we've been dying to packs (eased by progress).
             float caution = _supervisor != null ? (float)_supervisor.CrowdCautionFactor : 1f;
             float penalty = s.PullCrowdPenalty * levelScale * caution;
-
-            // Snapshot ALL live hostiles from the object manager — NOT just the current target list. An
-            // un-aggroed Kolkar isn't a candidate (units) yet, but it WILL proximity-aggro the instant we
-            // engage a mob beside it; counting only list members is exactly how we opened on a giraffe with
-            // hostiles "next door" that weren't in the list yet, then ate the adds.
-            var hostiles = new System.Collections.Generic.List<WoWUnit>();
-            foreach (WoWUnit h in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
-                if (h != null && h is not WoWPlayer && !h.Dead && !h.IsTotem && h.MyReaction <= WoWUnitReaction.Hostile)
-                    hostiles.Add(h);   // totems aren't pack adds — don't let them inflate crowd/veto counts
 
             float crowdR2 = s.PullCrowdRadius * s.PullCrowdRadius;
             float neutR2 = s.NeutralHostileAvoidRadius * s.NeutralHostileAvoidRadius;
@@ -562,14 +798,16 @@ namespace Bots.VibeGrinder
                 if (a.IsTotem) { units[i].Score -= s.NeutralNearHostileVeto * 2f; continue; }
                 bool neutral = a.MyReaction > WoWUnitReaction.Hostile;
 
-                // A hostile already targeting us, or one we're already inside the aggro bubble of, is a
-                // COMMITTED threat — it will be in the fight the instant we move, so pull the nearest such
-                // mob rather than walk past it to a "cleaner" one farther off (that's how we pulled a distant
-                // mob while a nearer one aggroed onto us). Leave it alone — never veto a mob already on us.
-                if (!neutral && (a.CurrentTargetGuid == me.Guid || a.Distance <= a.MyAggroRange + 5f))
+                // Never veto: a mob already ON us (rejecting it = leashing off a live attacker), the
+                // COMMITTED mob (mid-flight removal reads as "no longer a candidate" → spurious drop + a
+                // drop-ban false positive; its exposure is re-checked every pulse by the mid-approach abort
+                // instead), or an out-of-band bubble mob (FightIsOurs: Kenata/below-band — it must stay
+                // pickable so acquire takes it 1v1). NOTE the old blanket "inside its bubble → skip" is
+                // GONE for in-band mobs: that exemption is what let the pirate camp through veto-free.
+                if (!neutral && (a.IsTargetingMeOrPet || a.Guid == _committedGuid || FightIsOurs(a, me, s)))
                     continue;
 
-                int addRisk = 0;
+                int addRisk = 0, bubbleRisk = 0;
                 bool hostileInNeutralRange = false;
                 foreach (WoWUnit b in hostiles)
                 {
@@ -577,14 +815,21 @@ namespace Bots.VibeGrinder
                     double d2 = a.Location.DistanceSqr(b.Location);
                     if (d2 <= crowdR2) addRisk++;
                     if (neutral && d2 <= neutR2) hostileInNeutralRange = true;
+                    // Bubble overlap over the candidate's OWN body: a mob 3+ other aggro bubbles already
+                    // cover is deep camp no matter how spread the bodies look — the fixed 12yd knot radius
+                    // is blind to 17-18yd aggro ranges at 15-25yd spacing (Lost Rigger, 41 pirates, 0 vetoes).
+                    if (s.EnableBubbleVeto && !neutral && !b.IsTargetingMeOrPet)
+                    {
+                        double br = b.MyAggroRange + s.ExposurePad;
+                        if (d2 <= br * br && System.Math.Abs(b.Location.Z - a.Location.Z) < 5f) bubbleRisk++;
+                    }
                 }
 
-                // HARD VETO a genuine camp: PullPackVetoCount+ hostile neighbours within the crowd radius.
-                // The capped penalty below is only a tiebreaker (so we don't walk past a near mob to a far
-                // one) — it CANNOT refuse a camp, which is how a squishy caster fed itself into a 4-mob Kolkar
-                // bonfire camp and died. Drop camped hostiles from the candidate list entirely while squishy:
-                // we won't OPEN on a camp, and if the area is all camps the empty list drives a relocate.
-                if (!neutral && addRisk >= s.PullPackVetoCount)
+                // HARD VETO a genuine camp — assist knot OR bubble web. The capped penalty below is only a
+                // tiebreaker (so we don't walk past a near mob to a far one) — it CANNOT refuse a camp,
+                // which is how a squishy caster fed itself into a 4-mob Kolkar bonfire camp and died. We
+                // won't OPEN on a camp; if the area is all camps the empty list drives a relocate.
+                if (!neutral && (addRisk >= s.PullPackVetoCount || bubbleRisk >= s.PullPackVetoCount))
                 {
                     units.RemoveAt(i);
                     continue;
@@ -593,7 +838,7 @@ namespace Bots.VibeGrinder
                 // CAP the crowd penalty so it stays a TIEBREAKER among similarly-close mobs and can never
                 // outweigh proximity (base score loses only 2/yd). Without the cap a near mob with neighbours
                 // loses to a far isolated one and the bot walks INTO/past the near pack to reach it.
-                if (addRisk > 0)
+                if (penalty > 0f && addRisk > 0)
                     units[i].Score -= System.Math.Min(addRisk * penalty, s.PullCrowdPenaltyCap);
 
                 // A NEUTRAL beside hostiles is pure downside: it won't come to us, so we'd walk INTO the
@@ -636,9 +881,27 @@ namespace Bots.VibeGrinder
         /// scoring above still chooses the initial commit; after that, stability beats re-optimising.
         /// (In combat the routine owns target choice, so this only governs the pre-pull approach.)
         /// </summary>
-        private void ApplyPullCommitment(System.Collections.Generic.List<Targeting.TargetPriority> units, WoWUnit me)
+        private void ApplyPullCommitment(System.Collections.Generic.List<Targeting.TargetPriority> units,
+                                         WoWUnit me, System.Collections.Generic.List<WoWUnit> hostiles)
         {
             var s = VibeGrinderSettings.Instance;
+
+            // Dead/ghost: the pre-pull selection layer has no business running. The incident log shows
+            // PREEMPT firing 46ms after `I died.`, and the drop-ban falsely banning the mob we died
+            // fighting when the candidate list vanished at the death tick. Own drop path — never the
+            // held==null branch, so the drop-ban can't misread a death as a wedge.
+            if (me.IsDead || me.IsGhost)
+            {
+                if (_committedGuid != 0)
+                {
+                    _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue;
+                }
+                return;
+            }
+
+            // Fear meter: max TOTAL mobs in a fight we CHOOSE, tightened by pack-death caution (see
+            // MaxFightCompany). Shared by the acquire, preempt, and mid-approach exposure gates below.
+            int maxCompany = s.MaxFightCompany(_supervisor?.CrowdCautionFactor ?? 1.0);
 
             // Don't tread water after a target. If we've waded in swimming, just DROP the pin (no blacklist —
             // a stream crossing toward a fine land mob shouldn't poison it) and don't re-commit while swimming,
@@ -696,12 +959,39 @@ namespace Bots.VibeGrinder
                 }
                 if (threat != null && (heldNeutral || threatDist < heldDist) && threat.Guid != _committedGuid)
                 {
-                    Logging.Write(System.Drawing.Color.Khaki,
-                        "[VibeGrinder/Commit] PREEMPT to {0} (d={1:F1}, aggro={2:F0}{3}) — path hostile about to pull; deferring {4:X}",
-                        threat.Name, threatDist, threat.MyAggroRange, heldNeutral ? ", neutral commit" : "", _committedGuid);
-                    // Commit STRAIGHT to the threat — dropping to 0 and letting Acquire re-pick would re-grab the
-                    // NEARER neutral (it's closer than the threat), re-fire the preempt, and oscillate 5x/sec.
-                    _committedGuid = threat.Guid; _committedTimer.Restart(); _committedLastDist = double.MaxValue;
+                    // Fear-meter gate on the switch: a threat we'd have to fight standing inside OTHER
+                    // bubbles is not a fight to accept while we can still leave — the incident's death was
+                    // this preempt chaining pirate-by-pirate into a 41-mob camp. Deny: shed the threat
+                    // (45s, so it stops being FirstUnit and Roam doesn't approach it), defer the held
+                    // commit (own path — no ban), and break the ENGAGING grace so TRAVELING re-arms NOW
+                    // (EngageHold would otherwise hold us in the web ~3s, or approach the next camp mob).
+                    // If it body-pulls anyway it becomes IsTargetingMeOrPet → tier 0 → we defend where we
+                    // stand, moving away. Out-of-band bubble mobs bypass (FightIsOurs — that fight is ours).
+                    if (s.EnableExposureGate && !threat.IsTargetingMeOrPet && !FightIsOurs(threat, me, s))
+                    {
+                        int exposure = FightExposure(threat, me.Location, hostiles, s, out string who);
+                        if (exposure >= maxCompany)
+                        {
+                            Logging.Write(System.Drawing.Color.Khaki,
+                                "[VibeGrinder/Commit] PREEMPT DENIED {0} (d={1:F1}) — fighting it here pulls {2} more ({3}); cap {4} — shedding it and leaving.",
+                                threat.Name, threatDist, exposure, who, maxCompany);
+                            Blacklist.Add(threat.Guid, System.TimeSpan.FromSeconds(s.ExposureRejectSeconds));
+                            _supervisor?.RecordExposureReject(threat);
+                            _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue;
+                            _breakEngageGrace = true;
+                            threat = null;
+                        }
+                    }
+                    if (threat != null)
+                    {
+                        Logging.Write(System.Drawing.Color.Khaki,
+                            "[VibeGrinder/Commit] PREEMPT to {0} (d={1:F1}, aggro={2:F0}{3}) — path hostile about to pull; deferring {4:X}",
+                            threat.Name, threatDist, threat.MyAggroRange, heldNeutral ? ", neutral commit" : "", _committedGuid);
+                        // Commit STRAIGHT to the threat — dropping to 0 and letting Acquire re-pick would re-grab the
+                        // NEARER neutral (it's closer than the threat), re-fire the preempt, and oscillate 5x/sec.
+                        _committedGuid = threat.Guid; _committedTimer.Restart(); _committedLastDist = double.MaxValue;
+                        _committedProgressed = false; _committedName = threat.Name;
+                    }
                 }
             }
 
@@ -728,13 +1018,40 @@ namespace Bots.VibeGrinder
                     // killing — and it resets from the opener's FIRST cast, not the lagged combat flag, so the clock
                     // can't blacklist a mob we're mid-cast on. A stuck pull that never opens expires → blacklist 2m.
                     if (opened || d < _committedLastDist - 0.5)
+                    {
                         _committedTimer.Restart();
+                        // Real approach progress (closing) or engagement. Ignore the acquire-tick MaxValue→d
+                        // seed — that's the first reading, not progress. Gates the experimental drop-ban.
+                        if (opened || _committedLastDist != double.MaxValue) _committedProgressed = true;
+                    }
                     _committedLastDist = d;
+
+                    // Fight-duration lookahead: exposure re-checked where we STAND, every pulse until the
+                    // opener is away — mobs drift in, our walk drifts into webs, and the commit-instant
+                    // check sees neither (server assist re-broadcasts ~2s for the whole fight). Post-open
+                    // is irrevocable (switching ADDS a mob) so this never fires then. Own drop path (valid
+                    // = false → the !valid reset below), so the drop-ban can't misread it as a wedge.
+                    // Near/bubble-inside commits open the same tree tick they're made — for those the
+                    // acquire gate is the only guard, by design; this protects the far approach.
+                    if (!opened && s.EnableExposureGate
+                        && !held.IsTargetingMeOrPet && !FightIsOurs(held, me, s))
+                    {
+                        int exposure = FightExposure(held, me.Location, hostiles, s, out string who);
+                        if (exposure >= maxCompany)
+                        {
+                            Logging.Write(System.Drawing.Color.Khaki,
+                                "[VibeGrinder/Commit] ABORT approach to {0} (d={1:F1}) — standing inside {2} bubble(s) ({3}); cap {4} — backing off 45s.",
+                                held.Name, d, exposure, who, maxCompany);
+                            Blacklist.Add(_committedGuid, System.TimeSpan.FromSeconds(s.ExposureRejectSeconds));
+                            _breakEngageGrace = true;
+                            valid = false;
+                        }
+                    }
 
                     // FAST give-up on client-reported pull failures (UI_ERROR_MESSAGE handler, see Start): two
                     // LoS/invalid-target errors within 6s mean this pull cannot work from here — resolve NOW
                     // with the reason verbatim instead of letting the 20s clock discover it (fluid doctrine).
-                    if (!opened && _pullErrorCount >= 2 && (DateTime.Now - _pullErrorAt).TotalSeconds < 6)
+                    if (valid && !opened && _pullErrorCount >= 2 && (DateTime.UtcNow - _pullErrorAt).TotalSeconds < 6)
                     {
                         Logging.Write(System.Drawing.Color.Khaki,
                             "[VibeGrinder/Commit] GIVE UP FAST on {0} — client reported '{1}' ×{2} — blacklisting 2m.",
@@ -754,7 +1071,7 @@ namespace Bots.VibeGrinder
                             "[VibeGrinder/Commit] GIVE UP on {0} (reaction={1}, d={2:F1}, noProgressFor={3:F0}s, " +
                             "moving={4}, inLoS={5}) — blacklisting 2m. nearestHostile={6} candidates={7}",
                             held.Name, held.MyReaction, d, _committedTimer.Elapsed.TotalSeconds,
-                            me.IsMoving, held.InLineOfSpellSight, NearestHostileDesc(me), units.Count);
+                            me.IsMoving, held.InLineOfSpellSight, NearestHostileDesc(hostiles), units.Count);
                         Blacklist.Add(_committedGuid, System.TimeSpan.FromMinutes(2));
                         RecordEntryGiveUp(held, d, s, clientReported: false);
                         valid = false;
@@ -764,6 +1081,20 @@ namespace Bots.VibeGrinder
                 {
                     Logging.WriteDebug("[VibeGrinder/Commit] drop {0:X} — {1}", _committedGuid,
                         held == null ? "no longer a candidate" : "dead");
+                    // EXPERIMENTAL (2026-07-04, Den of Flame timber-fence trap): the mob left the candidate
+                    // list ("no longer a candidate") and we never closed distance or opened on it — almost
+                    // always physically unreachable (mesh says reachable, a protruding timber wedges us short).
+                    // The delist→recommit→delist flap resets the PullCommitMaxSeconds give-up clock so it never
+                    // matures to a blacklist and the bot re-picks the trap forever; ban at the drop edge instead.
+                    // Scoped hard: held==null (left the list, NOT a kill) AND no progress — so killed mobs (we
+                    // opened → progressed) and deliberately-deferred preempts are spared. See EnableExperimentalDropBan.
+                    if (held == null && !_committedProgressed && s.EnableExperimentalDropBan)
+                    {
+                        Blacklist.Add(_committedGuid, System.TimeSpan.FromMinutes(s.ExperimentalDropBanMinutes));
+                        Logging.Write(System.Drawing.Color.Khaki,
+                            "[VibeGrinder/Commit] EXPERIMENTAL BAN {0} ({1:X}) — committed with zero approach progress before it left the list; likely a pathing wedge. Ignoring {2}min.",
+                            _committedName ?? "?", _committedGuid, s.ExperimentalDropBanMinutes);
+                    }
                 }
                 if (!valid) { _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue; }
             }
@@ -791,6 +1122,7 @@ namespace Bots.VibeGrinder
                 // tick. Bounded at 3 pathfinds/tick; a mob already ON us is never rejected (it reached us —
                 // rejecting it would leash us off a live attacker). The 20s give-up clock stays as backstop.
                 var rejected = new System.Collections.Generic.HashSet<ulong>();
+                bool exposureRejected = false;
                 Targeting.TargetPriority pick = null;
                 for (int attempt = 0; attempt < 3 && pick == null; attempt++)
                 {
@@ -802,16 +1134,16 @@ namespace Bots.VibeGrinder
                         if (c.Object == null || c.Score < buryFloor || rejected.Contains(c.Object.Guid)) continue;
                         WoWUnit cu = c.Object.ToUnit();
                         if (cu == null || cu.Dead) continue;   // a just-killed corpse lingers a frame in the list — don't re-commit to it
-                        // Tiered nearest: already-ours (attacking us, or a hostile whose aggro bubble we're
-                        // inside — that fight is coming regardless) > visible > around-a-corner. A LoS-blocked
-                        // pick means walking INTO its position to gain LoS, so the open happens at body-pull
-                        // range (user report 2026-07-02); a corner mob also can't aggro through the wall while
-                        // we fight the visible one. Last resort, not a veto: with nothing visible we still
-                        // grind the corner mob, deliberately.
+                        // Tiered nearest: already-ours (attacking us, or an OUT-OF-BAND mob we're bubble-deep
+                        // in — Kenata/below-band, that fight is coming regardless) > visible > around-a-corner.
+                        // A LoS-blocked pick means walking INTO its position to gain LoS, so the open happens
+                        // at body-pull range (user report 2026-07-02); a corner mob also can't aggro through
+                        // the wall while we fight the visible one. Last resort, not a veto: with nothing
+                        // visible we still grind the corner mob, deliberately. NOTE: an IN-band mob whose
+                        // bubble we're in is no longer tier 0 — the exposure gate below decides engage vs
+                        // walk away (blanket "inevitable" ranking is what marched us into the pirate camp).
                         double d = c.Object.Distance;
-                        int tier = cu.IsTargetingMeOrPet
-                                   || (cu.MyReaction <= WoWUnitReaction.Hostile
-                                       && d <= cu.MyAggroRange + s.PreemptAggroBuffer) ? 0
+                        int tier = cu.IsTargetingMeOrPet || FightIsOurs(cu, me, s) ? 0
                                  : cu.InLineOfSpellSight ? 1 : 2;
                         if (tier < pickTier || (tier == pickTier && d < nearest)) { nearest = d; pick = c; pickTier = tier; }
                     }
@@ -823,16 +1155,61 @@ namespace Bots.VibeGrinder
                         WoWPoint[] path = Navigator.GeneratePath(me.Location, pu.Location);
                         if (path == null || path.Length == 0)
                         {
+                            // Escalate a REPEAT offender: a genuine mesh hole re-rejects every 45s forever —
+                            // a permanent per-pulse pathfind tax with no route to the long ban the analogous
+                            // unengageable-entry case gets (audit 2026-07-05). 3 strikes → 45 min.
+                            int strikes = _pathRejects.TryGetValue(pu.Guid, out int prev) ? prev + 1 : 1;
+                            _pathRejects[pu.Guid] = strikes;
+                            bool longBan = strikes >= 3;
                             Logging.Write(System.Drawing.Color.Khaki,
-                                "[VibeGrinder/Commit] REJECT {0} (d={1:F1}) — no path to it; trying next-nearest.",
-                                pu.Name, pu.Distance);
-                            Blacklist.Add(pu.Guid, System.TimeSpan.FromSeconds(45));
+                                "[VibeGrinder/Commit] REJECT {0} (d={1:F1}) — no path to it ({2}); trying next-nearest.",
+                                pu.Name, pu.Distance,
+                                longBan ? "3rd no-path — banning " + s.EntryBanMinutes + "m" : "strike " + strikes);
+                            Blacklist.Add(pu.Guid, longBan
+                                ? System.TimeSpan.FromMinutes(s.EntryBanMinutes)
+                                : System.TimeSpan.FromSeconds(45));
+                            if (longBan) _pathRejects.Remove(pu.Guid);
                             rejected.Add(pick.Object.Guid);
                             pick = null;
                         }
+                        else
+                        {
+                            _pathRejects.Remove(pu.Guid);   // pathable again (it wandered) — clean slate
+                            // Fear-meter gate (lookahead, doctrine rule 3): who joins if we open on this pick
+                            // from where we'd stand — and does the WALK there cross a bubble web (the open-point
+                            // check can't see a web we'd traverse to a clean mob beyond it)? Out-of-band bubble
+                            // mobs bypass (FightIsOurs) but still get the pathability REJECT above (an indoors
+                            // Kenata must stay rejectable). Reject = 45s + next-nearest, same pattern as no-path.
+                            if (s.EnableExposureGate && !FightIsOurs(pu, me, s))
+                            {
+                                int exposure = FightExposure(pu, OpenPoint(me, pu, s), hostiles, s, out string who);
+                                int crossed = 0; string cwho = "";
+                                if (exposure < maxCompany && s.EnableCorridorCheck)
+                                    crossed = CorridorExposure(path, pu, hostiles, s, out cwho);
+                                if (exposure >= maxCompany || crossed >= maxCompany)
+                                {
+                                    bool viaCorridor = exposure < maxCompany;
+                                    Logging.Write(System.Drawing.Color.Khaki,
+                                        "[VibeGrinder/Commit] REJECT {0} (d={1:F1}) — {2} pulls {3} more ({4}); cap {5} — 45s.",
+                                        pu.Name, pu.Distance,
+                                        viaCorridor ? "the walk to it" : "opening on it",
+                                        viaCorridor ? crossed : exposure,
+                                        viaCorridor ? cwho : who, maxCompany);
+                                    Blacklist.Add(pu.Guid, System.TimeSpan.FromSeconds(s.ExposureRejectSeconds));
+                                    _supervisor?.RecordExposureReject(pu);
+                                    rejected.Add(pick.Object.Guid);
+                                    exposureRejected = true;
+                                    pick = null;
+                                }
+                            }
+                        }
                     }
                 }
-                if (pick == null)
+                // Everything nearby was buried (neutrals) → act on the top score rather than idle. NOT after
+                // an exposure-reject: recommitting the highest-score survivor UN-GATED re-opens the exact hole
+                // the gate closed (an 11-mob camp sheds 3 rejects/tick and this fallback would open on the
+                // 4th) — let the emptying list drive Depleted() → relocate instead.
+                if (pick == null && !exposureRejected)
                     for (int i = 0; i < units.Count; i++)
                     {
                         WoWUnit cu = units[i].Object?.ToUnit();
@@ -845,13 +1222,15 @@ namespace Bots.VibeGrinder
                     _committedGuid = pick.Object.Guid;
                     _committedTimer.Restart();
                     _committedLastDist = double.MaxValue;
+                    _committedProgressed = false;   // fresh commit — no approach progress yet
                     _pullErrorCount = 0;   // fresh commit → fresh error strikes
                     WoWUnit bu = pick.Object.ToUnit();
+                    _committedName = bu?.Name;      // stash for the drop-ban log (held is null at the drop)
                     if (bu != null)
                         Logging.Write(System.Drawing.Color.Khaki,
                             "[VibeGrinder/Commit] ACQUIRE {0} (reaction={1}, d={2:F1}, score={3:F0}) " +
                             "nearestHostile={4} candidates={5}",
-                            bu.Name, bu.MyReaction, bu.Distance, pick.Score, NearestHostileDesc(me), units.Count);
+                            bu.Name, bu.MyReaction, bu.Distance, pick.Score, NearestHostileDesc(hostiles), units.Count);
                 }
             }
 
@@ -1056,6 +1435,25 @@ namespace Bots.VibeGrinder
                     return;
 
                 bool need = RestNeeded(me);
+                // Never START a rest while a survival flee is PENDING — the post-res low-HP tick is exactly
+                // when it is (rest ENTER 2s after corpse grab with 43 hostiles, log 2026-07-05_1402 14:18).
+                // The pending flag ONLY, deliberately: an earlier version also refused rest anywhere inside
+                // the 45-min death-blacklist ring, which produced a chronic no-rest grind loop — the bot
+                // fights on-route mobs and respawns inside the (up to 700yd) ring for the ring's whole
+                // lifetime, and pulling at ~60% hp forever is deadlier than sitting down inside it (live
+                // regression 2026-07-06 00:2x: 76 rest-skips, chronic 57-70% hp pulls, 6 deaths).
+                // SafeRestReposition still backs the rest spot off from visible hostiles.
+                if (need && _supervisor != null && _supervisor.HasPendingEmergencyRelocate)
+                {
+                    if (DateTime.UtcNow >= _restSkipLogAt)   // once per 10s — the condition holds for many ticks
+                    {
+                        _restSkipLogAt = DateTime.UtcNow.AddSeconds(10);
+                        Logging.Write(System.Drawing.Color.Khaki,
+                            "[VibeGrinder/Rest] SKIP enter (hp={0:F0}%) — survival flee pending; leaving first.",
+                            me.HealthPercent);
+                    }
+                    return;
+                }
                 if (need)
                 {
                     _resting = true; _restSpot = WoWPoint.Empty; _safeRest.Restart();
@@ -1111,7 +1509,7 @@ namespace Bots.VibeGrinder
         /// TRAVELING is simply the absence of this. Pure read — never mutate state here.
         /// </summary>
         private bool Engaging => StyxWoW.Me != null
-            && (StyxWoW.Me.Combat || _committedGuid != 0 || DateTime.Now < _engageUntil);
+            && (StyxWoW.Me.Combat || _committedGuid != 0 || DateTime.UtcNow < _engageUntil);
 
         private static WoWUnit NearestHostileWithin(WoWUnit me, float range)
         {
@@ -1128,13 +1526,14 @@ namespace Bots.VibeGrinder
 
         /// <summary>DIAG: nearest live hostile of any distance, for commitment logging ("near hostile existed
         /// but we committed to a far straggler"). Returns "name d=NN reaction=R" or "none".</summary>
-        private static string NearestHostileDesc(WoWUnit me)
+        // Reuses the pulse's hostile snapshot — this used to do its own full OM sweep, the exact
+        // decision-time-cost smell the shared snapshot exists to prevent.
+        private static string NearestHostileDesc(System.Collections.Generic.List<WoWUnit> hostiles)
         {
             WoWUnit n = null;
             double best = double.MaxValue;
-            foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
+            foreach (WoWUnit u in hostiles)
             {
-                if (u == null || u is WoWPlayer || u.Dead || u.MyReaction > WoWUnitReaction.Hostile) continue;
                 double d = u.Distance;
                 if (d < best) { best = d; n = u; }
             }
@@ -1220,13 +1619,14 @@ namespace Bots.VibeGrinder
             // Refresh the hold window while actively on the errand: a vendor POI is up, OR we're mid peel-fight
             // (combat transiently flips the POI to Kill — don't let that look like "errand done").
             if (poiIsVendor || (_vendorRun && me.Combat))
-                _vendorHoldUntil = DateTime.Now.AddSeconds(s.VendorRunStickySeconds);
+                _vendorHoldUntil = DateTime.UtcNow.AddSeconds(s.VendorRunStickySeconds);
 
             if (!_vendorRun)
             {
                 if (poiIsVendor)
                 {
                     _vendorRun = true;
+                    _vendorRunType = BotPoi.Current.Type;   // for the abort escalation — the POI thrashes by abort time
                     _vendorWatchdog.Restart();
                     Logging.Write(System.Drawing.Color.Khaki,
                         "[VibeGrinder/Vendor] COMMIT — {0} run; grind/rest/roam suspended until done.", BotPoi.Current.Type);
@@ -1238,31 +1638,82 @@ namespace Bots.VibeGrinder
 
             // Committed. Hard backstop: an errand that can't complete (vendor unreachable / blacklisted / can't
             // afford repair) must not wedge us in vendor mode forever — abort and resume grinding.
-            if (_vendorWatchdog.Elapsed.TotalSeconds > s.VendorRunAbortSeconds)
+            // Don't abort while airborne on a taxi — a long flight is legit and FlightTravelCheck owns it.
+            if (_vendorWatchdog.Elapsed.TotalSeconds > s.VendorRunAbortSeconds && !me.OnTaxi)
             {
                 Logging.Write(System.Drawing.Color.Orange,
                     "[VibeGrinder/Vendor] ABORT — errand didn't complete in {0}s; resuming grind.", s.VendorRunAbortSeconds);
+                EscalateVendorAbort();
                 EndVendorRun();
                 return false;
             }
 
             // Done: the hold window lapsed — no vendor POI and no combat for VendorRunStickySeconds, i.e. the
             // transaction finished and nothing re-triggered it. Resume grinding (and rest then, if still low).
-            if (DateTime.Now > _vendorHoldUntil)
+            if (DateTime.UtcNow > _vendorHoldUntil)
             {
                 Logging.Write(System.Drawing.Color.Khaki, "[VibeGrinder/Vendor] DONE — errand complete; resuming grind.");
+                _vendorAbortStreak = 0;   // a completed errand proves the target works
+                _vendorAbortEntry = 0;
                 EndVendorRun();
                 return false;
             }
             return true;
         }
 
-        private void EndVendorRun()
+        /// <summary>
+        /// Two consecutive aborts on the same errand target = the TARGET is the problem (unreachable,
+        /// unaffordable, wedged approach) — retrying it forever is the 2026-07-06 all-night loop. Blacklist
+        /// it (timed for vendors, session for mailboxes) so the resolver picks a different one; a completed
+        /// errand (DONE) resets the streak. Bounded and self-healing — never suppresses the NEED itself.
+        /// </summary>
+        private void EscalateVendorAbort()
+        {
+            uint failed = _vendorCheckedEntry;
+            bool sameTarget = failed != 0 ? failed == _vendorAbortEntry : _vendorRunType == PoiType.Mail && _vendorAbortEntry == 0 && _vendorAbortStreak > 0;
+            _vendorAbortStreak = sameTarget ? _vendorAbortStreak + 1 : 1;
+            _vendorAbortEntry = failed;
+
+            if (_vendorAbortStreak < 2)
+                return;
+            _vendorAbortStreak = 0;
+
+            var profile = Styx.Logic.Profiles.ProfileManager.CurrentProfile;
+            if (failed != 0 && profile?.VendorManager != null)
+            {
+                profile.VendorManager.Blacklist.Add(
+                    new Styx.Logic.Profiles.Vendor((int)failed, "abort-streak", Styx.Logic.Profiles.Vendor.VendorType.Repair, WoWPoint.Empty));
+                Logging.Write(System.Drawing.Color.Orange,
+                    "[VibeGrinder/Vendor] ABORT ×2 on vendor entry {0} — blacklisting it (timed); the resolver picks another.", failed);
+            }
+            else if (_vendorRunType == PoiType.Mail && profile?.MailboxManager != null)
+            {
+                var mb = profile.MailboxManager.GetClosestMailbox();
+                if (mb != null)
+                {
+                    profile.MailboxManager.Blacklist.Add(mb);
+                    Logging.Write(System.Drawing.Color.Orange,
+                        "[VibeGrinder/Vendor] ABORT ×2 on the mail errand — blacklisting the mailbox at {0} for this session; the resolver picks another.", mb.Location);
+                }
+            }
+        }
+
+        // One reset for ALL vendor-run state — shared by EndVendorRun and OnForceEscape so the two can't
+        // drift as fields get added. OnForceEscape used to reset only _vendorRun; the stale
+        // _vendorCheckedEntry then silently skipped VendorLocationSafe for a later same-entry vendor
+        // (audit 2026-07-05). Deliberately does NOT touch _vendorAbortStreak/_vendorAbortEntry — the
+        // abort escalation must survive its own errand's reset to count consecutive failures.
+        private void ClearVendorRunState()
         {
             _vendorRun = false;
             _vendorHoldUntil = DateTime.MinValue;
             _vendorWatchdog.Reset();
             _vendorCheckedEntry = 0;
+        }
+
+        private void EndVendorRun()
+        {
+            ClearVendorRunState();
             // Trek safety for the RETURN leg: re-mark hazards from here back to the grind spot (the vendor-leg
             // marks are for a route we're no longer on). Falls back to a plain clear when no spot is installed.
             var me = StyxWoW.Me;
@@ -1305,6 +1756,31 @@ namespace Bots.VibeGrinder
                 float areaLevel = GrindMobsRepository.AverageAttackableLevelNear(map, loc, s.VendorAreaScanRadius, _factions, Selection.SpotSelector.ImmuneUnitFlagMask);
                 if (areaLevel > me.Level + s.VendorAreaLevelMargin)
                     return RejectVendor("area avg level {0:F0} >> mine {1} (higher-level zone)", areaLevel, me.Level);
+            }
+
+            // TOPOLOGY: geometrically near ≠ reachably near. The core resolver picks by straight-line 3D
+            // distance over the whole continent, so a vendor 200yd straight DOWN (Yarley inside the
+            // Caverns of Time canyon, Z=-205, 2026-07-05) "beats" Gadgetzan while the real walk is the
+            // entire spiral descent. One pathfind per newly-resolved vendor (this method is keyed by
+            // _vendorCheckedEntry): no/partial path, or walk length far beyond the straight line ⇒ reject;
+            // the TTL'd blacklist makes the resolver re-pick the next-nearest.
+            if (s.VendorDetourFactor > 0)
+            {
+                float straight = (float)me.Location.Distance(loc);
+                if (straight > 50f)
+                {
+                    WoWPoint[] path = Navigator.GeneratePath(me.Location, loc);
+                    if (path == null || path.Length == 0)
+                        return RejectVendor("no nav path to it");
+                    float shortfall = (float)path[path.Length - 1].Distance(loc);
+                    if (shortfall > 25f)
+                        return RejectVendor("partial path (ends {0:F0}yd short)", shortfall);
+                    float walk = 0f;
+                    for (int i = 1; i < path.Length; i++)
+                        walk += (float)path[i - 1].Distance(path[i]);
+                    if (walk > System.Math.Max(s.VendorDetourMinYd, straight * s.VendorDetourFactor))
+                        return RejectVendor("walk {0:F0}yd vs {1:F0}yd straight (canyon/cave detour)", walk, straight);
+                }
             }
             return true;
         }
@@ -1367,6 +1843,7 @@ namespace Bots.VibeGrinder
             foreach (WoWObject obj in incoming)
             {
                 if (obj is not WoWUnit u || obj is WoWPlayer) continue;
+                if (IsPlayerOrPlayerControlled(obj)) continue;                     // never surface an enemy player's pet/minion — no PvP
                 if (u.Dead || u.MyReaction > WoWUnitReaction.Hostile) continue;   // hostiles only
                 // OUR OWN totem reads faction-hostile (faction 58) — allegiance comes from the OWNER, not the
                 // faction template — so it surfaced as "hostile" and the bot Lightning-Bolted its own Searing
@@ -1468,12 +1945,29 @@ namespace Bots.VibeGrinder
                 _peelGuid = 0;   // committed mob dead or out of reach — free to pick a fresh one
             }
 
+            var s = VibeGrinderSettings.Instance;
+            // Fear-meter gate for the peel too (audit 2026-07-05): the weighting's body-veto passes a mob
+            // with 2 bubbles on it, but peeling it can still stand US in 3+ others' bubbles. Snapshot is
+            // taken lazily — only when a peelable candidate actually exists this tick.
+            System.Collections.Generic.List<WoWUnit> hostiles = null;
+            int maxCompany = s.MaxFightCompany(_supervisor?.CrowdCautionFactor ?? 1.0);
             foreach (WoWUnit u in Targeting.Instance.TargetList)   // caution-ordered: most isolated first
             {
                 if (u == null || u.Dead) continue;
                 if (u.MyReaction > WoWUnitReaction.Hostile) continue;   // hostiles only — neutrals won't body-pull
                 if (me.Level - u.Level >= TrivialLevelGap) continue;    // grey/trivial mob — no threat, don't detour to single-pull it on a vendor run
                 if (u.Distance > pull || !u.InLineOfSpellSight) continue;
+                if (s.EnableExposureGate && !u.IsTargetingMeOrPet)
+                {
+                    hostiles ??= SnapshotHostiles();
+                    int exposure = FightExposure(u, OpenPoint(me, u, s), hostiles, s, out string who);
+                    if (exposure >= maxCompany)
+                    {
+                        Logging.WriteDebug("[VibeGrinder/Peel] skip {0} — peeling it pulls {1} more ({2}); cap {3}.",
+                            u.Name, exposure, who, maxCompany);
+                        continue;   // try the next-most-isolated; none clean → Failure, keep travelling
+                    }
+                }
                 // Target it: CanPull()/Singular key off CurrentTarget, and CombatBehavior only calls
                 // Target() when switching off a different POI — ours already is FirstUnit, so without this
                 // the mob is never targeted, the pull never fires, and the Kill/vendor POI thrashes.
@@ -1505,6 +1999,7 @@ namespace Bots.VibeGrinder
             Vendors.OnMailItems -= OnMailSweep;
             _restGovernor?.ReleaseRestLatch();   // don't leave the routine trusting a latch nobody updates
             Supervision.TrekSafety.Clear();   // restore any hazard-marked navmesh polys
+            _supervisor?.ClearWedgeBlackspots();   // remove session wedge blackspots so they don't bleed into the next run/toon
             _synth?.RestoreCharacterSettings();   // undo the global FoodAmount/DrinkAmount seeding
             GrindMobsRepository.Shutdown();   // release the DB handle so a later Start re-opens cleanly
             Bots.DungeonBuddy.Avoidance.WorldObstacleManager.Shutdown();
@@ -1528,9 +2023,16 @@ namespace Bots.VibeGrinder
             // ENGAGING hysteresis (see CLAUDE.md "Stateful inter-spot movement"): while in combat or holding a
             // pull commit we're ENGAGING; keep that latched EngageGraceSeconds past the last such tick so a
             // one-tick commit flicker can't hand the wheel back to the relocate/travel goal (the travel↔kill
-            // oscillation). Refreshed here every tick; the tree gates only READ Engaging.
-            if (me.Combat || _committedGuid != 0)
-                _engageUntil = DateTime.Now.AddSeconds(VibeGrinderSettings.Instance.EngageGraceSeconds);
+            // oscillation). Refreshed here every tick; the tree gates only READ Engaging. A PREEMPT DENIED /
+            // ABORT drops the grace deliberately (leave the bubble web NOW, not in 3s) — via the flag, so
+            // _engageUntil stays written only here.
+            if (_breakEngageGrace)
+            {
+                _breakEngageGrace = false;
+                if (!me.Combat && _committedGuid == 0) _engageUntil = DateTime.MinValue;
+            }
+            else if (me.Combat || _committedGuid != 0)
+                _engageUntil = DateTime.UtcNow.AddSeconds(VibeGrinderSettings.Instance.EngageGraceSeconds);
 
             if (VibeGrinderSettings.Instance.EnableMailing)
                 _mailboxes?.CheckCurrentMailboxSafety();   // shared runtime backstop (see MailboxService)
@@ -1547,7 +2049,9 @@ namespace Bots.VibeGrinder
             if (me == null) return;
 
             int protectedCount = 0, willMail = 0;
-            foreach (WoWItem item in me.CarriedItems)
+            // BagItems, NOT CarriedItems: the latter includes EQUIPPED gear, which was classifying worn
+            // items for vendor/mail (bag-only sell/mail mechanics + soulbound only accidentally saved us).
+            foreach (WoWItem item in me.BagItems)
             {
                 if (item == null) continue;
                 DispositionAction action;
@@ -1587,7 +2091,8 @@ namespace Bots.VibeGrinder
             if (me == null) return;
 
             int queued = 0;
-            foreach (WoWItem item in me.CarriedItems)
+            // BagItems, NOT CarriedItems - never queue equipped gear for mailing (see OnVendorSweep).
+            foreach (WoWItem item in me.BagItems)
             {
                 if (item == null) continue;
                 if (ItemDisposition.Classify(item) == DispositionAction.Mail && !args.AdditionalItems.Contains(item))

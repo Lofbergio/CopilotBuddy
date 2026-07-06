@@ -264,25 +264,13 @@ namespace Styx.Logic
 				return false;
 
 			// --- One-step lookahead: don't start a ~3s commitment the very next action will cancel ---
-			// ENGAGE vs EVADE classifier (the trek-safety story): a target we CAN fight → stay on foot and
-			// take it deliberately; a hostile we can NEVER beat (red ≥ our level+3, or a relevant elite) near
-			// its SERVER aggro bubble → the OPPOSITE: mount NOW — speed is the only protection, and evade
-			// overrides both the stay-afoot gate and the short-trip gate. TrekSafety bends routes around
-			// STATIC red/pack spawns; this live check covers roamers and anything the DB marks missed.
-			bool evadeDanger = false;
-			if (!me.Combat)
-			{
-				foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
-				{
-					if (u == null || !u.IsAlive || u.IsPlayer || u.IsTotem) continue;
-					bool red = u.Level >= me.Level + 3;
-					bool scaryElite = u.Elite && u.Level >= me.Level - 2;
-					if (!red && !scaryElite) continue;
-					float bubble = u.GetAggroRange(me);      // 0 when not hostile to us (reaction gate inside)
-					if (bubble <= 0f) continue;
-					if (u.Distance < bubble + 10f) { evadeDanger = true; break; }
-				}
-			}
+			// ENGAGE vs EVADE (the trek-safety story): a target we CAN fight → stay on foot and take it
+			// deliberately; a hostile we can NEVER beat near its aggro bubble → mount NOW, speed is the only
+			// protection, and evade overrides both the stay-afoot gate and the short-trip gate. Evade applies
+			// pre-combat here (in combat the regular mount is blocked and the flee path is Travel Form);
+			// NearbyEvadeThreat is the SHARED classifier — the in-combat dismount decision below keys off the
+			// same rule so mount-to-flee and stay-mounted-in-combat can't disagree.
+			bool evadeDanger = !me.Combat && NearbyEvadeThreat(me);
 
 			if (!evadeDanger)
 			{
@@ -776,6 +764,29 @@ namespace Styx.Logic
 		/// Check if we should dismount for a given destination.
 		/// Ported from HB 4.3.4.
 		/// </summary>
+		/// <summary>
+		/// A red (≥ our level+3) or relevant elite hostile sitting inside its SERVER aggro bubble (+10yd pad):
+		/// a threat we can never beat, so the only safe answer is speed. Shared by the mount-to-evade decision
+		/// (MountUp) and the stay-mounted-vs-dismount decision (ShouldDismount) so they can't disagree —
+		/// dismounting to fight INTO a red we'd immediately re-mount to flee. Callers gate on mounted/travel
+		/// state so the object-manager scan only runs when it matters. TrekSafety bends routes around STATIC
+		/// red/pack spawns; this live check covers roamers and anything the DB marks missed.
+		/// </summary>
+		private static bool NearbyEvadeThreat(LocalPlayer me)
+		{
+			foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
+			{
+				if (u == null || !u.IsAlive || u.IsPlayer || u.IsTotem) continue;
+				bool red = u.Level >= me.Level + 3;
+				bool scaryElite = u.Elite && u.Level >= me.Level - 2;
+				if (!red && !scaryElite) continue;
+				float bubble = u.GetAggroRange(me);      // 0 when not hostile to us (reaction gate inside)
+				if (bubble <= 0f) continue;
+				if (u.Distance < bubble + 10f) return true;
+			}
+			return false;
+		}
+
 		public static bool ShouldDismount(WoWPoint travelingTo)
 		{
 			LocalPlayer? me = Me;
@@ -793,10 +804,17 @@ namespace Styx.Logic
 			if (!me.Mounted)
 				return false;
 
-			// Dismount if in combat and not moving
-			if (me.Combat && !me.IsMoving)
+			// Dismount to fight an attacker we can actually beat. (Was `me.Combat && !me.IsMoving` — but
+			// !IsMoving was a bad proxy for "stuck": a body-pull that kicks off approach/relocation oscillation
+			// is ALWAYS moving, so the mounted-in-combat deadlock never dismounted. The routine can't cast
+			// mounted, and a body-pull has no pull-cast to auto-dismount us, so we rode in circles in combat
+			// until the mob leashed — log 2026-07-04_1707, ~11s stuck on a Venomspitter body-pull mid-relocation.
+			// Keyed off the real question instead: is the threat killable? A red/elite on us → keep the mount
+			// and outrun it (NearbyEvadeThreat, the same classifier MountUp evades on); anything else → get off
+			// and fight. Scan is short-circuited behind me.Combat, so it only runs mounted AND in combat.)
+			if (me.Combat && !NearbyEvadeThreat(me))
 			{
-				Logging.WriteDebug("Dismount for attacker.");
+				Logging.WriteDebug("Dismount to engage attacker.");
 				return true;
 			}
 
@@ -806,12 +824,13 @@ namespace Styx.Logic
 			WoWPoint location = me.Location;
 			float distance = location.Distance(travelingTo);
 
-			// NO explicit dismount for pulls (the old Kill-POI ≤PullDistance and hotspot-with-target ≤100yd
-			// branches) — WotLK auto-dismounts on the first spellcast, so like a real player the bot rides all
-			// the way to cast range and the PULL CAST itself dismounts it (the hotspot branch even dropped us
-			// 100yd out and walked the rest). The combat-attacker branch above stays: jumped while mounted and
-			// stationary, with nothing castable (OOM melee fallback), the cast path may never fire — that one
-			// needs the button. Interaction dismounts below stay too (can't loot/vendor mounted).
+			// NO explicit dismount for pulls WE initiate (the old Kill-POI ≤PullDistance and hotspot-with-target
+			// ≤100yd branches) — WotLK auto-dismounts on the first spellcast, so like a real player the bot rides
+			// all the way to cast range and the PULL CAST itself dismounts it (the hotspot branch even dropped us
+			// 100yd out and walked the rest). The combat-attacker branch above covers the case with no such cast:
+			// something body-pulled us (ranged spitter / roamer) so we're in combat but never cast, and mounted
+			// the routine can't fight — dismount unless it's a red/elite we should keep outrunning. Interaction
+			// dismounts below stay too (can't loot/vendor mounted).
 
 			// Dismount for interacting with objects/NPCs
 			if (BotPoi.Current.Type == PoiType.Loot || 

@@ -12,6 +12,40 @@ using Styx.WoWInternals;
 namespace Styx.Logic.Profiles
 {
     /// <summary>
+    /// Timed vendor blacklist (default TTL 30 min). Was a permanent HashSet — enemy-territory /
+    /// unreachable rejects accumulated for the whole session and could exhaust every vendor on the
+    /// continent with no way back; every other blacklist in the codebase is timed. HashSet-shaped
+    /// API (Add/Contains/Count/enumeration) so call sites are unchanged.
+    /// </summary>
+    public class VendorBlacklist : IEnumerable<Vendor>
+    {
+        private readonly Dictionary<Vendor, DateTime> _until = new Dictionary<Vendor, DateTime>();
+
+        public void Add(Vendor v) { Add(v, TimeSpan.FromMinutes(30)); }
+        public void Add(Vendor v, TimeSpan ttl) { if (v != null) _until[v] = DateTime.UtcNow.Add(ttl); }
+
+        public bool Contains(Vendor v)
+        {
+            if (v == null || !_until.TryGetValue(v, out DateTime until)) return false;
+            if (DateTime.UtcNow < until) return true;
+            _until.Remove(v);
+            return false;
+        }
+
+        public int Count { get { Prune(); return _until.Count; } }
+
+        private void Prune()
+        {
+            DateTime now = DateTime.UtcNow;
+            foreach (Vendor k in _until.Where(kv => kv.Value <= now).Select(kv => kv.Key).ToList())
+                _until.Remove(k);
+        }
+
+        public IEnumerator<Vendor> GetEnumerator() { Prune(); return _until.Keys.ToList().GetEnumerator(); }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() { return GetEnumerator(); }
+    }
+
+    /// <summary>
     /// Manages vendor NPCs from profiles.
     /// </summary>
     public class VendorManager
@@ -23,7 +57,7 @@ namespace Styx.Logic.Profiles
         /// </summary>
         public VendorManager()
         {
-            Blacklist = new HashSet<Vendor>();
+            Blacklist = new VendorBlacklist();
             AllVendors = new List<Vendor>();
             ForcedVendors = new List<Vendor>();
         }
@@ -78,9 +112,9 @@ namespace Styx.Logic.Profiles
         }
 
         /// <summary>
-        /// Gets the blacklisted vendors.
+        /// Gets the blacklisted vendors (timed — entries expire, see VendorBlacklist).
         /// </summary>
-        public HashSet<Vendor> Blacklist { get; private set; }
+        public VendorBlacklist Blacklist { get; private set; }
 
         /// <summary>
         /// Gets the closest vendor of any type.

@@ -157,9 +157,15 @@ WHERE s.map_id = @map
             EnsureInitialized();
             if (!_isAvailable) return 0;
 
+            // Circle + Z band, not just the box (audit 2026-07-05): the box corners reach r√2 out and the
+            // query was Z-blind — a cave 40yd under a mesa deflated purity with mobs that can't be seen
+            // or reached (numerator is a true circle; both sides must measure the same region). The
+            // BETWEEN pair stays as the index prefilter; the exact clauses trim inside it.
             const string sql = @"
 SELECT COUNT(*) FROM spawns
-WHERE map_id = @map AND x BETWEEN @minX AND @maxX AND y BETWEEN @minY AND @maxY";
+WHERE map_id = @map AND x BETWEEN @minX AND @maxX AND y BETWEEN @minY AND @maxY
+  AND ((x - @cx) * (x - @cx) + (y - @cy) * (y - @cy)) <= @r2
+  AND ABS(z - @cz) <= @zBand";
             try
             {
                 using var cmd = new SQLiteCommand(sql, _connection);
@@ -168,6 +174,11 @@ WHERE map_id = @map AND x BETWEEN @minX AND @maxX AND y BETWEEN @minY AND @maxY"
                 cmd.Parameters.AddWithValue("@maxX", center.X + radius);
                 cmd.Parameters.AddWithValue("@minY", center.Y - radius);
                 cmd.Parameters.AddWithValue("@maxY", center.Y + radius);
+                cmd.Parameters.AddWithValue("@cx", center.X);
+                cmd.Parameters.AddWithValue("@cy", center.Y);
+                cmd.Parameters.AddWithValue("@cz", center.Z);
+                cmd.Parameters.AddWithValue("@r2", radius * radius);
+                cmd.Parameters.AddWithValue("@zBand", VibeGrinderSettings.Instance.SpotQueryZBand);
                 object scalar = cmd.ExecuteScalar();
                 return scalar == null ? 0 : Convert.ToInt32(scalar);
             }
@@ -189,12 +200,16 @@ WHERE map_id = @map AND x BETWEEN @minX AND @maxX AND y BETWEEN @minY AND @maxY"
             EnsureInitialized();
             if (!_isAvailable || factions == null) return 0f;
 
+            // Same circle + Z-band trim as CountSpawnsNear (audit 2026-07-05) — the level average was
+            // contaminated by vertically-separated content (cave under a mesa).
             const string sql = @"
 SELECT m.max_level, m.faction, m.type, COUNT(*) AS cnt
 FROM spawns s JOIN mobs m ON m.entry = s.entry
 WHERE s.map_id = @map
   AND s.x BETWEEN @minX AND @maxX
   AND s.y BETWEEN @minY AND @maxY
+  AND ((s.x - @cx) * (s.x - @cx) + (s.y - @cy) * (s.y - @cy)) <= @r2
+  AND ABS(s.z - @cz) <= @zBand
   AND m.rank = 0
   AND m.type <> @critter
   AND m.npcflag = 0
@@ -210,6 +225,11 @@ GROUP BY m.entry, m.max_level, m.faction, m.type";
                 cmd.Parameters.AddWithValue("@maxX", center.X + radius);
                 cmd.Parameters.AddWithValue("@minY", center.Y - radius);
                 cmd.Parameters.AddWithValue("@maxY", center.Y + radius);
+                cmd.Parameters.AddWithValue("@cx", center.X);
+                cmd.Parameters.AddWithValue("@cy", center.Y);
+                cmd.Parameters.AddWithValue("@cz", center.Z);
+                cmd.Parameters.AddWithValue("@r2", radius * radius);
+                cmd.Parameters.AddWithValue("@zBand", VibeGrinderSettings.Instance.SpotQueryZBand);
                 cmd.Parameters.AddWithValue("@critter", CritterType);
                 cmd.Parameters.AddWithValue("@immune", immuneUnitFlagMask);
 
@@ -244,11 +264,16 @@ GROUP BY m.entry, m.max_level, m.faction, m.type";
             var result = new List<MobSpawn>();
             if (!_isAvailable) return result;
 
+            // Z-band trim (audit 2026-07-05): a hazard 40yd straight down contributed ~73% weight via the
+            // 3D falloff despite being unreachable/non-aggroing. (Note: rank/level prefilter means this
+            // query structurally can't see at-level normal packs — that gap is covered by the selection
+            // bubble-knot gate, not here.)
             const string sql = @"
 SELECT s.x, s.y, s.z, m.entry, m.max_level, m.rank, m.faction
 FROM spawns s JOIN mobs m ON m.entry = s.entry
 WHERE s.map_id = @map
   AND s.x BETWEEN @minX AND @maxX AND s.y BETWEEN @minY AND @maxY
+  AND ABS(s.z - @cz) <= @zBand
   AND (m.rank >= 1 OR m.max_level > @dangerLevel)";
             try
             {
@@ -258,6 +283,8 @@ WHERE s.map_id = @map
                 cmd.Parameters.AddWithValue("@maxX", center.X + radius);
                 cmd.Parameters.AddWithValue("@minY", center.Y - radius);
                 cmd.Parameters.AddWithValue("@maxY", center.Y + radius);
+                cmd.Parameters.AddWithValue("@cz", center.Z);
+                cmd.Parameters.AddWithValue("@zBand", VibeGrinderSettings.Instance.SpotQueryZBand);
                 cmd.Parameters.AddWithValue("@dangerLevel", level + dangerMargin);
 
                 using var reader = cmd.ExecuteReader();

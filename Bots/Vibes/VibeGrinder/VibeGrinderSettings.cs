@@ -91,9 +91,19 @@ namespace Bots.VibeGrinder
         [Category("Survival"), Description("Repair when durability drops below this percent (0-100).")]
         public int MinDurabilityPct { get; set; }
 
-        [Setting, Styx.Helpers.DefaultValue(false)]
-        [Category("Survival"), Description("Allow flight-path travel between continents (off for overnight).")]
-        public bool AllowTaxiTravel { get; set; }
+        // Flight has NO VibeGrinder-local switch (removed 2026-07-06 — it force-seeded the core flags and
+        // was redundant): taxi travel follows CharacterSettings.UseFlightPaths, the learning detour
+        // additionally requires CharacterSettings.LearnFlightPaths — the two standard Settings checkboxes.
+        [Setting, Styx.Helpers.DefaultValue(400)]
+        [Category("Survival"), Description("Detour to an unlearned flight master this many yards away to learn it (opportunistic, while 'Use'+'Learn Flight Paths' are on in Settings).")]
+        public int FlightLearnRadius { get; set; }
+
+        // Flight internals (see GrindSupervisor.FlightLearnCheck / FlightTravelCheck).
+        [Browsable(false)] public int FlightLearnScanSeconds => 5;         // how often to look for a nearby unlearned master
+        [Browsable(false)] public int FlightLearnApproachSeconds => 90;    // give up the walk-up after this (then ban)
+        [Browsable(false)] public int FlightLearnBanMinutes => 30;         // don't re-attempt a node (learned/failed/unreachable) for this long
+        [Browsable(false)] public float FlightMaxTravelDistance => 50000f; // far-spot fallback searches the whole continent
+        [Browsable(false)] public int FlightPreTakeoffSeconds => 150;      // abort a taxi hop that never takes off (unreachable master / taxi won't open)
 
         // ---- Loot disposition (what to do with looted items on a vendor/mail run) ----
         // Decided by category, not quality: cloth (white) is income, a white sword is trash. Mail needs
@@ -144,7 +154,7 @@ namespace Bots.VibeGrinder
 
         // ---- Mailing ----
         [Setting, Styx.Helpers.DefaultValue(false)]
-        [Category("Mailing"), Description("Mail valuables to a bank alt during vendor runs. Requires MailRecipient set + MailWhite/MailGreen enabled in General settings, and mailbox locations in Mailboxes.db. Enemy-faction-territory mailboxes are skipped automatically. The bot's best food/drink are auto-protected. Off by default.")]
+        [Category("Mailing"), Description("Mail valuables to a bank alt during vendor runs. Requires MailRecipient set in General settings and mailbox locations in Mailboxes.db (what gets mailed is decided by the loot-disposition settings, not the Mail* flags). Enemy-faction-territory mailboxes are skipped automatically. Off by default.")]
         public bool EnableMailing { get; set; }
 
         // =====================================================================================
@@ -235,6 +245,10 @@ namespace Bots.VibeGrinder
         // the current zone among the level-OK options. 0 margin... keep >=4 so a band-edge zone isn't vetoed.
         [Browsable(false)] public float VendorAreaScanRadius => 200f;
         [Browsable(false)] public int VendorAreaLevelMargin => 7;
+        // Topology gate (the Caverns-of-Time Yarley case): reject a vendor whose WALK is this many times
+        // the straight-line distance (and past the floor — short trips never trip). 0 disables.
+        [Browsable(false)] public float VendorDetourFactor => 2.5f;
+        [Browsable(false)] public float VendorDetourMinYd => 600f;
 
         // ---- Supervisor timings ----
         [Browsable(false)] public int SupervisorIntervalSec => 15;
@@ -244,7 +258,11 @@ namespace Bots.VibeGrinder
         [Browsable(false)] public float DepletionRecheckBuffer => 10f;   // extend the spot by this many yards to confirm it's truly empty before relocating
         [Browsable(false)] public float EngageGraceSeconds => 3f;        // hold the ENGAGING latch this long past the last combat/commit tick (hysteresis vs the travel↔kill oscillation)
         [Browsable(false)] public int DeathLoopCount => 3;
-        [Browsable(false)] public int DeathLoopWindowMin => 5;
+        // 5 → 30 (2026-07-06): the Tanaris night's 4 deaths spanned 29 min — a 5-min window never saw
+        // more than 1, so the spot was never abandoned and the durability bleed set up the repair-run
+        // wedge. "3 deaths in 30 min at one spot" = leave. _deaths is cleared on every spot install, so
+        // the wider window stays per-spot (any intermediate relocate also resets it — accepted).
+        [Browsable(false)] public int DeathLoopWindowMin => 30;
         // Freeze watchdog: a body that hasn't moved AND hasn't killed for this long (while alive, out
         // of combat, not eating/drinking, not on a vendor trek) is wedged — break it. Depletion only
         // catches an EMPTY target list; this catches "valid target present, even in range, but the
@@ -276,6 +294,23 @@ namespace Bots.VibeGrinder
         [Browsable(false)] public int SwimTrapDrops => 3;
         [Browsable(false)] public int SwimTrapSeconds => 60;
         [Browsable(false)] public float SwimTrapBlacklistRadius => 150f;
+
+        // EXPERIMENTAL (2026-07-04, Den of Flame timber fence): persistent wedge blackspot. Styx's stuck handler
+        // only blackspots as the LAST step of its unstick escalation and ResetUnstickAttempts() wipes it on any
+        // ≥10yd jitter, so a recurring TERRAIN wedge (a protruding timber the mesh thinks is passable) never gets
+        // marked and the bot re-walks into it forever. This is a jitter-robust NET-travel detector: not resting/
+        // vendoring/mounted/in combat, no kill, and within WedgeMoveRadius of an anchor for WedgeSeconds = wedged
+        // on geometry → drop a SOFT (60× cost) session-length blackspot so the router bends around it. Soft so a
+        // wedge that IS the only way in/out still stays traversable. Marks persist across relocations (the timber
+        // stays bad) and are removed on Stop. Disable with EnableWedgeBlackspot=false.
+        [Browsable(false)] public bool EnableWedgeBlackspot => true;
+        [Browsable(false)] public int WedgeSeconds => 40;                   // no kill + no net travel this long = wedged
+        [Browsable(false)] public float WedgeMoveRadius => 12f;             // net travel under this over the window = "not covering ground"
+        [Browsable(false)] public float WedgeBlackspotRadius => 10f;        // soft-cost circle radius (push the route off the timber)
+        [Browsable(false)] public float WedgeBlackspotHeight => 12f;
+        [Browsable(false)] public float WedgeMinSeparation => 15f;          // don't re-mark within this of an existing wedge mark
+        [Browsable(false)] public int MaxWedgeBlackspots => 40;             // session cap
+        [Browsable(false)] public int WedgeBlackspotTtlMinutes => 40;       // self-heal: a mark this old is dropped (a misfire can't outlive it; the real timber re-marks in ~40s)
 
         // ---- Supervisor triggers (derived from Relocate mode) ----
         [Browsable(false)] public bool EnableIntrusionRelocate => Relocate == RelocateMode.Auto;
@@ -322,8 +357,56 @@ namespace Bots.VibeGrinder
         // of the entry resets its strikes, so a grind mob that fails one bad corner never accumulates.
         [Browsable(false)] public int EntryBanGiveUps => 3;
         [Browsable(false)] public int EntryBanMinutes => 45;
+        // EXPERIMENTAL (2026-07-04, Den of Flame timber-fence trap): a mob we committed to but that fell off
+        // the candidate list without us ever closing distance or opening on it is almost always physically
+        // unreachable (the navmesh says reachable but a world object wedges us short). The flap resets the
+        // PullCommitMaxSeconds give-up clock so it never matures to a blacklist — so ban at the drop edge.
+        // Per-guid, session-length. If this bans reachable mobs in the wild, flip EnableExperimentalDropBan
+        // to false (and consider deleting the branch — see ApplyPullCommitment).
+        [Browsable(false)] public bool EnableExperimentalDropBan => true;
+        [Browsable(false)] public int ExperimentalDropBanMinutes => 240;
         [Browsable(false)] public int PullCrowdFullLevel => 15;
         [Browsable(false)] public int PullCrowdLevelCeiling => AddAvoidanceMode == AddAvoidance.Aggressive ? 70 : 50;
+
+        // ---- Fight-position pack lookahead (2026-07-05, Lost Rigger 11-mob pack death) ----
+        // "If I fight this mob, who else joins?" — see CLAUDE.md "Fight-position pack lookahead" and
+        // docs/superpowers/specs/2026-07-05-pack-lookahead-design.md. Per-layer kill switches: flip
+        // false + rebuild to disable a misfiring layer without a revert.
+        [Browsable(false)] public bool EnableExposureGate => true;       // acquire / preempt / mid-approach gates
+        [Browsable(false)] public bool EnableBubbleVeto => true;         // bubble-overlap veto in the weighting
+        [Browsable(false)] public bool EnableCorridorCheck => true;      // path-crossing count at acquire
+        [Browsable(false)] public bool EnableCampWallRelocate => true;   // reject-knot → survival relocate
+        [Browsable(false)] public bool EnableDeathRearm => true;         // post-res BlacklistMobsInRadius re-arm
+        // Hysteresis pad on a mob's server aggro range when counting bubbles (matches the old
+        // committed-threat exemption's +5).
+        [Browsable(false)] public float ExposurePad => 5f;
+        // AzerothCore CONFIG_CREATURE_FAMILY_ASSISTANCE_RADIUS = 10 (+slack). Deliberately COARSE and
+        // conservative: real assist is faction-gated and re-broadcasts ~2s centered on the ENGAGED
+        // (moving) mob — do not "tighten" this thinking it's exact.
+        [Browsable(false)] public float AssistRadius => 12f;
+        [Browsable(false)] public int ExposureRejectSeconds => 45;
+        // Camp wall: this many DISTINCT exposure-rejected mobs inside CampWallWindowSeconds (position-
+        // ungated — a 30yd knot test never summed a 100+yd camp; count clears on install) ⇒ the camp can't
+        // be nibbled — survival-relocate away. Kills do NOT clear it (the camp-edge 1v1 nibble loop this
+        // breaks IS a stream of kills). Blacklist radius = max(floor below, reject spread + GrindRadius).
+        [Browsable(false)] public int CampWallRejects => 3;
+        [Browsable(false)] public int CampWallWindowSeconds => 180;
+        [Browsable(false)] public float CampWallBlacklistRadius => 150f;
+        // Selection-side bubble-knot gate: a candidate where ≥ this many hostiles' server aggro bubbles
+        // cover one kill position is Dangerous — survival, never level-tapered, never ladder-relaxed.
+        [Browsable(false)] public int SpotBubbleDangerCount => 4;
+        // Vertical band for the spot-selection box queries (purity / level-avg / hazards): a cave 40yd
+        // under a mesa is not "near" — the same column-query Z bug class the blackspots already fixed.
+        [Browsable(false)] public float SpotQueryZBand => 40f;
+
+        /// <summary>
+        /// Fear-meter fight-size cap: max TOTAL mobs in a fight we CHOOSE (target + adds). Confident
+        /// (caution 1) tolerates 2 adds; each pack death tightens via CrowdCautionFactor down to
+        /// singles-only — same confidence-ready caution signal SpotCrowdPenalty uses.
+        /// </summary>
+        public int MaxFightCompany(double caution) =>
+            (int)System.Math.Clamp(3.0 - System.Math.Round(caution - 1.0), 1.0, 3.0);
+
         [Browsable(false)] public int PackDeathAttackers => 2;
         [Browsable(false)] public float CrowdCautionStep => AddAvoidanceMode == AddAvoidance.Off ? 0f : 0.75f;
         [Browsable(false)] public float CrowdCautionMax => 6f;   // was 3 — let swarm deaths climb fear higher (caution step now scales with crowd size)

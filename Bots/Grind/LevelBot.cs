@@ -64,6 +64,11 @@ namespace Bots.Grind
         private static readonly Stopwatch _corpsePointWaitSw = new Stopwatch();   // ghost waiting for a valid CorpsePoint
         private static readonly Stopwatch _shDiagSw = new Stopwatch();            // throttle spirit-healer diagnostics
         private static readonly Stopwatch _offMeshCorpseSw = new Stopwatch();     // throttle the off-mesh corpse ClickToMove log
+        // Ghost travel progress watchdog (see the decorator in CreateDeathBehavior): net-movement stamp +
+        // per-death strike count. Reset by the alive-reset decorator.
+        private static WoWPoint _ghostProgressPos = WoWPoint.Empty;
+        private static DateTime _ghostProgressAt = DateTime.MinValue;
+        private static int _ghostStuckStrikes;
         // Last spirit-healer location we've physically seen (we release ONTO a graveyard, so a ghost sees the
         // healer the instant it teleports there). Cached so that if we then run toward an unreachable corpse and
         // the healer unloads, we can navigate BACK to a known-good, on-mesh graveyard and resurrect — instead of
@@ -286,11 +291,14 @@ namespace Bots.Grind
                 // corpse anyway it never clears — so a later death with a perfectly reachable corpse wrongly ran
                 // straight to the spirit healer (and into the SH↔corpse oscillation). Clear it whenever alive.
                 new Decorator(
-                    ctx => !StyxWoW.Me.IsDead && !StyxWoW.Me.IsGhost && (ShouldUseSpiritHealer || _deathCount != 0),
+                    ctx => !StyxWoW.Me.IsDead && !StyxWoW.Me.IsGhost
+                           && (ShouldUseSpiritHealer || _deathCount != 0 || _ghostStuckStrikes != 0),
                     new TreeSharp.Action(ctx =>
                     {
                         ShouldUseSpiritHealer = false;
                         _deathCount = 0;
+                        _ghostStuckStrikes = 0;
+                        _ghostProgressPos = WoWPoint.Empty;
                         if (_corpsePointWaitSw.IsRunning) _corpsePointWaitSw.Reset();
                         if (_shDiagSw.IsRunning) _shDiagSw.Reset();
                         return RunStatus.Failure;
@@ -307,6 +315,47 @@ namespace Bots.Grind
                     {
                         WoWUnit sh = ObjectManager.CachedUnits.FirstOrDefault(u => u.IsSpiritHealer);
                         if (sh != null) _lastGraveyardPos = sh.Location;
+                        return RunStatus.Failure;
+                    })
+                ),
+                // Ghost travel progress watchdog (2026-07-06 Tanaris wedge): EVERY ghost drive mode below —
+                // the normal corpse run, the off-mesh graveyard return, the ClickToMove beeline — can wedge
+                // on geometry, and death code sits above every stall watchdog, so a wedged ghost re-drove
+                // blind for an hour. No net movement for 60s while ghost-travelling → the server auto-unstuck:
+                // Stuck() while dead = repop at the nearest graveyard (verified in the local AC source,
+                // Spell::EffectStuck — the dead path repops on TC-family cores too, so it's fork-safe; the
+                // ALIVE path is fork-dependent and deliberately not used here). Second strike in the same
+                // death → also commit to the spirit healer (res sickness ≪ another hour of loops).
+                // Arms at >40yd — the exact boundary the move-to-corpse branch drives at (a 41yd wedge with
+                // a 45yd gate would sit in a dead band forever). Non-consuming (always Failure).
+                new Decorator(
+                    ctx => StyxWoW.Me.IsGhost
+                           && StyxWoW.Me.CorpsePoint != WoWPoint.Empty
+                           && StyxWoW.Me.CorpsePoint != WoWPoint.Zero
+                           && StyxWoW.Me.Location.Distance(StyxWoW.Me.CorpsePoint) > 40f
+                           && !ObjectManager.CachedUnits.Any(u => u.IsSpiritHealer && u.Distance < 25f),
+                    new TreeSharp.Action(ctx =>
+                    {
+                        WoWPoint loc = StyxWoW.Me.Location;
+                        if (_ghostProgressPos == WoWPoint.Empty || loc.Distance(_ghostProgressPos) > 10f)
+                        {
+                            _ghostProgressPos = loc;
+                            _ghostProgressAt = DateTime.UtcNow;
+                        }
+                        else if ((DateTime.UtcNow - _ghostProgressAt).TotalSeconds > 60)
+                        {
+                            _ghostStuckStrikes++;
+                            Logging.Write("[Death] Ghost made no progress for 60s at {0} (strike {1}) — invoking the server auto-unstuck (repop at graveyard).",
+                                loc, _ghostStuckStrikes);
+                            if (_ghostStuckStrikes >= 2)
+                            {
+                                Logging.Write("[Death] Second ghost-stuck strike this death — committing to the spirit healer after the repop (res sickness beats another loop).");
+                                ShouldUseSpiritHealer = true;
+                            }
+                            Lua.DoString("if Stuck then pcall(Stuck) end");
+                            _ghostProgressPos = loc;   // the repop jump re-stamps via the movement branch above
+                            _ghostProgressAt = DateTime.UtcNow;
+                        }
                         return RunStatus.Failure;
                     })
                 ),
