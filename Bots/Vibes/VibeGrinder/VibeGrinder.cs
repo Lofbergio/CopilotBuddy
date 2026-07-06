@@ -108,7 +108,7 @@ namespace Bots.VibeGrinder
                         // Defer spot selection to the first tick: the navmesh isn't loaded until
                         // RaiseBotStart fires (after BotBase.Start). Holds the tree until a spot
                         // is installed; once installed this gate falls through.
-                        new Decorator(ctx => !_spotInstalled, new Action(ctx => EnsureSpotSelected())),
+                        new Decorator(ctx => GrindEnabled && !_spotInstalled, new Action(ctx => EnsureSpotSelected())),
                         // FLIGHT TRAVEL — while a taxi hop is in progress this OWNS the tick once airborne (so the
                         // vendor-run servicing below doesn't try to walk us back to the start-node POI) and detects
                         // the landing. Pre-takeoff it returns Failure so the vendor-run branch does the walk-to-
@@ -179,11 +179,16 @@ namespace Bots.VibeGrinder
                         // (The survival flee now sits ABOVE vendor/rest — see the EmergencyRelocationCheck near the
                         // top of this selector; rest-ENTRY is additionally gated in UpdateRestingState.)
                         new Action(ctx => RestRoamBlock()),
+                        // ACTIVITY SLOT (subclass seam): a foreign activity (VibeQuester v2's quest
+                        // executor) owns the tick here — below vendor/rest/combat/loot (the shared
+                        // shell), above the grind-only branches. Null for VibeGrinder itself: the
+                        // Failure action is a structural no-op, so grinding is behavior-identical.
+                        CreateActivityBranch() ?? (Composite)new Action(ctx => RunStatus.Failure),
                         // ENGAGING commitment — owns the wheel over travel so the DISCRETIONARY relocate and the
                         // kill-commit can't fight each other (see CLAUDE.md "Stateful inter-spot movement"):
                         //  (1) Don't relocate for a nearer/denser/contested spot while committed/fighting — finish
                         //      the kill, THEN re-evaluate. (The survival flee above is exempt.) Re-arms on disengage.
-                        new Decorator(ctx => !Engaging,
+                        new Decorator(ctx => GrindEnabled && !Engaging,
                             _supervisor != null ? _supervisor.RelocationCheck() : new Action(ctx => RunStatus.Failure)),
                         // Flight learning: opportunistically detour to a nearby unlearned flight master. Gated to
                         // free travel — drowning/emergency-flee/combat/vendor/rest above all preempt it — and it
@@ -657,6 +662,23 @@ namespace Bots.VibeGrinder
         // (loot suppression, TransitPeel, grind-pull disable, rest suppression) reads this so they don't flicker
         // with the per-tick vendor POI. Set/held/cleared by UpdateVendorRun.
         private bool OnVendorRun() => _vendorRun;
+
+        // --- Subclass seams (VibeQuester v2) ---
+        /// <summary>False while a subclass activity owns the bot: gates the spot bootstrap and the
+        /// discretionary relocate (the grind-only branches). Survival/vendor/rest stay shared.</summary>
+        protected virtual bool GrindEnabled => true;
+
+        /// <summary>The activity slot in Root — see the comment at the slot. Null = pure grinder.</summary>
+        protected virtual Composite CreateActivityBranch() => null;
+
+        /// <summary>Install a synthesized spot (subclasses scope it to quest objectives).</summary>
+        protected GrindAreaSynthesizer Synth => _synth;
+
+        /// <summary>Live faction resolution (built per map by EnsureSpotSelected / the subclass).</summary>
+        protected FactionResolver GrindFactions => _factions;
+
+        /// <summary>Force the grind bootstrap to re-pick a spot (a subclass activity replaced the area).</summary>
+        protected void InvalidateGrindSpot() => _spotInstalled = false;
 
         // Is the LIVE POI a vendor-errand type? (The raw, thrashing signal UpdateVendorRun turns into a latch.)
         private static bool PoiIsVendorType()

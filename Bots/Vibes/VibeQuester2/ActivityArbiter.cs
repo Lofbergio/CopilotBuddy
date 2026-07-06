@@ -9,46 +9,36 @@ namespace Bots.Vibes.VibeQuester2
     }
 
     /// <summary>
-    /// Quest↔grind arbitration for VibeQuester v2. Signal = count of DOABLE quests (eligible ∧ safe ∧
-    /// within travel range) from the planner; grinding is the universal filler when supply dries up.
-    /// Hysteresis on both edges (LowWater/HighWater), and flips happen only at replan boundaries so an
-    /// in-flight task is never abandoned by a flip (abandon paths are their own thing).
-    ///
-    /// Chassis phase (Task 6): pinned to Grind — the quest side doesn't exist yet. The pin is removed
-    /// in Task 10 when the planner supplies a real signal.
+    /// Quest↔grind arbitration. Signal = count of DOABLE quests (eligible ∧ safe ∧ within travel
+    /// range) from the planner; grinding is the universal filler when supply dries up. Hysteresis on
+    /// both edges (LowWater/HighWater) and evaluation only at replan boundaries, so it cannot flap
+    /// and never yanks an in-flight task (abandon paths are their own machinery).
     /// </summary>
     public class ActivityArbiter
     {
-        private Activity _current = Activity.Grind;
-        private bool _announced;
-
-        /// <summary>Chassis pin — true until the quest pipeline lands (Task 10 unpins).</summary>
-        public bool PinnedToGrind => true;
+        private Activity _current = Activity.Grind;   // conservative start: grind until a scan proves supply
 
         public Activity Current => _current;
 
-        /// <summary>Re-evaluate at a replan boundary. No-op while pinned.</summary>
-        public void Update(int doableQuestSupply, int lowWater, int highWater)
+        /// <summary>Re-evaluate at a replan boundary.</summary>
+        public void Update(int doableSupply, int lowWater, int highWater)
         {
-            if (PinnedToGrind)
-            {
-                if (!_announced)
-                {
-                    _announced = true;
-                    Logging.Write("[VQ2-Arbiter] pinned GRIND (chassis phase — quest pipeline not wired yet).");
-                }
+            Activity prev = _current;
+            if (_current == Activity.Quest && doableSupply < lowWater)
                 _current = Activity.Grind;
-                return;
-            }
+            else if (_current == Activity.Grind && doableSupply >= highWater)
+                _current = Activity.Quest;
 
-            // Real hysteresis logic lands in Task 10:
-            // supply < lowWater  → Grind; supply >= highWater → Quest; in between → keep current.
+            if (prev != _current)
+                Logging.Write(System.Drawing.Color.MediumPurple,
+                    "[VQ2-Arbiter] {0}→{1} (supply={2}, low={3}, high={4}).",
+                    prev.ToString().ToUpperInvariant(), _current.ToString().ToUpperInvariant(),
+                    doableSupply, lowWater, highWater);
         }
 
         public void Reset()
         {
             _current = Activity.Grind;
-            _announced = false;
         }
     }
 }
