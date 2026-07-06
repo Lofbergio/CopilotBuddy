@@ -21,12 +21,11 @@ namespace Styx
         /// <returns>The Mutex handle. Caller must Close/Dispose when done.</returns>
         public static Mutex Create(int processId, out bool createdNew)
         {
-            // HB 4.3.4: "Local\\" + (MachineName.GetHashCode() + pid.GetHashCode() + 25)
-            // HB 6.2.3 uses XOR + salt — more collision resistant. We use the 6.2.3 pattern.
-            string name = "Local\\" + ((long)(Environment.MachineName.GetHashCode()
-                ^ processId.GetHashCode()
-                ^ TimeZoneInfo.Local.StandardName.GetHashCode())
-                ^ ((long)"CopilotBuddy".GetHashCode() + 2922027367L));
+            // .NET Core randomizes string.GetHashCode PER PROCESS — the HB-era hash-mixed name (HB 6.2.3
+            // XOR+salt pattern) computed a DIFFERENT value in every CB instance, so the guard never collided
+            // and two CBs could claim the same WoW (2026-07-06 00:30: dual EndScene injection crashed the
+            // client). Deterministic name; Local\ = per logon session, where competing CBs live.
+            string name = "Local\\CopilotBuddy_WoW_" + processId;
 
             return new Mutex(true, name, out createdNew);
         }
