@@ -217,6 +217,20 @@ namespace Styx.Logic
                     CreatureSpell = WoWSpell.FromId(CreatureSpellId);
                     if (CreatureSpell != null)
                     {
+                        // Speed rating from the spell's speed auras (works for both classes of mount):
+                        // ground = aura 32 BasePoints 59 (60%) / 99 (100%); flying = flight auras with
+                        // 149/279/309. Selection uses this so a 60% mount never beats an owned epic.
+                        foreach (var effect in CreatureSpell.SpellEffects)
+                        {
+                            if (effect == null) continue;
+                            int auraId = (int)effect.AuraType;
+                            if ((auraId == 32 || auraId == 129 || auraId == 130
+                                 || auraId == 152 || auraId == 153 || auraId == 154 || auraId == 156)
+                                && effect.BasePoints > SpeedRating)
+                            {
+                                SpeedRating = effect.BasePoints;
+                            }
+                        }
                         // Try Cata+ MiscValueB classification first (Mount.dbc, values 225-248).
                         int miscValueB = CreatureSpell.SpellEffect1?.MiscValueB ?? 0;
                         if (Enum.IsDefined(typeof(MountType), miscValueB))
@@ -273,6 +287,12 @@ namespace Styx.Logic
             /// The mount type (flying, ground, etc.)
             /// </summary>
             public MountType Type { get; private set; }
+
+            /// <summary>
+            /// Largest speed-aura BasePoints on the summon spell: ground 59 (60%) / 99 (100%),
+            /// flying 149/279/309. 0 when the spell exposes no speed aura.
+            /// </summary>
+            public int SpeedRating { get; private set; }
 
             /// <summary>
             /// The slot index in the mount collection.

@@ -149,6 +149,16 @@ namespace Styx.Logic
 		}
 
 		private static readonly Random _random = new Random();
+
+		/// <summary>Only the fastest speed tier owned (all mounts sharing the max SpeedRating) —
+		/// auto-detection may vary the skin, never the speed.</summary>
+		private static List<MountHelper.MountWrapper> FastestTier(List<MountHelper.MountWrapper> pool)
+		{
+			if (pool == null || pool.Count == 0)
+				return new List<MountHelper.MountWrapper>();
+			int best = pool.Max(m => m.SpeedRating);
+			return pool.Where(m => m.SpeedRating == best).ToList();
+		}
 		// Re-roll a fresh random mount only ONCE per mount-up (re-armed on dismount), not on every MountUp call.
 		// MountUp runs each travel tick and a stalled attempt (post-death flee / can't-mount-here) would otherwise
 		// re-roll + log every frame — the "Auto-detected random ground mount: White Kodo" spam flood.
@@ -168,24 +178,26 @@ namespace Styx.Logic
 				if (!_rollFreshMount)
 					return;   // already rolled for this mount-up; don't re-roll/log every tick
 
-				// Random mount selection. Only consume the flag once we actually pick something — so if mounts
-				// aren't in the companion list yet, we retry next tick instead of locking in an empty name.
+				// Random mount selection — random SKIN, never random SPEED: the pool is restricted to the
+				// fastest tier owned (a 60% Kodo used to win the roll over an owned epic). Only consume the
+				// flag once we actually pick something — so if mounts aren't in the companion list yet, we
+				// retry next tick instead of locking in an empty name.
 				bool rolled = false;
-				var groundMounts = MountHelper.GroundMounts;
-				if (groundMounts != null && groundMounts.Count > 0)
+				var groundMounts = FastestTier(MountHelper.GroundMounts);
+				if (groundMounts.Count > 0)
 				{
 					var mount = groundMounts[_random.Next(0, groundMounts.Count)];
 					CharacterSettings.Instance.MountName = mount.CreatureSpellId.ToString();
-					Logging.WriteDebug("Auto-detected random ground mount: {0}", mount.Name);
+					Logging.WriteDebug("Auto-detected random ground mount: {0} (speed +{1}%)", mount.Name, mount.SpeedRating + 1);
 					rolled = true;
 				}
 
-				var flyingMounts = MountHelper.FlyingMounts;
-				if (flyingMounts != null && flyingMounts.Count > 0)
+				var flyingMounts = FastestTier(MountHelper.FlyingMounts);
+				if (flyingMounts.Count > 0)
 				{
 					var mount = flyingMounts[_random.Next(0, flyingMounts.Count)];
 					CharacterSettings.Instance.FlyingMountName = mount.CreatureSpellId.ToString();
-					Logging.WriteDebug("Auto-detected random flying mount: {0}", mount.Name);
+					Logging.WriteDebug("Auto-detected random flying mount: {0} (speed +{1}%)", mount.Name, mount.SpeedRating + 1);
 					rolled = true;
 				}
 
@@ -194,28 +206,28 @@ namespace Styx.Logic
 			}
 			else
 			{
-				// Use first available mount if not set
+				// Use the fastest available mount if not set ([0] was companion-list order — speed-blind).
 				string mountName = CharacterSettings.Instance.MountName;
 				if (string.IsNullOrEmpty(mountName) || mountName == "Mount Name Here" || mountName.Contains("Automatically detected"))
 				{
-					var groundMounts = MountHelper.GroundMounts;
-					if (groundMounts != null && groundMounts.Count > 0)
+					var groundMounts = FastestTier(MountHelper.GroundMounts);
+					if (groundMounts.Count > 0)
 					{
 						var mount = groundMounts[0];
 						CharacterSettings.Instance.MountName = mount.CreatureSpellId.ToString();
-						Logging.WriteDebug("Auto-detected ground mount: {0}", mount.Name);
+						Logging.WriteDebug("Auto-detected ground mount: {0} (speed +{1}%)", mount.Name, mount.SpeedRating + 1);
 					}
 				}
 
 				string flyingMount = CharacterSettings.Instance.FlyingMountName;
 				if (string.IsNullOrEmpty(flyingMount) || flyingMount.Contains("Automatically detected"))
 				{
-					var flyingMounts = MountHelper.FlyingMounts;
-					if (flyingMounts != null && flyingMounts.Count > 0)
+					var flyingMounts = FastestTier(MountHelper.FlyingMounts);
+					if (flyingMounts.Count > 0)
 					{
 						var mount = flyingMounts[0];
 						CharacterSettings.Instance.FlyingMountName = mount.CreatureSpellId.ToString();
-						Logging.WriteDebug("Auto-detected flying mount: {0}", mount.Name);
+						Logging.WriteDebug("Auto-detected flying mount: {0} (speed +{1}%)", mount.Name, mount.SpeedRating + 1);
 					}
 				}
 			}
