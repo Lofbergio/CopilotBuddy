@@ -1631,7 +1631,7 @@ namespace Bots.VibeGrinder
                     Logging.Write(System.Drawing.Color.Khaki,
                         "[VibeGrinder/Vendor] COMMIT — {0} run; grind/rest/roam suspended until done.", BotPoi.Current.Type);
                     // Trek safety for the errand leg: bend the route around red/pack aggro bubbles.
-                    Supervision.TrekSafety.MarkLeg(_factions, me.Location, BotPoi.Current.Location, me.Level, me.MapId, "vendor leg");
+                    TrekSafety.MarkLeg(_factions, me.Location, BotPoi.Current.Location, me.Level, me.MapId, "vendor leg");
                 }
                 return _vendorRun;
             }
@@ -1719,9 +1719,9 @@ namespace Bots.VibeGrinder
             var me = StyxWoW.Me;
             var area = StyxWoW.AreaManager?.CurrentGrindArea;
             if (me != null && area?.CurrentHotSpot != null)
-                Supervision.TrekSafety.MarkLeg(_factions, me.Location, area.CurrentHotSpot.Position, me.Level, me.MapId, "return leg");
+                TrekSafety.MarkLeg(_factions, me.Location, area.CurrentHotSpot.Position, me.Level, me.MapId, "return leg");
             else
-                Supervision.TrekSafety.Clear();
+                TrekSafety.Clear();
         }
 
         /// <summary>
@@ -1998,7 +1998,7 @@ namespace Bots.VibeGrinder
             Vendors.OnVendorItems -= OnVendorSweep;
             Vendors.OnMailItems -= OnMailSweep;
             _restGovernor?.ReleaseRestLatch();   // don't leave the routine trusting a latch nobody updates
-            Supervision.TrekSafety.Clear();   // restore any hazard-marked navmesh polys
+            TrekSafety.Clear();   // restore any hazard-marked navmesh polys
             _supervisor?.ClearWedgeBlackspots();   // remove session wedge blackspots so they don't bleed into the next run/toon
             _synth?.RestoreCharacterSettings();   // undo the global FoodAmount/DrinkAmount seeding
             GrindMobsRepository.Shutdown();   // release the DB handle so a later Start re-opens cleanly

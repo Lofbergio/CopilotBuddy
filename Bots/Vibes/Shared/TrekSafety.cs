@@ -7,7 +7,7 @@ using Styx.Helpers;
 using Styx.Logic.Pathing;
 using Styx.Logic.Profiles;
 
-namespace Bots.VibeGrinder.Supervision
+namespace Bots.Vibes.Shared
 {
     /// <summary>
     /// Trek safety — threat-aware routing for EVERY travel leg, not just grind-spot selection (which has its

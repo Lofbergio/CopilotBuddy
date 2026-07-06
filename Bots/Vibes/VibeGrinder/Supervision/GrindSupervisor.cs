@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using Bots.VibeGrinder.Selection;
+using Bots.Vibes.Shared;
 using Bots.VibeGrinder.Synthesis;
 using Styx;
 using Styx.Helpers;

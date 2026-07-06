@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Bots.VibeGrinder.Data;
+using Bots.Vibes.Shared;
 using Styx;
 using Styx.Helpers;
 using Styx.Logic.Pathing;
@@ -355,7 +356,7 @@ namespace Bots.VibeGrinder.Selection
                 int n = 0;
                 foreach (MobSpawn h in hostiles)
                 {
-                    float bubble = Supervision.TrekSafety.ServerAggroRadius(h.MaxLevel, playerLevel) + pad;
+                    float bubble = TrekSafety.ServerAggroRadius(h.MaxLevel, playerLevel) + pad;
                     if (h.Point.DistanceSqr(m.Point) <= bubble * bubble
                         && Math.Abs(h.Point.Z - m.Point.Z) < 5f)
                         n++;
