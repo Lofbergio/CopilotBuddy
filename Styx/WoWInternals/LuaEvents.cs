@@ -73,6 +73,10 @@ namespace Styx.WoWInternals
 
         public void AttachEvent(string eventName, LuaEventHandlerDelegate handler)
         {
+            // Lock ORDER: FrameLock (executor) BEFORE _eventLock — the order ProcessPendingEvents uses.
+            // Holding _eventLock across Lua.DoString (which waits on the executor) deadlocked against
+            // the tick's AcquireFrame→AttachEvent path (dump-verified 2026-07-06, docs/gotchas.md).
+            using (new FrameLock())
             lock (_eventLock)
             {
                 if (!IsInitialized)
@@ -97,6 +101,7 @@ namespace Styx.WoWInternals
 
         public void DetachEvent(string eventName, LuaEventHandlerDelegate handler)
         {
+            using (new FrameLock())   // before _eventLock — see AttachEvent
             lock (_eventLock)
             {
                 if (this._eventHandlers.ContainsKey(eventName))
@@ -113,6 +118,7 @@ namespace Styx.WoWInternals
 
         public bool AddFilter(string eventName, string filterCode)
         {
+            using (new FrameLock())   // before _eventLock — see AttachEvent
             lock (_eventLock)
             {
                 if (this._eventFilters.ContainsKey(eventName))
@@ -131,6 +137,7 @@ namespace Styx.WoWInternals
 
         public void RemoveFilter(string eventName)
         {
+            using (new FrameLock())   // before _eventLock — see AttachEvent
             lock (_eventLock)
             {
                 if (IsInitialized && !string.IsNullOrEmpty(_filterTableName))
@@ -151,6 +158,7 @@ namespace Styx.WoWInternals
 
             if (eventTableValue == null || eventTableValue.Type != LuaType.Table)
             {
+                using (new FrameLock())   // before _eventLock — see AttachEvent
                 lock (_eventLock)
                 {
                     if (!IsInitialized)
