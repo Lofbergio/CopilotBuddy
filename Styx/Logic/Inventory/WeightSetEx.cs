@@ -114,15 +114,21 @@ public class WeightSetEx : IDisposable
 
       // Capture for closure (replacing Class461)
       WoWClass playerClass = StyxWoW.Me.Class;
-      // HB 3.3.5a requires groupIndex parameter for GetTalentTabInfo to return correct pointsSpent
-      // Without it, the function returns 0 for all tabs, defaulting to spec=1 (Balance for Druid)
-      int groupIndex = Lua.GetReturnVal<int>("return GetActiveTalentGroup()", 0U);
-      List<int> talentPoints = new List<int>((IEnumerable<int>) new int[3]
+      // pointsSpent pinned LUA-SIDE as GetTalentTabInfo's 3rd return. The old retval-4 read was
+      // previewPointsSpent (0 unless mid-talent-preview) — every tab read 0 and specIndex always
+      // fell to 1, unnoticed because spec 1 matched the test characters (Balance druid, Elemental
+      // shaman). Proven against a fully-talented 49 reading 0/0/0 (2026-07-06). groupIndex is
+      // still required — without it even the 3rd return reads 0 for all tabs.
+      string spent = Lua.GetReturnVal<string>(
+        "local g = GetActiveTalentGroup and GetActiveTalentGroup() or 1 local r = '' " +
+        "for i = 1, 3 do local _, _, p = GetTalentTabInfo(i, false, false, g) r = r .. (p or 0) .. ';' end return r", 0U);
+      string[] spentParts = (spent ?? "").Split(';');
+      List<int> talentPoints = new List<int>
       {
-        Lua.GetReturnVal<int>($"return GetTalentTabInfo(1, false, false, {groupIndex})", 4U),
-        Lua.GetReturnVal<int>($"return GetTalentTabInfo(2, false, false, {groupIndex})", 4U),
-        Lua.GetReturnVal<int>($"return GetTalentTabInfo(3, false, false, {groupIndex})", 4U)
-      });
+        spentParts.Length > 0 && int.TryParse(spentParts[0], out int t1) ? t1 : 0,
+        spentParts.Length > 1 && int.TryParse(spentParts[1], out int t2) ? t2 : 0,
+        spentParts.Length > 2 && int.TryParse(spentParts[2], out int t3) ? t3 : 0
+      };
       int specIndex = talentPoints.IndexOf(talentPoints.Max()) + 1;
 
       // Find weight set matching class and spec
