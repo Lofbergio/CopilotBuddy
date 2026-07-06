@@ -250,9 +250,30 @@ public class ForcedQuestTurnIn : ForcedBehavior
     {
         bool qfVisible = QuestFrame.Instance.IsVisible;
         uint shownId = QuestFrame.Instance.CurrentShownQuestId;
-        Logging.WriteDebug("[CompleteQuest] QuestFrame.IsVisible: {0}, CurrentShownQuestId: {1}, Expected: {2}", 
+        Logging.WriteDebug("[CompleteQuest] QuestFrame.IsVisible: {0}, CurrentShownQuestId: {1}, Expected: {2}",
             qfVisible, shownId, this.QuestId);
-        
+
+        if (qfVisible && shownId != 0 && shownId != this.QuestId)
+        {
+            // A DIFFERENT quest's frame is up. Two real cases (live 2026-07-06, quest 750→780 at Grull
+            // Hawkwind): the server pushed the chained follow-up's DETAIL frame after our turn-in landed
+            // (our quest is gone from the log → we're done; closing just declines the offer and the
+            // scheduler picks it up properly), or our turn-in never happened and the wrong frame is up
+            // (quest still in the log → close + Failure so the whole interact sequence retries cleanly).
+            // Returning Success for both — the old behavior — left the quest log-complete forever, which
+            // locked every PrevQuestID follow-up and looped the bot on an unofferable pickup.
+            this.completeQuestAttempts = 0;
+            if (!ForcedQuestTurnIn.Me.QuestLog.ContainsQuest(this.QuestId))
+            {
+                Logging.WriteDebug("[CompleteQuest] Turn-in landed; frame now shows chained quest {0} — leaving it for the scheduler.", shownId);
+                return RunStatus.Success;
+            }
+            Logging.WriteDebug("[CompleteQuest] Frame shows quest {0} but {1} is still in the log — closing and retrying the turn-in.", shownId, this.QuestId);
+            QuestFrame.Instance.Close();
+            StyxWoW.Sleep(300);
+            return RunStatus.Failure;
+        }
+
         if (qfVisible && (shownId == this.QuestId || shownId == 0))
         {
             if (this.completeQuestAttempts++ == 5)
