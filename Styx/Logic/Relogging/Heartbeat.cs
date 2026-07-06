@@ -55,7 +55,14 @@ namespace Styx.Logic.Relogging
                     Relogger.WantsClientRestart ? "true" : "false",
                     Relogger.GaveUpReason.Replace("\\", "\\\\").Replace("\"", "\\\""));
 
-                File.WriteAllText(FilePath, json);
+                // Atomic replace: WriteAllText truncates-then-writes, and the Watchdog's concurrent read of
+                // a half-written file parsed as null → "presumed hung" → it killed a healthy CB mid-grind
+                // (2026-07-06 00:53, "heartbeat stale (last: Z)"). Readers now see the old file or the new
+                // one, never a torn one. (A reader holding the file at the swap instant fails THIS write —
+                // swallowed below, next beat in 5s; the Watchdog's 2-strike rule rides that out.)
+                string tmp = FilePath + ".tmp";
+                File.WriteAllText(tmp, json);
+                File.Move(tmp, FilePath, true);
             }
             catch
             {

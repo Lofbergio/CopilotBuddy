@@ -47,12 +47,29 @@ internal static class Program
     private static bool _gaveUpLogged;
     private static bool _budgetLogged;
     private static string _logPath = "";
+    private static string _heartbeatPath = "";
+    private static DateTime _cbLaunchedAtUtc = DateTime.MinValue;  // stale-heartbeat grace: a fresh CB needs Roslyn compiles + attach before its first beat
+    private static int _staleStrikes;                              // consecutive null/stale heartbeat reads — one racy read must not kill a healthy CB
+    private static Mutex? _instanceMutex;                          // held for the process lifetime — single-instance guard
 
     private static int Main(string[] args)
     {
         string baseDir = AppContext.BaseDirectory;
         _logPath = Path.Combine(baseDir, "watchdog.log");
         string configPath = args.Length > 0 ? args[0] : Path.Combine(baseDir, "watchdog.json");
+
+        // Single instance. Two watchdogs ran concurrently overnight 2026-07-06 (unlogged /autostart
+        // launches prove it): independent budgets/state, doubled CB launches one second apart, and the
+        // resulting dual-attach killed the client. Global\ so an elevated duplicate in another session
+        // can't slip past; falls back to Local\ if Global creation is denied.
+        bool single;
+        try { _instanceMutex = new Mutex(true, @"Global\CopilotBuddy_Watchdog", out single); }
+        catch { _instanceMutex = new Mutex(true, @"Local\CopilotBuddy_Watchdog", out single); }
+        if (!single)
+        {
+            Log("Another Watchdog instance is already running — exiting (one supervisor only).");
+            return 2;
+        }
 
         if (!File.Exists(configPath))
         {
@@ -79,6 +96,7 @@ internal static class Program
         }
 
         string heartbeatPath = Path.Combine(Path.GetDirectoryName(config.CbPath)!, "heartbeat.json");
+        _heartbeatPath = heartbeatPath;
         Log($"Watchdog up. WoW='{config.WowPath}' CB='{config.CbPath}' heartbeat='{heartbeatPath}'");
 
         while (true)
@@ -230,7 +248,16 @@ internal static class Program
         }
 
         bool cbDead = cb == null;
-        bool cbHung = cb != null && (heartbeat == null || !IsFresh(heartbeat, config));
+
+        // Hang detection needs EVIDENCE, not one bad read: (a) a fresh CB spends 30s+ on Roslyn compiles
+        // + attach before its first beat, and the PREVIOUS instance's stale file is still on disk — grace
+        // the launch window (the old behavior burned the whole restart budget re-killing healthy starting
+        // CBs); (b) a single null read can be a transient IO race — require 2 consecutive bad passes
+        // (the 2026-07-06 00:53 false kill was one null read logged as "last: Z").
+        bool inLaunchGrace = (DateTime.UtcNow - _cbLaunchedAtUtc).TotalSeconds < 120;
+        bool staleRead = cb != null && !inLaunchGrace && (heartbeat == null || !IsFresh(heartbeat, config));
+        _staleStrikes = staleRead ? _staleStrikes + 1 : 0;
+        bool cbHung = _staleStrikes >= 2;
 
         // A fresh "Relogging" heartbeat means a login is in progress (server boot can take
         // minutes) — that is healthy, and cbHung is already false by the freshness check.
@@ -239,10 +266,11 @@ internal static class Program
             if (!TrySpendBudget(_cbRestarts, config.MaxRestartsPerHour, "CB"))
                 return;
             _cbWindowlessSinceUtc = DateTime.MinValue;
+            _staleStrikes = 0;
 
             Log(cbDead ? "CB is not running — relaunching against the live WoW."
                 : cbZombie ? $"CB is a zombie (alive, heartbeat fresh, no main window for {config.CbZombieSeconds}+s) — restarting it."
-                : $"CB heartbeat stale (last: {heartbeat?.TimestampUtc:HH:mm:ss}Z) — presumed hung, restarting it.");
+                : $"CB heartbeat {(heartbeat == null ? "unreadable" : $"stale (last: {heartbeat.TimestampUtc:HH:mm:ss}Z)")} for 2 passes — presumed hung, restarting it.");
             KillIfAlive(cb, cbZombie ? "CB (zombie)" : "CB (hung)");
             LaunchCb(config, wow.Id);
         }
@@ -377,6 +405,11 @@ internal static class Program
 
     private static void LaunchCb(Config config, int wowPid)
     {
+        // The previous instance's heartbeat file would read as stale until the new CB's first write —
+        // delete it so staleness can only ever describe THIS instance, and grace the startup window.
+        try { if (_heartbeatPath.Length > 0 && File.Exists(_heartbeatPath)) File.Delete(_heartbeatPath); }
+        catch { /* locked/gone — the launch grace still covers it */ }
+        _cbLaunchedAtUtc = DateTime.UtcNow;
         try
         {
             Process.Start(new ProcessStartInfo
