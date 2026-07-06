@@ -145,10 +145,26 @@ namespace Styx.Logic
             }
 
             FindClosestFlightNodes(from, to, out XmlFlightNode startNode, out XmlFlightNode endNode);
+
+            // No usable route (no learned nodes on this continent, no connections, backwards flight,
+            // or a connection-target node with no recorded world location). The old null-conditional
+            // here made `null != 0U` TRUE, so a null route fell into Reason=Use with null nodes and a
+            // garbage endpoint — the NaN-taxi wedge (log 2026-07-06_0033 00:45).
+            if (startNode == null || endNode == null
+                || startNode.Location == WoWPoint.Empty || startNode.Location == WoWPoint.Zero
+                || endNode.Location == WoWPoint.Empty || endNode.Location == WoWPoint.Zero)
+            {
+                TakingPathFrom = null;
+                TakingPathTo = null;
+                Reason = FlightPathReason.None;
+                startFp = endFp = WoWPoint.Empty;
+                return false;
+            }
+
             TakingPathTo = endNode;
             TakingPathFrom = startNode;
 
-            if (startNode?.MasterEntry != 0U)
+            if (startNode.MasterEntry != 0U)
             {
                 Reason = FlightPathReason.Use;
             }
@@ -163,8 +179,8 @@ namespace Styx.Logic
             }
 
             SetPoi(startNode);
-            startFp = startNode?.Location ?? WoWPoint.Empty;
-            endFp = endNode?.Location ?? WoWPoint.Empty;
+            startFp = startNode.Location;
+            endFp = endNode.Location;
             return true;
         }
 
