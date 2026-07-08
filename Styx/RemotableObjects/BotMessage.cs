@@ -21,6 +21,8 @@ namespace Styx.RemotableObjects
 			TargetGuid = (ulong)info.GetValue("TargetGuid", typeof(ulong));
 			LeaderGuid = (ulong)info.GetValue("LeaderGuid", typeof(ulong));
 			LeaderName = info.GetString("LeaderName");
+			LeaderTargetGuid = (ulong)info.GetValue("LeaderTargetGuid", typeof(ulong));
+			LeaderInCombat = (bool)info.GetValue("LeaderInCombat", typeof(bool));
 		}
 
 		public override string ToString()
@@ -39,6 +41,8 @@ namespace Styx.RemotableObjects
 			info.AddValue("TargetGuid", TargetGuid);
 			info.AddValue("LeaderGuid", LeaderGuid);
 			info.AddValue("LeaderName", LeaderName);
+			info.AddValue("LeaderTargetGuid", LeaderTargetGuid);
+			info.AddValue("LeaderInCombat", LeaderInCombat);
 		}
 
 		public void SetMessage(BotMessage message)
@@ -60,5 +64,9 @@ namespace Styx.RemotableObjects
 		public ulong TargetGuid;
 		public ulong LeaderGuid;
 		public string LeaderName;
+		// Phase 2: leader's current target (the quest-giver it's working) so followers turn in there.
+		public ulong LeaderTargetGuid;
+		// Assist: leader is actually in combat (pull committed) — followers focus-fire only then.
+		public bool LeaderInCombat;
 	}
 }
