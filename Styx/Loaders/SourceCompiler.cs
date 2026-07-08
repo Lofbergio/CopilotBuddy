@@ -58,8 +58,13 @@ namespace Styx.Loaders
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
                 string loc = assembly.Location;
-                if (!string.IsNullOrEmpty(loc) && loc.StartsWith(tempDir, StringComparison.OrdinalIgnoreCase))
-                    continue; // stale plugin build - do not reference
+                // Skip previously-compiled drop-in builds — both the temp dir AND the persistent
+                // CompileCache (below). Referencing them causes duplicate-type "ambiguous" compile
+                // errors and grows the metadata reference set (which eventually OOMs the 32-bit proc).
+                if (!string.IsNullOrEmpty(loc)
+                    && (loc.StartsWith(tempDir, StringComparison.OrdinalIgnoreCase)
+                        || loc.StartsWith(CacheDir, StringComparison.OrdinalIgnoreCase)))
+                    continue;
                 AddReference(loc);
             }
 
@@ -217,6 +222,88 @@ namespace Styx.Loaders
             }
         }
 
+        // ── Persistent compile cache ───────────────────────────────────────────────
+        // CB recompiles every drop-in (plugins/routines/bots) from scratch on every launch, and it
+        // restarts a lot (relogger/crash recovery). This caches each compiled assembly on disk keyed
+        // by its source content + the CopilotBuddy.dll identity (so an API change invalidates every
+        // cached build) + compiler options. Fail-safe: any cache miss/error falls back to a normal
+        // Roslyn compile, so worst case is exactly the old behaviour.
+
+        private static string _cacheDir;
+        internal static string CacheDir
+        {
+            get
+            {
+                if (_cacheDir == null)
+                {
+                    string baseDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? Path.GetTempPath();
+                    _cacheDir = Path.Combine(baseDir, "CompileCache");
+                    try { Directory.CreateDirectory(_cacheDir); } catch { }
+                }
+                return _cacheDir;
+            }
+        }
+
+        // Changes whenever CopilotBuddy.dll is rebuilt (module MVID — deterministic builds tie it to
+        // content) plus write-time/size as belt-and-suspenders. This is what stops a plugin cached
+        // against an old API from being loaded after a DLL update.
+        private static string _apiIdentity;
+        private static string ApiIdentity
+        {
+            get
+            {
+                if (_apiIdentity == null)
+                {
+                    try
+                    {
+                        Assembly api = Assembly.GetExecutingAssembly();
+                        Guid mvid = api.ManifestModule.ModuleVersionId;
+                        var fi = new FileInfo(api.Location);
+                        _apiIdentity = $"{mvid:N}_{fi.LastWriteTimeUtc.Ticks}_{fi.Length}";
+                    }
+                    catch { _apiIdentity = Guid.NewGuid().ToString("N"); }  // unknown → never reuse cache
+                }
+                return _apiIdentity;
+            }
+        }
+
+        private string BaseName => FileStructure == FileStructureType.SingleFile
+            ? Path.GetFileNameWithoutExtension(SourcePath)
+            : new DirectoryInfo(SourcePath).Name;
+
+        private string ComputeCacheKey()
+        {
+            using var sha = System.Security.Cryptography.SHA256.Create();
+            using var ms = new MemoryStream();
+            using (var bw = new BinaryWriter(ms, System.Text.Encoding.UTF8, true))
+            {
+                bw.Write("v1");
+                bw.Write(ApiIdentity);
+                bw.Write(Options.CompilerOptions ?? "");
+                bw.Write(Options.IncludeDebugInformation);
+                bw.Write(CompilerVersion);
+                foreach (string f in SourceFilePaths.OrderBy(s => s, StringComparer.OrdinalIgnoreCase))
+                {
+                    bw.Write(f);
+                    bw.Write(File.ReadAllBytes(f));
+                }
+            }
+            ms.Position = 0;
+            return Convert.ToHexString(sha.ComputeHash(ms)).Substring(0, 32);
+        }
+
+        // Keep only the current build for this drop-in; drop older-hash entries so the cache is bounded.
+        private static void PruneStaleCache(string baseName, string keepPath)
+        {
+            try
+            {
+                foreach (string f in Directory.GetFiles(CacheDir, baseName + "_*.dll"))
+                    if (!string.Equals(f, keepPath, StringComparison.OrdinalIgnoreCase))
+                        try { File.Delete(f); } catch { }
+            }
+            catch { }
+        }
+
         /// <summary>
         /// Compiles the source files using Roslyn compiler.
         /// </summary>
@@ -231,8 +318,40 @@ namespace Styx.Loaders
                 return null;
             }
 
-            // Add to trusted assemblies list
-            AssemblyVerifier.TrustedAssemblies.Add(Path.GetFileNameWithoutExtension(AssemblyName));
+            // Stable name = drop-in + content/API hash → identical across launches (so a cache hit's
+            // assembly name matches the trust prefix) and new when the source or API changes.
+            string stableName = BaseName;
+            string cachePath = null;
+            try
+            {
+                stableName = BaseName + "_" + ComputeCacheKey();
+                cachePath = Path.Combine(CacheDir, stableName + ".dll");
+            }
+            catch { cachePath = null; }   // hashing failed → compile normally, no cache
+
+            // Add to trusted assemblies list (prefix match — must be set before the assembly loads).
+            AssemblyVerifier.TrustedAssemblies.Add(stableName);
+
+            // Cache hit — load the prior build and skip Roslyn entirely. Any failure (missing/corrupt/
+            // API-incompatible) falls through to a normal compile below.
+            if (cachePath != null && File.Exists(cachePath))
+            {
+                try
+                {
+                    Assembly cached = Assembly.LoadFrom(cachePath);
+                    if (cached != null && cached.GetTypes().Length > 0)
+                    {
+                        CompiledAssembly = cached;
+                        try { File.SetLastWriteTimeUtc(cachePath, DateTime.UtcNow); } catch { }
+                        var hitResults = new CompilerResults(new TempFileCollection(Path.GetTempPath()));
+                        typeof(CompilerResults)
+                            .GetField("compiledAssembly", BindingFlags.NonPublic | BindingFlags.Instance)
+                            ?.SetValue(hitResults, CompiledAssembly);
+                        return hitResults;
+                    }
+                }
+                catch { /* incompatible/corrupt cache → recompile */ }
+            }
 
             // Parse all source files into syntax trees
             var syntaxTrees = new List<SyntaxTree>();
@@ -376,27 +495,33 @@ namespace Styx.Loaders
 
             // Create compilation
             var compilation = CSharpCompilation.Create(
-                assemblyName: Path.GetFileNameWithoutExtension(AssemblyName),
+                assemblyName: stableName,
                 syntaxTrees: syntaxTrees,
                 references: references,
                 options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                     .WithOptimizationLevel(optimizationLevel)
                     .WithPlatform(Platform.AnyCpu));
 
-            // Emit to a temp file so the loaded assembly has a valid Location.
-            // Assembly.Load(bytes) produces an assembly with empty Location, which breaks any
-            // secondary Roslyn compilation (e.g. DynamicCodeCompiler) that needs to reference it.
-            string tempAsmPath = Path.Combine(Path.GetTempPath(), $"{Path.GetFileNameWithoutExtension(AssemblyName)}_{Guid.NewGuid():N}.dll");
-
-            EmitResult emitResult = compilation.Emit(tempAsmPath);
+            // Emit to the cache path (a stable file reused next launch) so the loaded assembly has a
+            // valid Location. If the cache file is locked (e.g. an incompatible build is already
+            // loaded), fall back to a unique temp path and skip caching this one.
+            string emitPath = cachePath ?? Path.Combine(Path.GetTempPath(), $"{stableName}_{Guid.NewGuid():N}.dll");
+            EmitResult emitResult;
+            try { emitResult = compilation.Emit(emitPath); }
+            catch (IOException)
+            {
+                emitPath = Path.Combine(Path.GetTempPath(), $"{stableName}_{Guid.NewGuid():N}.dll");
+                cachePath = null;
+                emitResult = compilation.Emit(emitPath);
+            }
 
             // Create CompilerResults for compatibility
             var results = new CompilerResults(new TempFileCollection(Path.GetTempPath()));
 
             if (!emitResult.Success)
             {
-                // Clean up the (empty) temp file on failure.
-                try { if (File.Exists(tempAsmPath)) File.Delete(tempAsmPath); } catch { }
+                // Clean up the (empty) output file on failure.
+                try { if (File.Exists(emitPath)) File.Delete(emitPath); } catch { }
 
                 foreach (var diagnostic in emitResult.Diagnostics)
                 {
@@ -419,7 +544,9 @@ namespace Styx.Loaders
             }
             else
             {
-                CompiledAssembly = Assembly.LoadFrom(tempAsmPath);
+                CompiledAssembly = Assembly.LoadFrom(emitPath);
+                if (cachePath != null)
+                    PruneStaleCache(BaseName, cachePath);
 
                 // Set the compiled assembly in results
                 typeof(CompilerResults)
