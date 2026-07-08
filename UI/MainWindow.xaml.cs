@@ -347,7 +347,7 @@ namespace CopilotBuddy.UI
             {
                 // Populate bot selector with all loaded bots (built-in + external)
                 cmbBotSelector.Items.Clear();
-                foreach (var bot in BotManager.Instance.Bots)
+                foreach (var bot in BotManager.Instance.Bots.OrderBy(b => b.Key, StringComparer.OrdinalIgnoreCase))
                 {
                     cmbBotSelector.Items.Add(bot.Key);
                 }
