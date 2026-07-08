@@ -18,6 +18,14 @@ namespace PartyBot
 		[DefaultValue(false)]
 		public bool DoNothing { get; set; }
 
+		[Setting(Explanation = "True if this instance is the party LEADER. Auto-enables the LeaderPlugin (broadcasts to followers) and idles this bot so you drive it manually. One checkbox instead of 'Do Nothing' + enabling the plugin by hand.")]
+		[DefaultValue(false)]
+		public bool IsLeader { get; set; }
+
+		[Setting(Explanation = "Leader only: auto-Greed every loot roll. Leave OFF if you use AutoEquip2 — it rolls Need on upgrades / Greed otherwise and hooks the same event, so both would fight. Only enable if the leader has no loot-rolling plugin.")]
+		[DefaultValue(false)]
+		public bool LeaderAutoRollGreed { get; set; }
+
 		[DefaultValue(5)]
 		[Setting]
 		public int FollowDistance { get; set; }

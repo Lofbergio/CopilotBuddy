@@ -19,7 +19,8 @@ namespace PartyBot
 	/// Runs on the LEADER instance only. On each Pulse it sends a BotMessage
 	/// (Kill / Vendor / FollowLeader) to all follower RemotingClients via the
 	/// RemotingServer TCP listener on port 1337.
-	/// Also rolls Need on loot items (START_LOOT_ROLL).
+	/// Optionally auto-Greeds loot rolls (START_LOOT_ROLL) — off unless
+	/// PartyBotSettings.LeaderAutoRollGreed is set (leave AutoEquip2 to roll otherwise).
 	/// </summary>
 	public class LeaderPlugin : HBPlugin
 	{
@@ -98,11 +99,19 @@ namespace PartyBot
 				};
 			}
 
+			msg.LeaderTargetGuid = StyxWoW.Me.CurrentTargetGuid;
+			msg.LeaderInCombat = StyxWoW.Me.Combat;
 			_server!.SetMessage(msg);
 			StyxWoW.ResetAfk();
 		}
 
-		public override void Dispose()
+		// Disabling the plugin (e.g. a follower's botbase turning it off) must free the server, not
+		// just leave it running — otherwise port 1337 is stranded and no other instance can lead.
+		public override void OnDisable() => Shutdown();
+
+		public override void Dispose() => Shutdown();
+
+		private void Shutdown()
 		{
 			if (_initialized)
 			{
@@ -110,6 +119,8 @@ namespace PartyBot
 				Targeting.Instance.IncludeTargetsFilter -= IncludeTargetsFilter;
 				_initialized = false;
 			}
+			_server?.Stop();
+			_server = null;   // re-enable re-creates it cleanly (Pulse lazy-inits when _initialized is false)
 		}
 
 		// ──────────────────────────────────────────────────────────────────────
@@ -162,6 +173,12 @@ namespace PartyBot
 
 		private static void OnStartLootRoll(object sender, LuaEventArgs e)
 		{
+			// Off by default. AutoEquip2 (if present) hooks the SAME event and rolls Need on
+			// upgrades / Greed otherwise — first roll wins, so blind-greeding here would defeat
+			// it. Opt in only for a leader with no loot-rolling plugin.
+			if (!PartyBotSettings.Instance.LeaderAutoRollGreed)
+				return;
+
 			Logging.Write("Rolling for loot!");
 			if (e.Args.Length < 1)
 			{

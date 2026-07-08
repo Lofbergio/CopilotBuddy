@@ -59,9 +59,22 @@ namespace PartyBot.IPC
 				_current = message;
 		}
 
+		/// <summary>
+		/// Stops the listener and frees port 1337. Called when the leader role ends (LeaderPlugin
+		/// disabled/disposed) so another instance can become leader — without this the accept thread
+		/// outlives the role and strands the port ("Channel is busy" on the next leader).
+		/// </summary>
+		public void Stop()
+		{
+			if (_stopped) return;
+			_stopped = true;
+			try { _listener.Stop(); } catch { }
+			Logging.Write("Remoting server stopped");
+		}
+
 		private void AcceptLoop()
 		{
-			while (true)
+			while (!_stopped)
 			{
 				try
 				{
@@ -75,6 +88,7 @@ namespace PartyBot.IPC
 				}
 				catch (Exception ex)
 				{
+					if (_stopped) break;   // listener.Stop() unblocks AcceptTcpClient — normal shutdown
 					Logging.WriteException(ex);
 					Thread.Sleep(500);
 				}
@@ -110,6 +124,7 @@ namespace PartyBot.IPC
 
 		private readonly TcpListener _listener;
 		private readonly Thread? _thread;
+		private volatile bool _stopped;
 		private readonly object _lock = new object();
 		private BotMessage? _current;
 		// BotMessage exposes its data as public fields (no properties), which matches the

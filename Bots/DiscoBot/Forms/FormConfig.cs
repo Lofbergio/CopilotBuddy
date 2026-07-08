@@ -31,6 +31,8 @@ namespace PartyBot.Forms
 			cbAcceptGroupInvitesFromLeader.Checked = instance.AcceptGroupInvitesFromLeader;
 			cbAutoAcceptSharedQuests.Checked = instance.AutoAcceptSharedQuests;
 			cbDoNothing.Checked = instance.DoNothing;
+			cbIsLeader.Checked = instance.IsLeader;
+			cbLeaderAutoRollGreed.Checked = instance.LeaderAutoRollGreed;
 		}
 
 		private void HookEvents()
@@ -44,6 +46,8 @@ namespace PartyBot.Forms
 			cbAcceptGroupInvitesFromLeader.CheckedChanged += (sender, e) => s.AcceptGroupInvitesFromLeader = cbAcceptGroupInvitesFromLeader.Checked;
 			cbAutoAcceptSharedQuests.CheckedChanged += (sender, e) => s.AutoAcceptSharedQuests = cbAutoAcceptSharedQuests.Checked;
 			cbDoNothing.CheckedChanged += (sender, e) => s.DoNothing = cbDoNothing.Checked;
+			cbIsLeader.CheckedChanged += (sender, e) => s.IsLeader = cbIsLeader.Checked;
+			cbLeaderAutoRollGreed.CheckedChanged += (sender, e) => s.LeaderAutoRollGreed = cbLeaderAutoRollGreed.Checked;
 			btnSaveAndClose.Click += btnSaveAndClose_Click;
 			btnLevelbotSettings.Click += (sender, e) =>
 			{
@@ -60,6 +64,8 @@ namespace PartyBot.Forms
 
 		// Designer-generated controls
 		private IContainer? components;
+		private CheckBox cbIsLeader = null!;
+		private CheckBox cbLeaderAutoRollGreed = null!;
 		private CheckBox cbDoNothing = null!;
 		private CheckBox cbAutoAcceptSharedQuests = null!;
 		private CheckBox cbWaitForRessInDungeons = null!;
@@ -81,6 +87,8 @@ namespace PartyBot.Forms
 
 		private void InitializeComponent()
 		{
+			cbIsLeader = new CheckBox();
+			cbLeaderAutoRollGreed = new CheckBox();
 			cbDoNothing = new CheckBox();
 			cbAutoAcceptSharedQuests = new CheckBox();
 			cbWaitForRessInDungeons = new CheckBox();
@@ -165,29 +173,45 @@ namespace PartyBot.Forms
 			cbDoNothing.Location = new System.Drawing.Point(12, 198);
 			cbDoNothing.Name = "cbDoNothing";
 			cbDoNothing.TabIndex = 8;
-			cbDoNothing.Text = "Do Nothing (Leader)";
+			cbDoNothing.Text = "Do Nothing (idle)";
 			cbDoNothing.UseVisualStyleBackColor = true;
 
+			// cbIsLeader
+			cbIsLeader.AutoSize = true;
+			cbIsLeader.Location = new System.Drawing.Point(12, 224);
+			cbIsLeader.Name = "cbIsLeader";
+			cbIsLeader.TabIndex = 9;
+			cbIsLeader.Text = "This is the Leader (broadcast + idle)";
+			cbIsLeader.UseVisualStyleBackColor = true;
+
+			// cbLeaderAutoRollGreed
+			cbLeaderAutoRollGreed.AutoSize = true;
+			cbLeaderAutoRollGreed.Location = new System.Drawing.Point(12, 250);
+			cbLeaderAutoRollGreed.Name = "cbLeaderAutoRollGreed";
+			cbLeaderAutoRollGreed.TabIndex = 10;
+			cbLeaderAutoRollGreed.Text = "Leader: auto-Greed loot (off if using AutoEquip2)";
+			cbLeaderAutoRollGreed.UseVisualStyleBackColor = true;
+
 			// btnLevelbotSettings
-			btnLevelbotSettings.Location = new System.Drawing.Point(12, 234);
+			btnLevelbotSettings.Location = new System.Drawing.Point(12, 288);
 			btnLevelbotSettings.Name = "btnLevelbotSettings";
 			btnLevelbotSettings.Size = new System.Drawing.Size(150, 27);
-			btnLevelbotSettings.TabIndex = 9;
+			btnLevelbotSettings.TabIndex = 11;
 			btnLevelbotSettings.Text = "Levelbot Settings...";
 			btnLevelbotSettings.UseVisualStyleBackColor = true;
 
 			// btnSaveAndClose
-			btnSaveAndClose.Location = new System.Drawing.Point(170, 234);
+			btnSaveAndClose.Location = new System.Drawing.Point(170, 288);
 			btnSaveAndClose.Name = "btnSaveAndClose";
 			btnSaveAndClose.Size = new System.Drawing.Size(110, 27);
-			btnSaveAndClose.TabIndex = 10;
+			btnSaveAndClose.TabIndex = 12;
 			btnSaveAndClose.Text = "Save && Close";
 			btnSaveAndClose.UseVisualStyleBackColor = true;
 
 			// FormConfig
 			AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
 			AutoScaleMode = AutoScaleMode.Font;
-			ClientSize = new System.Drawing.Size(294, 276);
+			ClientSize = new System.Drawing.Size(294, 330);
 			Controls.Add(label1);
 			Controls.Add(nudFollowDistance);
 			Controls.Add(cbLootInDungeons);
@@ -197,6 +221,8 @@ namespace PartyBot.Forms
 			Controls.Add(cbAcceptDungeonInvites);
 			Controls.Add(cbAutoAcceptSharedQuests);
 			Controls.Add(cbDoNothing);
+			Controls.Add(cbIsLeader);
+			Controls.Add(cbLeaderAutoRollGreed);
 			Controls.Add(btnLevelbotSettings);
 			Controls.Add(btnSaveAndClose);
 			FormBorderStyle = FormBorderStyle.FixedSingle;

@@ -38,7 +38,7 @@ namespace PartyBot
 			{
 				if (_root != null) return _root;
 				_root = new PrioritySelector(
-					new Decorator(ctx => _waiting || PartyBotSettings.Instance.DoNothing, new ActionIdle()),
+					new Decorator(ctx => _waiting || PartyBotSettings.Instance.DoNothing || PartyBotSettings.Instance.IsLeader, new ActionIdle()),
 					CreateDeathBehavior(),
 					CreateCombatBehavior(),                           // smethod_5
 					CreateEventBehavior(),                            // method_5
@@ -60,14 +60,30 @@ namespace PartyBot
 
 		public override void Start()
 		{
+			// Leader mode — one checkbox instead of "Do Nothing + enable the LeaderPlugin by hand".
+			// Auto-enable the (built-in) LeaderPlugin so it broadcasts to followers, and idle our
+			// own tree so you drive this character manually. Followers connect to it as clients.
+			if (PartyBotSettings.Instance.IsLeader)
+			{
+				PluginContainer? lp = PluginManager.Plugins.FirstOrDefault(p => p.Name == "LeaderPlugin");
+				if (lp == null)
+					Logging.Write(System.Drawing.Color.Orange, "PartyBot: Leader mode, but the LeaderPlugin was not found.");
+				else if (!lp.Enabled)
+				{
+					Logging.Write("PartyBot: Leader mode — enabling LeaderPlugin to broadcast to followers.");
+					lp.Enabled = true;
+				}
+				return;
+			}
+
 			if (PartyBotSettings.Instance.DoNothing)
 				return;
 
-			// Disable LeaderPlugin if it is running on this slave instance
+			// Disable LeaderPlugin if it is running on this follower instance
 			PluginContainer? leaderPlugin = PluginManager.Plugins.FirstOrDefault(p => p.Name == "LeaderPlugin");
 			if (leaderPlugin != null && leaderPlugin.Enabled)
 			{
-				Logging.Write("PartyBot: Disabling leader plugin. Slaves should not have it running.");
+				Logging.Write("PartyBot: Disabling leader plugin. Followers should not have it running.");
 				leaderPlugin.Enabled = false;
 			}
 
@@ -352,7 +368,7 @@ namespace PartyBot
 							new SwitchArgument<string>("Vendor",
 								new TreeSharp.Action(ctx =>
 								{
-									Logging.Write("PartyBot: Vendoring");
+									Logging.WriteDebug("PartyBot: Vendoring");
 									if (_botMessage != null)
 									{
 										WoWUnit? vendor = ObjectManager.GetObjectByGuid<WoWUnit>(_botMessage.TargetGuid);
@@ -361,10 +377,7 @@ namespace PartyBot
 									}
 								})),
 							new SwitchArgument<string>("FollowLeader",
-								new Sequence(
-									new TreeSharp.Action(ctx => Logging.Write("PartyBot: Following Leader")),
-									new TreeSharp.Action(ctx => FollowLeader())
-								)),
+								new TreeSharp.Action(ctx => FollowLeader())),
 							new SwitchArgument<string>("Kill",
 								new Decorator(
 									ctx => LeaderLocation.Distance(StyxWoW.Me.Location) <= Targeting.PullDistance,
@@ -376,7 +389,7 @@ namespace PartyBot
 												new DecoratorContinue(ctx => StyxWoW.Me.CurrentTarget != (WoWUnit)ctx,
 													new TreeSharp.Action(ctx => ((WoWUnit)ctx).Target())),
 												new TreeSharp.Action(ctx => BotPoi.Current = new BotPoi((WoWUnit)ctx, PoiType.Kill)),
-												new TreeSharp.Action(ctx => Logging.Write("PartyBot: Killing something"))
+												new TreeSharp.Action(ctx => Logging.WriteDebug("PartyBot: Killing something"))
 											)
 										)
 									)
@@ -424,20 +437,27 @@ namespace PartyBot
 
 			if (leader != null)
 			{
-				if ((leader.IsFlying || leader.IsSwimming) && leader.InLineOfSight)
-					WoWMovement.ClickToMove(LeaderLocation);
+				// Smooth native /follow (the flawless multibox-style follow). We follow by
+				// NAME, not focus: SetFocus was a raw write to the focus-GUID memory slot
+				// that Lua's "focus" unit never sees, so FollowUnit('focus') threw the red
+				// "Unknown unit" error. FollowUnit(name, exact) resolves reliably. Once
+				// /follow starts the client drives movement (IsCTMing set) — don't re-issue
+				// it or mesh-nav over it, or they fight.
+				bool ctmActive = (WoWMovement.ActiveInputControl.Flags & WoWMovement.MovementDirection.IsCTMing)
+					!= WoWMovement.MovementDirection.None;
 
-				if (leader.Distance <= 20.0 && (WoWMovement.ActiveInputControl.Flags & WoWMovement.MovementDirection.IsCTMing) == WoWMovement.MovementDirection.None)
+				if ((leader.IsFlying || leader.IsSwimming) && leader.InLineOfSight)
 				{
-					StyxWoW.Me.SetFocus(leader);
-					Lua.DoString("FollowUnit('focus')");
+					WoWMovement.ClickToMove(LeaderLocation);
 				}
-				else if (leader.IsMoving && leader.Distance >= PartyBotSettings.Instance.FollowDistance + 3)
+				else if (leader.Distance <= 20.0 && leader.InLineOfSight)
 				{
-					Navigator.MoveTo(LeaderLocation);
+					if (!ctmActive)
+						Lua.DoString(string.Format("FollowUnit('{0}', true)", leader.Name));
 				}
 				else if (leader.Distance >= PartyBotSettings.Instance.FollowDistance)
 				{
+					// Out of range or no LoS: mesh-nav to catch up; native follow resumes in range.
 					Navigator.MoveTo(LeaderLocation);
 				}
 			}
@@ -520,14 +540,14 @@ namespace PartyBot
 									// If no target or target is dead → set target to FirstUnit
 									new Decorator(ctx => !StyxWoW.Me.GotTarget || (StyxWoW.Me.GotTarget && StyxWoW.Me.CurrentTarget.Dead && Targeting.Instance.FirstUnit != null),
 										new Sequence(
-											new TreeSharp.Action(ctx => Logging.Write("Setting target to pull")),
+											new TreeSharp.Action(ctx => Logging.WriteDebug("Setting target to pull")),
 											new TreeSharp.Action(ctx => Targeting.Instance.FirstUnit!.Target())
 										)
 									),
 									// Move to pull target if too far
 									new Decorator(ctx => BotPoi.Current.AsObject != null && BotPoi.Current.AsObject.ToUnit() != null && BotPoi.Current.AsObject.ToUnit().Distance > Targeting.PullDistance,
 										new Sequence(
-											new TreeSharp.Action(ctx => Logging.Write("Moving to pull target")),
+											new TreeSharp.Action(ctx => Logging.WriteDebug("Moving to pull target")),
 											new NavigationAction(ctx => BotPoi.Current.Location)
 										)
 									)
