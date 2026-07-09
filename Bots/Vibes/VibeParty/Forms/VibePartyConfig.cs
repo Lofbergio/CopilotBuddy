@@ -2,13 +2,14 @@ using System;
 using System.Drawing;
 using System.Windows.Forms;
 using Levelbot;
+using Styx.UI;   // shared design system — was a local copy of the palette (Forms/Theme.cs, now deleted)
 
 namespace VibeParty.Forms
 {
     // ElvUI-styled config for VibeParty (code-built, no designer). Role-aware: the Leader/Follower choice decides
     // which knobs show — no point showing follower settings to a leader (2026-07-07). Only the two mode switches
     // are always visible; the rest lives in a panel rebuilt when the role flips.
-    public class VibePartyConfig : Form
+    public class VibePartyConfig : ThemedForm
     {
         private readonly VibePartySettings _s = VibePartySettings.Instance;
         private Panel _rolePanel;
@@ -21,16 +22,11 @@ namespace VibeParty.Forms
         private void BuildUi()
         {
             Text = "VibeParty Configuration";
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            MaximizeBox = false;
-            MinimizeBox = false;
-            StartPosition = FormStartPosition.CenterParent;
-            BackColor = Theme.Bg;
-            ForeColor = Theme.Text;
-            Font = Theme.UI;
 
-            Controls.Add(new Label { Text = "VibeParty", Location = new Point(16, 12), AutoSize = true, ForeColor = Theme.Gold, Font = new Font("Segoe UI", 15f, FontStyle.Bold) });
-            Controls.Add(new Label { Text = "Party follower & coordination", Location = new Point(18, 42), AutoSize = true, ForeColor = Theme.Dim });
+            // AccentLabel keeps its colour AND font through Theme.Apply (a plain gold Label would keep the colour
+            // but get its font normalised to Theme.UI).
+            Controls.Add(Theme.AccentLabel("VibeParty", new Point(16, 12), Theme.Gold, Theme.Title));
+            Controls.Add(Theme.AccentLabel("Party follower & coordination", new Point(18, 42), Theme.Dim, Theme.UI));
 
             int y = 74;
             Section(this, "Mode", ref y);
@@ -56,18 +52,16 @@ namespace VibeParty.Forms
             if (_s.IsLeader)
             {
                 Section(_rolePanel, "Leader", ref y);
-                _rolePanel.Controls.Add(new Label { Text = "The routine keeps buffs up on you + the party (out of", Location = new Point(20, y), AutoSize = true, ForeColor = Theme.Dim });
-                y += 18;
-                _rolePanel.Controls.Add(new Label { Text = "combat). You drive movement and combat yourself.", Location = new Point(20, y), AutoSize = true, ForeColor = Theme.Dim });
-                y += 26;
+                Hint(_rolePanel, "The routine keeps buffs up on you + the party (out of", ref y, 18);
+                Hint(_rolePanel, "combat). You drive movement and combat yourself.", ref y, 26);
                 Check(_rolePanel, "Share quests to party (native /share)", () => _s.ShareQuestsToParty, v => _s.ShareQuestsToParty = v, ref y);
             }
             else
             {
                 Section(_rolePanel, "Following", ref y);
                 _rolePanel.Controls.Add(new Label { Text = "Follow distance", Location = new Point(20, y + 3), AutoSize = true, ForeColor = Theme.Text });
-                var nud = new NumericUpDown { Location = new Point(150, y), Size = new Size(56, 24), Minimum = 1, Maximum = 30, Value = Clamp(_s.FollowDistance, 1, 30) };
-                nud.ValueChanged += (s, e) => _s.FollowDistance = (int)nud.Value;
+                var nud = new ThemedNumeric { Location = new Point(150, y), Size = new Size(84, 22), Minimum = 1, Maximum = 30, Value = _s.FollowDistance };
+                nud.ValueChanged += (s, e) => _s.FollowDistance = nud.Value;
                 _rolePanel.Controls.Add(nud);
                 y += 34;
 
@@ -95,19 +89,29 @@ namespace VibeParty.Forms
             _rolePanel.ResumeLayout();
             ClientSize = new Size(380, _rolePanel.Top + y);
 
-            Theme.Apply(this);
+            // Styx.UI ordering rule: generic theme first, accents after.
+            ApplyTheme();
             Theme.StyleAccentButton(btnSave);
         }
 
         private void Section(Control parent, string text, ref int y)
         {
+            // Gold survives Theme.Apply untagged (Apply only repaints default-coloured labels).
             parent.Controls.Add(new Label { Text = text.ToUpperInvariant(), Location = new Point(16, y), AutoSize = true, ForeColor = Theme.Gold, Font = Theme.UIBold });
             y += 24;
         }
 
+        private void Hint(Control parent, string text, ref int y, int step)
+        {
+            parent.Controls.Add(new Label { Text = text, Location = new Point(20, y), AutoSize = true, ForeColor = Theme.Dim });
+            y += step;
+        }
+
         private void Check(Control parent, string text, Func<bool> get, Action<bool> set, ref int y)
         {
-            var cb = new CheckBox { Text = text, Location = new Point(20, y), AutoSize = true, Checked = get(), ForeColor = Theme.Text };
+            // ThemedCheckBox owner-draws its glyph: a stock CheckBox on a dark surface paints the TICK in a system
+            // near-black, so the checked state is invisible and clicks look like they did nothing.
+            var cb = new ThemedCheckBox { Text = text, Location = new Point(20, y), Size = new Size(340, 20), Checked = get() };
             cb.CheckedChanged += (s, e) => set(cb.Checked);
             parent.Controls.Add(cb);
             y += 26;
@@ -119,7 +123,5 @@ namespace VibeParty.Forms
             b.Click += onClick;
             return b;
         }
-
-        private static int Clamp(int v, int lo, int hi) => v < lo ? lo : (v > hi ? hi : v);
     }
 }

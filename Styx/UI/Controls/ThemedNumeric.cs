@@ -45,6 +45,10 @@ namespace Styx.UI
         [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden), Browsable(false)]
         public int Value { get => _value; set => SetValue(value); }
 
+        // Step per click / wheel notch (NumericUpDown parity).
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden), Browsable(false)]
+        public int Increment { get; set; } = 1;
+
         private void SetValue(int v)
         {
             if (v < _min) v = _min;
@@ -55,7 +59,7 @@ namespace Styx.UI
             ValueChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        private void Step(int direction) => SetValue(_value + direction);
+        private void Step(int direction) => SetValue(_value + direction * (Increment <= 0 ? 1 : Increment));
 
         private int RegionAt(Point p)
         {

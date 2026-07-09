@@ -1,11 +1,14 @@
 using System.Drawing;
 using System.Windows.Forms;
+using Styx.UI;
 
 namespace Bots.VibeGrinder
 {
     /// <summary>
     /// Settings UI: a PropertyGrid over VibeGrinderSettings with explicit Save / Cancel. Closing with
     /// the X (or Cancel) reverts in-memory edits by reloading from disk — only Save persists.
+    /// Skinned with the shared Styx.UI theme (deliberately NOT a ThemedForm: that fixes the border style,
+    /// and this grid wants to stay resizable).
     /// </summary>
     public class VibeGrinderSettingsForm : Form
     {
@@ -16,6 +19,9 @@ namespace Bots.VibeGrinder
             Text = "VibeGrinder Settings";
             Size = new Size(460, 620);
             StartPosition = FormStartPosition.CenterScreen;
+            BackColor = Theme.Bg;
+            ForeColor = Theme.Text;
+            Font = Theme.UI;
 
             var grid = new PropertyGrid
             {
@@ -44,6 +50,11 @@ namespace Bots.VibeGrinder
             Controls.Add(buttons);
             AcceptButton = save;
             CancelButton = cancel;
+
+            // Styx.UI ordering rule: generic theme first (this also skins the PropertyGrid), accents after.
+            Theme.Apply(this);
+            buttons.BackColor = Theme.Bg;
+            Theme.StyleAccentButton(save);
 
             // Discard edits on any close path that wasn't an explicit Save.
             FormClosing += (s, e) => { if (!_saved) VibeGrinderSettings.Instance.Load(); };

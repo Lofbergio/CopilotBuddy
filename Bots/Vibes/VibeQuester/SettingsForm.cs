@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Windows.Forms;
 using Styx;
 using Styx.Logic.Questing;
+using Styx.UI;
 using Styx.WoWInternals.WoWObjects;
 
 namespace VibeQuester
@@ -36,6 +37,9 @@ namespace VibeQuester
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
+            BackColor = Theme.Bg;
+            ForeColor = Theme.Text;
+            Font = Theme.UI;
 
             BuildForm();
             LoadSettings();
@@ -179,6 +183,12 @@ namespace VibeQuester
             };
             btnCancel.Click += (_, _) => Close();
             Controls.Add(btnCancel);
+
+            // Shared Styx.UI skin. Legacy form: it keeps its stock CheckBox/NumericUpDown controls (Apply themes
+            // them and deliberately does NOT flat-style the checkboxes, which would hide the tick). Ordering rule:
+            // generic theme first, accents after.
+            Theme.Apply(this);
+            Theme.StyleAccentButton(btnSave);
         }
 
         private void LoadSettings()

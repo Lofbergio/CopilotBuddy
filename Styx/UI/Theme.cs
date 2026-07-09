@@ -56,14 +56,40 @@ namespace Styx.UI
 
                 c.Font = UI;
                 if (c is Button b) StyleButton(b);
-                // Never force a CheckBox BackColor: with FlatStyle.Flat the glyph square is painted with it, and
-                // Transparent renders system-WHITE on a dark card. (Prefer ThemedCheckBox, which owner-draws.)
-                else if (c is CheckBox cbx) { cbx.ForeColor = Text; cbx.FlatStyle = FlatStyle.Flat; }
+                // NEVER flat-style a stock CheckBox. On a dark surface WinForms paints the TICK in a system
+                // near-black, so the checked state goes invisible and clicks look like they did nothing (learned
+                // the hard way twice — in VibeParty and again in GoodVibes). Recolour the caption only and leave
+                // the OS glyph legible. For a properly dark-themed glyph use ThemedCheckBox, which owner-draws.
+                else if (c is CheckBox cbx) cbx.ForeColor = Text;
                 else if (c is NumericUpDown n) { n.BackColor = PanelDark; n.ForeColor = Text; n.BorderStyle = BorderStyle.FixedSingle; }
                 else if (c is TextBox t) { t.BackColor = PanelDark; t.ForeColor = Text; t.BorderStyle = BorderStyle.FixedSingle; }
                 else if (c is ComboBox cb) { cb.FlatStyle = FlatStyle.Flat; cb.BackColor = PanelDark; cb.ForeColor = Text; }
                 else if (c is ListBox lb) { lb.BackColor = PanelDark; lb.ForeColor = Text; lb.BorderStyle = BorderStyle.FixedSingle; }
-                else if (c is Label l) { l.ForeColor = Text; l.BackColor = Color.Transparent; }
+                // PropertyGrid ignores BackColor/ForeColor — it exposes its own colour surface.
+                else if (c is PropertyGrid pg)
+                {
+                    pg.BackColor = Bg;
+                    pg.ViewBackColor = PanelDark;
+                    pg.ViewForeColor = Text;
+                    pg.ViewBorderColor = Border;
+                    pg.LineColor = Border;
+                    pg.CategoryForeColor = Gold;
+                    pg.CategorySplitterColor = Border;
+                    pg.HelpBackColor = Panel;
+                    pg.HelpForeColor = Dim;
+                    pg.HelpBorderColor = Border;
+                    pg.CommandsBackColor = Panel;
+                    pg.CommandsForeColor = Text;
+                    pg.DisabledItemForeColor = Dim;
+                }
+                // A Label that was GIVEN a colour keeps it — so gold section headers survive without any tag.
+                // Only default-coloured labels drop to parchment. (Font still normalises to Theme.UI; use
+                // AccentLabel/KeepTag when a custom FONT must survive too, e.g. a 15pt title.)
+                else if (c is Label l)
+                {
+                    l.BackColor = Color.Transparent;
+                    if (l.ForeColor == Control.DefaultForeColor) l.ForeColor = Text;
+                }
 
                 Apply(c);
             }
