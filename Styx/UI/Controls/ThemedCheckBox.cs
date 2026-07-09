@@ -35,7 +35,9 @@ namespace Styx.UI
         {
             var g = e.Graphics;
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            g.Clear(BackColor);
+            // Honour Transparent by painting the PARENT's colour: lets the box sit on a hover-tinted list row
+            // (Graphics.Clear(Transparent) would paint black). Set Text = "" for a glyph-only toggle.
+            g.Clear(BackColor == Color.Transparent && Parent != null ? Parent.BackColor : BackColor);
 
             var box = new Rectangle(0, (Height - BoxSize) / 2, BoxSize, BoxSize);
 

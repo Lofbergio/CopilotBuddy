@@ -120,9 +120,10 @@ namespace Styx.UI
                 using (var hot = new SolidBrush(Theme.HoverBg))
                     g.FillRectangle(hot, _hover < 0 ? minus : plus);
 
-            using (var pen = new Pen(Theme.Border))
+            using (var outer = new Pen(Theme.Hairline))       // black hairline around the well (ElvUI)
+                g.DrawRectangle(outer, 0, 0, Width - 1, Height - 1);
+            using (var pen = new Pen(Theme.Border))           // soft separators stay visible on dark
             {
-                g.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
                 g.DrawLine(pen, ButtonW, 0, ButtonW, Height - 1);
                 g.DrawLine(pen, Width - ButtonW - 1, 0, Width - ButtonW - 1, Height - 1);
             }

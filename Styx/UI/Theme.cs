@@ -32,13 +32,32 @@ namespace Styx.UI
         public static readonly Color GoldBright = Color.FromArgb(242, 214, 128);
         public static readonly Color Green = Color.FromArgb(96, 186, 96);    // partial / in-progress state
         public static readonly Color GreenBright = Color.FromArgb(132, 222, 122);
-        public static readonly Color Border = Color.FromArgb(58, 64, 72);
+        public static readonly Color Border = Color.FromArgb(58, 64, 72);     // soft separator / divider
         public static readonly Color HoverBg = Color.FromArgb(52, 58, 68);
         public static readonly Color DownBg = Color.FromArgb(62, 68, 80);
+        public static readonly Color RowHover = Color.FromArgb(52, 58, 68);   // list-row hover tint
+        public static readonly Color Danger = Color.FromArgb(224, 96, 96);    // destructive action / close ✕
+
+        // ElvUI's actual `bordercolor` default is pure BLACK (Settings/Profile.lua: {r=0,g=0,b=0}, pixelPerfect)
+        // — a crisp 1px black hairline around every box is its signature. Use it for STRUCTURAL boxes (cards,
+        // input wells, frameless form frames). Keep `Border` (soft grey) for dividers and interactive outlines,
+        // where a black line would erase the affordance on a dark surface.
+        public static readonly Color Hairline = Color.FromArgb(0, 0, 0);
 
         public static readonly Font UI = new Font("Segoe UI", 9f);
         public static readonly Font UIBold = new Font("Segoe UI", 9f, FontStyle.Bold);
+        public static readonly Font Small = new Font("Segoe UI", 8.25f);      // hints / helper text
+        public static readonly Font Section = new Font("Segoe UI Semibold", 9f);
         public static readonly Font Title = new Font("Segoe UI", 15f, FontStyle.Bold);
+
+        // One shared ToolTip for the whole app. Settings dialogs without hover help are a UX gap; this makes
+        // adding it a one-liner: Theme.Tip(control, "why this knob exists").
+        private static readonly ToolTip Tips = new ToolTip { AutoPopDelay = 20000, InitialDelay = 350, ReshowDelay = 100 };
+
+        public static void Tip(Control c, string text)
+        {
+            if (c != null && !string.IsNullOrEmpty(text)) Tips.SetToolTip(c, text);
+        }
 
         // Recursively theme standard controls. Call it ONCE, after every control is added — then apply accents
         // (StyleAccentButton, NavBar.Select) afterwards, or Apply will overwrite them.

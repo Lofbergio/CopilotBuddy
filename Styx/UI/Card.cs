@@ -16,7 +16,7 @@ namespace Styx.UI
         {
             Location = location;
             Size = size;
-            BackColor = Theme.Border;
+            BackColor = Theme.Hairline;   // ElvUI's signature: a crisp 1px BLACK hairline around every box
             Padding = new Padding(1);
 
             Content = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Panel };
