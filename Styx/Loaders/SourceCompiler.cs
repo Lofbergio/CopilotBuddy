@@ -80,7 +80,13 @@ namespace Styx.Loaders
                 // defined here; it loads lazily so it isn't in GetAssemblies() yet. Without it, ANY drop-in
                 // that subclasses Form fails Roslyn with "type X is defined in an assembly that is not
                 // referenced (System.Windows.Forms.Primitives)". Force-load so compiled forms resolve.
-                "System.Windows.Forms.Primitives"
+                "System.Windows.Forms.Primitives",
+                // Same trap, one layer down: Graphics' members reference IGraphics/IGraphicsContextInfo, which
+                // live here. GDI+ also loads lazily, so a ROUTINE (compiled early at startup, before anything has
+                // painted) can't resolve Graphics and the whole routine dies with "Loaded 0 combat routine(s)" —
+                // while a PLUGIN, compiled later once GDI+ is up, compiles fine. Force-load so any drop-in that
+                // custom-paints (owner-drawn controls, OnPaint) resolves regardless of load order.
+                "System.Private.Windows.GdiPlus"
             };
 
             foreach (var name in wpfAssemblyNames)
