@@ -13,20 +13,28 @@ namespace Bots.VibeGrinder.Selection
     /// </summary>
     public class FactionResolver
     {
-        // CREATURE_TYPE_HUMANOID (3.3.5a). Neutral humanoid factions are the rep-bearing ones
-        // (goblin towns, ogre clans, etc.) we must not grind unattended.
+        // CREATURE_TYPE_HUMANOID (3.3.5a). The neutral-humanoid guard protects REP-BEARING factions
+        // (cartel towns — killing their guards overnight bricks the bot's own vendor/flight hubs).
         public const int HumanoidType = 7;
 
         /// <summary>Reaction below Neutral (Hated/Hostile/Unfriendly) — attackable regardless of type.</summary>
         public HashSet<int> HostileFactions { get; private set; } = new HashSet<int>();
 
-        /// <summary>Reaction exactly Neutral (yellow) — attackable only for non-humanoid mobs.</summary>
+        /// <summary>Reaction exactly Neutral (yellow) — attackable unless humanoid AND rep-bearing.</summary>
         public HashSet<int> NeutralFactions { get; private set; } = new HashSet<int>();
+
+        /// <summary>Neutral factions whose Faction.dbc row carries a reputation index — the ones the
+        /// humanoid guard actually exists for. Since Wrath made ALL starter-zone mobs neutral, a blanket
+        /// neutral-humanoid exclusion blinded spot selection to kobold/Defias-type populations (the
+        /// densest low-level grind real estate) while TARGETING still killed them opportunistically —
+        /// rep-less neutral humanoids are now eligible (2026-07-10, Northshire L1 validation).</summary>
+        public HashSet<int> RepBearingNeutrals { get; private set; } = new HashSet<int>();
 
         public void Build(uint mapId)
         {
             var hostile = new HashSet<int>();
             var neutral = new HashSet<int>();
+            var repBearing = new HashSet<int>();
             var me = StyxWoW.Me;
             // Compare via FactionTemplate.dbc, the MOB's reaction toward the player ("does it aggro us").
             // NOT WoWFaction.RelationTo: that path took the player's faction from me.FactionTemplate.Faction,
@@ -51,7 +59,14 @@ namespace Bots.VibeGrinder.Selection
                         if (r < WoWUnitReaction.Neutral)
                             hostile.Add(faction);          // red/orange — aggros on sight; counts as add-risk
                         else if (r == WoWUnitReaction.Neutral)
-                            neutral.Add(faction);          // yellow — passive; grindable only if non-humanoid
+                        {
+                            neutral.Add(faction);          // yellow — passive
+                            // Rep-bearing = Faction.dbc reputationIndex >= 0 (RepGainId; -1 = no rep row).
+                            // DBC lookup failure keeps the faction PROTECTED (old blanket behavior).
+                            WoWFaction f = mobTemplate.Faction;
+                            if (f == null || f.Record.RepGainId >= 0)
+                                repBearing.Add(faction);
+                        }
                     }
                     catch
                     {
@@ -61,18 +76,20 @@ namespace Bots.VibeGrinder.Selection
             }
             HostileFactions = hostile;
             NeutralFactions = neutral;
+            RepBearingNeutrals = repBearing;
         }
 
         /// <summary>
         /// Two-tier safety: hostile/unfriendly factions are attackable for any creature type;
-        /// neutral factions only for non-humanoids — avoids tanking reputation with neutral
-        /// humanoid factions (towns/clans) over a long unattended session.
+        /// neutral factions unless the mob is humanoid AND its faction carries reputation —
+        /// protects the cartel vendor towns the bot itself depends on, without hiding rep-less
+        /// neutral humanoids (kobolds/Defias — post-Wrath starter zones are ALL neutral).
         /// </summary>
         public bool IsAttackable(int faction, int type)
         {
             if (HostileFactions.Contains(faction))
                 return true;
-            if (NeutralFactions.Contains(faction) && type != HumanoidType)
+            if (NeutralFactions.Contains(faction) && (type != HumanoidType || !RepBearingNeutrals.Contains(faction)))
                 return true;
             return false;
         }
