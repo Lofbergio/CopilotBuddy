@@ -36,8 +36,31 @@ namespace Styx.Database
         // Dictionary<NpcResult,bool> used reference equality — every query builds fresh NpcResult objects,
         // so the cache NEVER hit and CanNavigateFully (a full Detour pathfind) ran for every candidate on
         // every call (×4 vendor types per roam tick → severe FPS drop while roaming). Entry-keyed = real cache.
-        private static readonly Dictionary<int, bool> _trainerNavCache = new Dictionary<int, bool>();
-        private static readonly Dictionary<int, bool> _npcNavCache = new Dictionary<int, bool>();
+        // Positives are stable (mesh connectivity), but negatives EXPIRE: CanNavigateFully fails on
+        // partial paths, which happen legitimately from far/unloaded tiles — a permanently cached false
+        // hid the CLOSEST trainer for the whole session (bot ran 1300yd past Tuluun to Firmanvaar, 2026-07-10).
+        private static readonly Dictionary<int, (bool ok, DateTime when)> _trainerNavCache = new Dictionary<int, (bool, DateTime)>();
+        private static readonly Dictionary<int, (bool ok, DateTime when)> _npcNavCache = new Dictionary<int, (bool, DateTime)>();
+        private static readonly TimeSpan NavNegativeTtl = TimeSpan.FromMinutes(3);
+
+        private static bool CanNavigateCached(Dictionary<int, (bool ok, DateTime when)> cache, int entry, WoWPoint from, WoWPoint to)
+        {
+            if (cache.TryGetValue(entry, out var c) && (c.ok || DateTime.UtcNow - c.when < NavNegativeTtl))
+                return c.ok;
+            bool canNav = Navigator.CanNavigateFully(from, to);
+            cache[entry] = (canNav, DateTime.UtcNow);
+            return canNav;
+        }
+
+        // data.bin `faction` is a faction-TEMPLATE id. WoWFaction.RelationTo reads Neutral for
+        // everything here (gotchas.md: player side is template-less) — the DBC-correct check is
+        // GetReactionTowards. Null template (odd/removed id) stays permissive like the old behavior.
+        private static bool IsFactionUsable(uint factionTemplateId)
+        {
+            var tmpl = WoWFactionTemplate.FromId(factionTemplateId);
+            var reaction = tmpl?.GetReactionTowards(StyxWoW.Me.FactionTemplate) ?? WoWUnitReaction.Neutral;
+            return reaction >= WoWUnitReaction.Neutral;
+        }
 
         #endregion
 
@@ -119,7 +142,18 @@ namespace Styx.Database
             EnsureInitialized();
             if (_getNearestTrainerCmd == null) return null;
 
-            int minLevel = StyxWoW.Me.Level > 10 ? 10 : 0;
+            // Prefer a trainer whose NPC level >= ours: data.bin `level` tracks trainer tier
+            // (starting-area 6, village 15, city 40-70), and tier-limited servers teach NOTHING at an
+            // outgrown trainer (BuyAll buys 0 and the training silently "succeeds"). Fall back to the
+            // old HB rule when the map has no such trainer (e.g. high-level chars, sparse maps).
+            NpcResult result = QueryNearestTrainer(mapId, searchLocation, searchClass, (int)StyxWoW.Me.Level, excludeEntries);
+            if (result == null)
+                result = QueryNearestTrainer(mapId, searchLocation, searchClass, StyxWoW.Me.Level > 10 ? 10 : 0, excludeEntries);
+            return result;
+        }
+
+        private static NpcResult QueryNearestTrainer(uint mapId, WoWPoint searchLocation, WoWClass searchClass, int minLevel, HashSet<int> excludeEntries)
+        {
             WoWPoint location = StyxWoW.Me.Location;
 
             using var reader = Connection.ExecuteReader(_getNearestTrainerCmd,
@@ -139,18 +173,10 @@ namespace Styx.Database
                     continue; // blacklisted (e.g. couldn't be reached/interacted last time)
                 if (!string.IsNullOrEmpty(result.Name) && result.Name.IndexOf("[DND]", StringComparison.OrdinalIgnoreCase) >= 0)
                     continue; // [DND] placeholder/disabled NPC, not a real trainer
-                if ((result.NpcFlags & 32U) != 0U && myFaction.RelationTo(new WoWFaction(result.Faction)) >= WoWUnitReaction.Neutral)
+                if ((result.NpcFlags & 32U) != 0U && IsFactionUsable(result.Faction))
                 {
-                    if (_trainerNavCache.TryGetValue(result.Entry, out bool cached))
-                    {
-                        if (!cached) continue;
-                    }
-                    else
-                    {
-                        bool canNav = Navigator.CanNavigateFully(location, result.Location);
-                        _trainerNavCache[result.Entry] = canNav;
-                        if (!canNav) continue;
-                    }
+                    if (!CanNavigateCached(_trainerNavCache, result.Entry, location, result.Location))
+                        continue;
                     return result;
                 }
             }
@@ -207,18 +233,10 @@ namespace Styx.Database
                 
                 // Check if class trainer matches our class (if applicable) and faction is friendly
                 if (((npcFlags & UnitNPCFlags.ClassTrainer) == UnitNPCFlags.None || result.TrainerClass == (int)myClass) &&
-                    myFaction.RelationTo(new WoWFaction(result.Faction)) >= WoWUnitReaction.Neutral)
+                    IsFactionUsable(result.Faction))
                 {
-                    if (_npcNavCache.TryGetValue(result.Entry, out bool cached))
-                    {
-                        if (!cached) continue;
-                    }
-                    else
-                    {
-                        bool canNav = Navigator.CanNavigateFully(location, result.Location);
-                        _npcNavCache[result.Entry] = canNav;
-                        if (!canNav) continue;
-                    }
+                    if (!CanNavigateCached(_npcNavCache, result.Entry, location, result.Location))
+                        continue;
                     return result;
                 }
             }
