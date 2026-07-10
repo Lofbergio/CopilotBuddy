@@ -79,7 +79,11 @@ for batch_start in range(0, len(missing_list), batch_size):
     batch = missing_list[batch_start:batch_start + batch_size]
     entry_list = ",".join(str(e) for e in batch)
     
-    sql = f"SELECT id, map, position_x, position_y, position_z FROM world.creature WHERE id IN ({entry_list})"
+    # Exclude event-gated spawns (eventEntry > 0 = exists only while the event runs) — they read as
+    # permanent to consumers (ghost trainers, Hallow's End fire bunnies flagging villages hostile).
+    sql = (f"SELECT c.id, c.map, c.position_x, c.position_y, c.position_z FROM world.creature c "
+           f"WHERE c.id IN ({entry_list}) "
+           f"AND NOT EXISTS (SELECT 1 FROM world.game_event_creature g WHERE g.guid = c.guid AND g.eventEntry > 0)")
     rows = mysql_query(sql)
     
     if rows:

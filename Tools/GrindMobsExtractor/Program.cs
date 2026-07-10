@@ -150,9 +150,15 @@ FROM creature_template";
         using var conn = new MySqlConnection(ConnStr(worldDb));
         conn.Open();
 
+        // Exclude event-gated spawns (game_event_creature, eventEntry > 0 = exists ONLY while the
+        // event runs): Hallow's End fire bunnies (faction 14, lvl 70, 14 of them inside Azure Watch)
+        // read as a hostile camp to VendorLocationSafe/danger modeling, and Arena Tournament generic
+        // trainers ghost-trip the vendor resolver. eventEntry < 0 (despawned DURING an event) is the
+        // normally-present case — kept.
         string sql = $@"
 SELECT `{entryCol}` AS entry, map, position_x, position_y, position_z
-FROM creature";
+FROM creature c
+WHERE NOT EXISTS (SELECT 1 FROM game_event_creature g WHERE g.guid = c.guid AND g.eventEntry > 0)";
 
         using var cmd = new MySqlCommand(sql, conn);
         using var r = cmd.ExecuteReader();
@@ -182,10 +188,12 @@ FROM creature";
 
         // AzerothCore: gameobject.id references gameobject_template.entry. If a fork uses a different
         // spawn-entry column, adjust g.id here (mirrors the creature id1/id detection).
+        // Event-gated mailboxes excluded for the same reason as event creature spawns.
         const string sql = @"
 SELECT g.map, g.position_x, g.position_y, g.position_z
 FROM gameobject g JOIN gameobject_template t ON t.entry = g.id
-WHERE t.type = 19";
+WHERE t.type = 19
+  AND NOT EXISTS (SELECT 1 FROM game_event_gameobject e WHERE e.guid = g.guid AND e.eventEntry > 0)";
 
         using var cmd = new MySqlCommand(sql, conn);
         using var r = cmd.ExecuteReader();
