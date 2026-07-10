@@ -136,6 +136,12 @@ namespace CopilotBuddy.UI
         {
             base.OnSourceInitialized(e);
 
+            // Under Warband (/relog=), the window's position and size belong to Warband's
+            // layout, not to UISettings.xml — which is shared by every box in this install.
+            // Restoring here would start all N boxes stacked on one saved rect.
+            if (RelogSettings.IsWarbandManaged)
+                return;
+
             try
             {
                 var s = UISettings.Instance; // singleton already loaded in its ctor
@@ -342,6 +348,10 @@ namespace CopilotBuddy.UI
                 Logging.Write(Colors.Red, "Failed to initialize plugins: {0}", ex.Message);
                 Logging.WriteException(ex);
             }
+
+            // Warband: publish the capabilities manifest now that botbases, routines,
+            // and plugins are all loaded (self-updating; the hub reads it for its picker).
+            WarbandManifest.Dump();
 
             Dispatcher.Invoke(() =>
             {
@@ -644,23 +654,29 @@ namespace CopilotBuddy.UI
             // already writes the correct coordinates to UISettings.xml.
             // Use RestoreBounds so we always capture the Normal-state rect
             // even when the window is currently maximized.
+            // Under Warband the current rect is a Warband ZONE, not a user preference.
+            // UISettings.xml is shared across the install, so saving it here would let the
+            // last box to close overwrite the geometry a standalone CB reads next run.
             try
             {
-                // Always use RestoreBounds to get the Normal-state rect,
-                // even if currently maximized — avoids saving the -8 maximized offset.
-                Rect bounds = this.RestoreBounds;
-                if (bounds.IsEmpty || double.IsNaN(bounds.X))
-                    bounds = new Rect(this.Left, this.Top, this.Width, this.Height);
-
-                if (!bounds.IsEmpty && !double.IsNaN(bounds.X) && bounds.X >= 0 && bounds.Y >= 0)
+                if (!RelogSettings.IsWarbandManaged)
                 {
-                    UISettings.Instance.MainWindowLocationX = (int)bounds.X;
-                    UISettings.Instance.MainWindowLocationY = (int)bounds.Y;
-                    UISettings.Instance.MainWindowWidth     = (int)bounds.Width;
-                    UISettings.Instance.MainWindowHeight    = (int)bounds.Height;
+                    // Always use RestoreBounds to get the Normal-state rect,
+                    // even if currently maximized — avoids saving the -8 maximized offset.
+                    Rect bounds = this.RestoreBounds;
+                    if (bounds.IsEmpty || double.IsNaN(bounds.X))
+                        bounds = new Rect(this.Left, this.Top, this.Width, this.Height);
+
+                    if (!bounds.IsEmpty && !double.IsNaN(bounds.X) && bounds.X >= 0 && bounds.Y >= 0)
+                    {
+                        UISettings.Instance.MainWindowLocationX = (int)bounds.X;
+                        UISettings.Instance.MainWindowLocationY = (int)bounds.Y;
+                        UISettings.Instance.MainWindowWidth     = (int)bounds.Width;
+                        UISettings.Instance.MainWindowHeight    = (int)bounds.Height;
+                    }
+                    UISettings.Instance.MainWindowState = this.WindowState;
+                    UISettings.Instance.Save();
                 }
-                UISettings.Instance.MainWindowState = this.WindowState;
-                UISettings.Instance.Save();
             }
             catch (Exception ex)
             {

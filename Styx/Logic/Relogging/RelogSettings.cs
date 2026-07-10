@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Styx.Helpers;
@@ -13,13 +14,36 @@ namespace Styx.Logic.Relogging
     /// </summary>
     public class RelogSettings : Settings
     {
-        public static readonly RelogSettings Instance = new RelogSettings();
+        private static readonly Lazy<RelogSettings> _instance = new Lazy<RelogSettings>(Create);
+        public static RelogSettings Instance => _instance.Value;
+
+        /// <summary>
+        /// True when this CB was launched by Warband, i.e. with /relog=&lt;path&gt;.
+        ///
+        /// Warband runs N CBs from a single install and owns their window placement, so a
+        /// managed CB must not restore or persist its window geometry: UISettings.xml is
+        /// shared across the whole install, so every box would restore the same rect and
+        /// the last box to close would save Warband's zone rect into the settings a
+        /// standalone CB later reads.
+        /// </summary>
+        public static bool IsWarbandManaged { get; } = Environment.GetCommandLineArgs()
+            .Any(a => a.StartsWith("/relog=", StringComparison.OrdinalIgnoreCase));
+
+        // Warband launches each CB with /relog=<path> to pick that box's identity; else the default file.
+        private static RelogSettings Create()
+        {
+            string relogArg = Environment.GetCommandLineArgs()
+                .FirstOrDefault(a => a.StartsWith("/relog=", StringComparison.OrdinalIgnoreCase));
+            string path = relogArg != null
+                ? relogArg.Substring("/relog=".Length).Trim('"')
+                : Path.Combine(SettingsDirectory, "RelogSettings.xml");
+            return new RelogSettings(path);
+        }
 
         // Ties the blob to this app so another DPAPI consumer can't silently decrypt it.
         private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("CopilotBuddy.Relogger");
 
-        public RelogSettings()
-            : base(Path.Combine(SettingsDirectory, "RelogSettings.xml"))
+        private RelogSettings(string path) : base(path)
         {
         }
 

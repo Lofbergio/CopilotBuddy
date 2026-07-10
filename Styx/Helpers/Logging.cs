@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 using System.Windows.Media;
 
@@ -139,6 +140,10 @@ namespace Styx.Helpers
             {
                 WriteToFile(logMessage.ToString());
             }
+
+            // Warband: mirror EVERY line (all levels) to a per-pid, severity-tagged file
+            // so the Warband hub can tail Logs\warband-<pid>.log and filter per box.
+            WriteWarbandLine(level, color, message);
         }
 
         public static void Write(LogLevel level, WpfColor color, string format, params object[] args)
@@ -373,6 +378,54 @@ namespace Styx.Helpers
         public static void FileOnly(string format, params object[] args)
         {
             FileOnly(string.Format(CultureInfo.InvariantCulture, format, args));
+        }
+
+        #endregion
+
+        #region Warband per-box log
+
+        // Warband runs N CBs from one install with /relog=<path>. Each writes a per-pid
+        // log the hub tails, with an explicit Debug|Info|Warn|Error token per line so the
+        // hub's severity filter works without reparsing CB's LogLevel/color scheme.
+        private static readonly bool WarbandLaunched = Environment.GetCommandLineArgs()
+            .Any(a => a.StartsWith("/relog=", StringComparison.OrdinalIgnoreCase));
+
+        private static readonly string WarbandLogPath = WarbandLaunched
+            ? Path.Combine(ApplicationPath, "Logs", $"warband-{Process.GetCurrentProcess().Id}.log")
+            : null;
+
+        private static readonly object _wbLock = new object();
+
+        // Map CB's (level, color, prefix) scheme onto the hub's four buckets.
+        private static string WarbandSeverity(LogLevel level, WpfColor color, string message)
+        {
+            if (color == ColorError || message.StartsWith("[ERROR]", StringComparison.Ordinal))
+                return "Error";
+            if (color == WpfColors.Yellow || message.StartsWith("[WARNING]", StringComparison.Ordinal))
+                return "Warn";
+            return level >= LogLevel.Verbose ? "Debug" : "Info";
+        }
+
+        private static void WriteWarbandLine(LogLevel level, WpfColor color, string message)
+        {
+            if (WarbandLogPath == null)
+                return;
+            try
+            {
+                string line = string.Format(CultureInfo.InvariantCulture, "[{0:HH:mm:ss.fff}] [{1}] {2}",
+                    DateTime.Now, WarbandSeverity(level, color, message), message);
+                lock (_wbLock)
+                {
+                    var dir = Path.GetDirectoryName(WarbandLogPath);
+                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                        Directory.CreateDirectory(dir);
+                    File.AppendAllText(WarbandLogPath, line + Environment.NewLine);
+                }
+            }
+            catch
+            {
+                // Never let hub-logging IO affect the bot.
+            }
         }
 
         #endregion

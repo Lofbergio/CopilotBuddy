@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using Styx.Helpers;
 using Styx.Logic.BehaviorTree;
@@ -18,7 +19,13 @@ namespace Styx.Logic.Relogging
     {
         private static System.Threading.Timer? _timer;
 
-        public static string FilePath => Path.Combine(Logging.ApplicationPath, "heartbeat.json");
+        // Warband runs N CBs from one install → per-pid file so they don't stomp each other.
+        // Only under /relog= (Warband mode); a standalone/Watchdog CB keeps the fixed name.
+        private static bool WarbandLaunched => Environment.GetCommandLineArgs()
+            .Any(a => a.StartsWith("/relog=", StringComparison.OrdinalIgnoreCase));
+
+        public static string FilePath => Path.Combine(Logging.ApplicationPath,
+            WarbandLaunched ? $"heartbeat.{Process.GetCurrentProcess().Id}.json" : "heartbeat.json");
 
         public static void Start()
         {
