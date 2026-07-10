@@ -41,6 +41,21 @@ namespace Bots.VibeGrinder.Selection
         // the whole continent); 0 = normal S.MaxTravelDistance. Everything else is unchanged.
         public GrindSpot SelectBest(uint mapId, WoWPoint playerLoc, int playerLevel, IEnumerable<(WoWPoint center, float radius)> blacklist, double caution = 1.0, float maxTravelOverride = 0f)
         {
+            // Selection is seconds of pathfinds + spatial math and needs no frame-consistent game reads
+            // (inputs are snapshotted args; TraceLine locks the executor per call; ObjectManager reads get
+            // UseFrameLock=false-grade consistency, fine for counting nearby players). Holding the tick's
+            // FrameLock here froze the CLIENT for the whole pick (5-7s at L9, log 2026-07-10_1154) — release
+            // it like StyxWoW.Sleep does so WoW renders while we think.
+            if (Styx.Logic.BehaviorTree.TreeRoot.CurrentThreadIsBotThread)
+            {
+                using (StyxWoW.Memory.ReleaseFrame(true))
+                    return SelectBestCore(mapId, playerLoc, playerLevel, blacklist, caution, maxTravelOverride);
+            }
+            return SelectBestCore(mapId, playerLoc, playerLevel, blacklist, caution, maxTravelOverride);
+        }
+
+        private GrindSpot SelectBestCore(uint mapId, WoWPoint playerLoc, int playerLevel, IEnumerable<(WoWPoint center, float radius)> blacklist, double caution, float maxTravelOverride)
+        {
             var blocked = blacklist != null ? blacklist.ToList() : new List<(WoWPoint center, float radius)>();
 
             // Path-gauntlet leniency ladder: prefer a route that avoids over-level hostiles, but if nothing
