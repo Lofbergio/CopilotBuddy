@@ -143,10 +143,18 @@ return picked", Lua.Escape(realmName)));
             return false;
         }
 
-        public enum EnterWorldResult { Sent, ListEmpty, NotFound }
+        public enum EnterWorldResult { Sent, Selecting, ListEmpty, NotFound }
 
         /// <summary>
         /// At character select, picks the character by name (empty = keep current selection) and enters world.
+        ///
+        /// Selecting a character is a SERVER ROUND-TRIP. Calling CharacterSelect_SelectCharacter and
+        /// EnterWorld in the same Lua chunk sends the login before the selection is acknowledged: the
+        /// server rejects it and the client drops back to character select, forever. That never showed up
+        /// while CharacterName was empty (no selection call at all — the standalone default), and it broke
+        /// the moment Warband started configuring a character per box. So: select, return Selecting, and
+        /// let the next relogger tick (~2s later) send EnterWorld against the settled selection.
+        ///
         /// ListEmpty ≠ NotFound: during a worldserver boot the char list populates ASYNCHRONOUSLY (and stays
         /// empty while the world is still down) — reading that as "character doesn't exist" turned every 3am
         /// server restart into a terminal GiveUp for a named-character config. Only a POPULATED list that
@@ -162,7 +170,11 @@ if target~='' then
   if n==0 then return 'empty',n end
   for i=1,n do local nm=GetCharacterInfo(i); if nm and nm:lower()==target:lower() then idx=i end end
   if idx==0 then return 'notfound',n end
-  if CharacterSelect_SelectCharacter then CharacterSelect_SelectCharacter(idx) else SelectCharacter(idx) end
+  local cur=(CharacterSelect and CharacterSelect.selectedIndex) or 0
+  if cur~=idx then
+    if CharacterSelect_SelectCharacter then CharacterSelect_SelectCharacter(idx) else SelectCharacter(idx) end
+    return 'selecting',n
+  end
 end
 if EnterWorld then EnterWorld() end
 return 'ok',n", Lua.Escape(characterName)));
@@ -170,6 +182,8 @@ return 'ok',n", Lua.Escape(characterName)));
             string r = vals != null && vals.Count > 0 ? vals[0] : "ok";
             if (r == "empty")
                 return EnterWorldResult.ListEmpty;
+            if (r == "selecting")
+                return EnterWorldResult.Selecting;
             if (r == "notfound")
             {
                 Logging.Write(System.Windows.Media.Colors.Red,

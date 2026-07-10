@@ -63,6 +63,15 @@ namespace Styx.Logic.Relogging
         private static readonly int[] BackoffLadderSeconds = { 5, 15, 30, 60, 120, 300 };
         private const int WorldStableSeconds = 5;
 
+        /// <summary>
+        /// How long to let character select settle before sending EnterWorld.
+        ///
+        /// The client reaches CharSelect the instant it receives the character list, but the enumeration is
+        /// still being processed; an EnterWorld fired immediately is rejected and the client drops back here.
+        /// Costs one relogger tick on the happy path and saves a full bounce-and-retry cycle.
+        /// </summary>
+        private const int CharSelectSettleSeconds = 2;
+
         // Dialog text classification (English client — same caveat as UI_ERROR_MESSAGE matching).
         // Fatal: never retried. In-progress: the connecting/queue status dialog — wait, don't dismiss.
         private static readonly string[] FatalDialogFragments = { "is not valid", "banned", "suspended" };
@@ -285,6 +294,11 @@ namespace Styx.Logic.Relogging
                     break;
 
                 case GlueScreen.CharSelect:
+                    // Let the character list settle first. Bouncing back off a rejected EnterWorld also
+                    // resets _screenEnteredUtc, so every retry gets the same grace.
+                    if ((DateTime.UtcNow - _screenEnteredUtc).TotalSeconds < CharSelectSettleSeconds)
+                        break;
+
                     switch (GlueSession.EnterWorld(RelogSettings.Instance.CharacterName))
                     {
                         case GlueSession.EnterWorldResult.NotFound:
@@ -294,6 +308,11 @@ namespace Styx.Logic.Relogging
                         case GlueSession.EnterWorldResult.ListEmpty:
                             // Worldserver still booting — char list not populated yet. Wait; the charselect
                             // dwell (45s) paces retries via the normal backoff, never a give-up.
+                            break;
+                        case GlueSession.EnterWorldResult.Selecting:
+                            // Selection is a server round-trip. Enter world on the NEXT tick, once it has
+                            // settled — sending both together makes the server bounce us back here forever.
+                            Logging.Write("[Relogger] Selecting character '{0}'...", RelogSettings.Instance.CharacterName);
                             break;
                         default:
                             Logging.Write("[Relogger] Entering world...");
