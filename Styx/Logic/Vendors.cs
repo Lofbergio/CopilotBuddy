@@ -95,7 +95,14 @@ namespace Styx.Logic
 			// skipped purely for cost, keep NeedClassTraining set so NeedToTrain() re-fires after the next
 			// sell run earns money (i.e. training is re-evaluated on every sell run, for free).
 			if (result.UnaffordableRemaining == 0)
+			{
 				NeedClassTraining = false;
+				// Tier-limited servers: an outgrown trainer (e.g. starting-area, teaches <= lvl 6) has an
+				// EMPTY available list — indistinguishable from "fully trained". Name it in the log so a
+				// missing-spells report is a one-log diagnosis, not a mystery.
+				if (result.Bought == 0)
+					Logging.Write("Trainer had nothing to teach at level {0} — if spells are missing, this trainer's teach list may cap below your level.", StyxWoW.Me.Level);
+			}
 			else
 				Logging.Write("Could not afford {0} spell(s) — will retry training after earning more money.", result.UnaffordableRemaining);
 
