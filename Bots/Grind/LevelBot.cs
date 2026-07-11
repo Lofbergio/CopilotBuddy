@@ -1182,6 +1182,10 @@ namespace Bots.Grind
                                     new Sequence(
                                         new TreeSharp.Action(ctx => Navigator.PlayerMover.MoveStop()),
                                         new TreeSharp.Action(ctx => SleepForLag()),
+                                        // Wrong-DB defense: count interacts per (entry, POI type). An NPC the
+                                        // vendor DB flags as a vendor/trainer but that never yields its ACTION
+                                        // frame on this server would otherwise be re-interacted forever.
+                                        new TreeSharp.Action(ctx => TrackVendorInteract()),
                                         new TreeSharp.Action(ctx => BotPoi.Current.AsObject.Interact()),
                                         new WaitContinue(5, ctx => IsVendorFrameOpen(),
                                             new PrioritySelector(
@@ -1213,6 +1217,30 @@ namespace Bots.Grind
                                                 }),
                                                 new ActionClearPoi("Flight master blacklisted")
                                             )
+                                        ),
+                                        // Any other vendor POI whose ACTION frame still isn't up after the
+                                        // interact cap (no frame at all, or gossip-only every time): the DB is
+                                        // wrong about this NPC (not a vendor/trainer on this server) —
+                                        // blacklist the resolve and move on; the next Need* pass picks another
+                                        // vendor, or none and the bot just carries on.
+                                        new DecoratorContinue(
+                                            ctx => BotPoi.Current.Type != PoiType.Fly && !PoiActionFrameOpen()
+                                                   && _vendorInteracts >= VendorInteractCap,
+                                            new Sequence(
+                                                new TreeSharp.Action(ctx => Logging.Write(System.Drawing.Color.Orange,
+                                                    "{0} [{1}] resolved as a {2} vendor but offers no frame after {3} tries — blacklisting.",
+                                                    BotPoi.Current.Name, BotPoi.Current.Entry, BotPoi.Current.Type, _vendorInteracts)),
+                                                new DecoratorContinue(
+                                                    ctx => BotPoi.Current.AsVendor != null,
+                                                    new TreeSharp.Action(ctx =>
+                                                        ProfileManager.CurrentProfile.VendorManager.Blacklist.Add(BotPoi.Current.AsVendor))),
+                                                new TreeSharp.Action(ctx =>
+                                                {
+                                                    if (BotPoi.Current.AsObject != null)
+                                                        Blacklist.Add(BotPoi.Current.AsObject.Guid, TimeSpan.FromMinutes(30));
+                                                }),
+                                                new ActionClearPoi("Vendor offers no frame — blacklisted")
+                                            )
                                         )
                                     )
                                 ),
@@ -1220,6 +1248,14 @@ namespace Bots.Grind
                                 new Decorator(
                                     ctx => IsVendorFrameOpen(),
                                     new PrioritySelector(
+                                        // The POI's ACTION frame opened (not just gossip) → the NPC is real;
+                                        // reset the wrong-DB interact counter. Failure-returns so the typed
+                                        // branches below act the same tick.
+                                        new TreeSharp.Action(ctx =>
+                                        {
+                                            if (PoiActionFrameOpen()) _vendorInteracts = 0;
+                                            return RunStatus.Failure;
+                                        }),
                                         // Sell/Repair — HB 6.2.3 pattern: require MerchantFrame visible
                                         new DecoratorIsPoiType(new[] { PoiType.Sell, PoiType.Repair },
                                             new Decorator(ctx => MerchantFrame.Instance.IsVisible, new Sequence(
@@ -1341,9 +1377,22 @@ namespace Bots.Grind
                                             new ActionDebugString("Training Skills"),
                                             new ActionSetActivity("Training Skills"),
                                             new TreeSharp.Action(ctx => Vendors.TrainSkills()),
-                                            new TreeSharp.Action(ctx => Lua.DoString("CloseTrainer()")),
+                                            // CloseGossip too: a gossip-only "trainer" (wrong DB flags) would
+                                            // otherwise leave gossip pinned open, blocking the re-interact that
+                                            // lets the wrong-DB counter conclude and blacklist it.
+                                            new TreeSharp.Action(ctx => Lua.DoString("CloseTrainer() CloseGossip()")),
                                             new ActionClearPoi("Done training")
-                                        ))
+                                        )),
+                                        // Some OTHER frame is up (gossip-only NPC, empty merchant) and the POI's
+                                        // action frame never followed: close it so the interact branch retries —
+                                        // and its wrong-DB counter can conclude this NPC isn't what the DB says.
+                                        new Decorator(
+                                            ctx => BotPoi.Current.Type != PoiType.None && !PoiActionFrameOpen(),
+                                            new Sequence(
+                                                new TreeSharp.Action(ctx => Lua.DoString("CloseGossip() CloseMerchant()")),
+                                                new ActionSleep(500)
+                                            )
+                                        )
                                     )
                                 )
                             )
@@ -1629,6 +1678,45 @@ namespace Bots.Grind
                    MailFrame.Instance.IsVisible ||
                    TrainerFrame.Instance.IsVisible ||
                    TaxiFrame.Instance.IsVisible;
+        }
+
+        // Wrong-DB defense: consecutive frameless interacts per (entry, POI type). IsVendorFrameOpen counts
+        // GOSSIP as open, so a gossip-only NPC the DB calls a vendor never trips the no-frame path on its
+        // own — the wrong-frame closer above funnels it back here instead. Reset on POI change, on the
+        // action frame actually opening, or after 2 idle minutes (a later healthy visit starts fresh).
+        private const int VendorInteractCap = 3;
+        private static int _vendorInteracts;
+        private static uint _vendorInteractEntry;
+        private static PoiType _vendorInteractPoi;
+        private static DateTime _vendorInteractAt = DateTime.MinValue;
+
+        private static void TrackVendorInteract()
+        {
+            var poi = BotPoi.Current;
+            if (poi.Entry != _vendorInteractEntry || poi.Type != _vendorInteractPoi
+                || (DateTime.Now - _vendorInteractAt).TotalSeconds > 120)
+            {
+                _vendorInteractEntry = poi.Entry;
+                _vendorInteractPoi = poi.Type;
+                _vendorInteracts = 0;
+            }
+            _vendorInteractAt = DateTime.Now;
+            _vendorInteracts++;
+        }
+
+        // The frame the CURRENT POI actually needs — gossip alone doesn't count (that's the wrong-DB trap).
+        private static bool PoiActionFrameOpen()
+        {
+            switch (BotPoi.Current.Type)
+            {
+                case PoiType.Buy: return MerchantFrame.Instance.IsVisible && MerchantFrame.Instance.MerchantNumItems > 0;
+                case PoiType.Sell:
+                case PoiType.Repair: return MerchantFrame.Instance.IsVisible;
+                case PoiType.Mail: return MailFrame.Instance.IsVisible;
+                case PoiType.Train: return TrainerFrame.Instance.IsVisible;
+                case PoiType.Fly: return TaxiFrame.Instance.IsVisible;
+                default: return true;
+            }
         }
 
         #endregion
