@@ -1330,6 +1330,9 @@ namespace Bots.Grind
                                             new ActionDebugString("Buying items"),
                                             new ActionSetActivity("Buying Items"),
                                             new TreeSharp.Action(ctx => Vendors.BuyItems()),
+                                            // Re-census ammo NOW — the throttled cache would re-fire a
+                                            // no-op Buy run for up to 10s after a successful restock.
+                                            new TreeSharp.Action(ctx => _ammoCensusAt = DateTime.MinValue),
                                             new ActionClearPoi("Done buying")
                                         ))),
                                         // Train
@@ -1368,11 +1371,15 @@ namespace Bots.Grind
                         ProfileManager.CurrentProfile.VendorManager.GetClosestVendor(Vendor.VendorType.Train), 
                         PoiType.Train))
                 ),
-                // Check if need to buy
+                // Check if need to buy. An ammo-driven run routes to an AMMO vendor (food vendors
+                // often stock no projectiles); food fallback keeps a combined need from stalling.
                 new Decorator(
                     ctx => NeedToBuy(),
                     new ActionSetPoi(ctx => new BotPoi(
-                        ProfileManager.CurrentProfile.VendorManager.GetClosestVendor(Vendor.VendorType.Food), 
+                        HunterAmmoLow()
+                            ? (ProfileManager.CurrentProfile.VendorManager.GetClosestVendor(Vendor.VendorType.Ammo)
+                               ?? ProfileManager.CurrentProfile.VendorManager.GetClosestVendor(Vendor.VendorType.Food))
+                            : ProfileManager.CurrentProfile.VendorManager.GetClosestVendor(Vendor.VendorType.Food),
                         PoiType.Buy))
                 ),
                 // Check flight paths
@@ -1486,8 +1493,37 @@ namespace Bots.Grind
         /// Note: Unlike Sell/Repair, HB 4.3.4 does NOT check FindVendorsAutomatically for buying.
         /// The FoodAmount/DrinkAmount sliders are the explicit opt-in.
         /// </summary>
+        // Hunter ammo census, throttled (the loaded slot-0 stack needs a Lua read). Non-hunters exit
+        // before the timer — zero cost. LOW = under one classic stack: the restock fires while the
+        // trip to the vendor is still shootable, not after Auto Shot already died.
+        private const int AmmoLowThreshold = 200;
+        private static DateTime _ammoCensusAt = DateTime.MinValue;
+        private static int _cachedAmmoCount;
+        private static WoWItemProjectileClass _cachedAmmoClass = WoWItemProjectileClass.None;
+
+        private static bool HunterAmmoLow()
+        {
+            if (StyxWoW.Me == null || StyxWoW.Me.Class != WoWClass.Hunter) return false;
+            if (DateTime.Now >= _ammoCensusAt)
+            {
+                _cachedAmmoClass = Consumable.NeededAmmoClass();
+                _cachedAmmoCount = Consumable.GetAmmoCount(_cachedAmmoClass);
+                _ammoCensusAt = DateTime.Now.AddSeconds(10);
+            }
+            return _cachedAmmoClass != WoWItemProjectileClass.None && _cachedAmmoCount < AmmoLowThreshold;
+        }
+
         private static bool NeedToBuy()
         {
+            // Hunter ammo outranks the 1g comfort gate below — no ammo = no Auto Shot = no hunter,
+            // and low-level ammo costs coppers. Pocket change + a resolvable ammo vendor is enough.
+            if (HunterAmmoLow() && StyxWoW.Me.Coinage >= 1000
+                && ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Ammo) != null)
+            {
+                LogDecision("buy", string.Format("[NeedToBuy] YES - hunter ammo low ({0} rounds left)", _cachedAmmoCount));
+                return true;
+            }
+
             // HB 4.3.4: Minimum 1 gold required to buy
             if (StyxWoW.Me.Coinage < 10000)
             {

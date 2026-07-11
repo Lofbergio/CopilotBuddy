@@ -190,6 +190,15 @@ namespace Styx.Logic
 			protectedNames.AddRange(ProtectedItemsManager.GetAllItemNames());
 			protectedIds.AddRange(ProtectedItemsManager.GetAllItemIds());
 
+			// Never sell ammo: the quality mask would take white arrows/bullets with SellWhite, and
+			// the hunter restock would just buy them back (a dry hunter is a melee hunter).
+			foreach (WoWItem bagItem in ObjectManager.Me.BagItems)
+			{
+				var bagInfo = bagItem != null ? bagItem.ItemInfo : null;
+				if (bagInfo != null && bagInfo.ItemClass == WoWItemClass.Projectile && !protectedIds.Contains(bagItem.Entry))
+					protectedIds.Add(bagItem.Entry);
+			}
+
 			// Protect food and drink
 			if (uint.TryParse(LevelbotSettings.Instance.FoodName, out uint foodId))
 				protectedIds.Add(foodId);
@@ -246,6 +255,69 @@ namespace Styx.Logic
 
 			_merchantFrame.SellItemQualities(qualityMask, protectedNames, protectedIds);
 			ForceSell = false;
+
+			// Opportunistic ammo top-up while a merchant is already open (and selling just funded it) —
+			// saves the hunter a dedicated ammo trip when the sell vendor stocks projectiles.
+			BuyAmmoIfNeeded();
+		}
+
+		// Refill to a comfortable buffer (~1.5 WotLK stacks); one grind session burns 1-2k rounds.
+		private const int AmmoRestockTarget = 1400;
+
+		/// <summary>
+		/// Buys the best usable projectile of the class the equipped ranged weapon consumes, up to
+		/// AmmoRestockTarget, from the open merchant. No-op for non-hunters, full pouches, or
+		/// merchants without matching ammo. Never a hard requirement — a barren vendor just logs.
+		/// </summary>
+		private static void BuyAmmoIfNeeded()
+		{
+			try
+			{
+				var needed = Consumable.NeededAmmoClass();
+				if (needed == WoWItemProjectileClass.None)
+					return;
+				if (!_merchantFrame.IsVisible || _merchantFrame.MerchantNumItems <= 0)
+					return;
+				int have = Consumable.GetAmmoCount(needed);
+				if (have >= AmmoRestockTarget)
+					return;
+
+				// Best = highest RequiredLevel we can use (ammo grades scale strictly by level).
+				int bestIndex = -1, bestReq = -1;
+				ItemInfo bestInfo = null;
+				foreach (var mi in _merchantFrame.GetAllMerchantItems())
+				{
+					ItemInfo info = ItemInfo.FromId(mi.ItemId);
+					if (info == null || info.ItemClass != WoWItemClass.Projectile || info.ProjectileClass != needed)
+						continue;
+					if (info.RequiredLevel > StyxWoW.Me.Level || info.RequiredLevel <= bestReq)
+						continue;
+					bestReq = info.RequiredLevel;
+					bestIndex = mi.Index;
+					bestInfo = info;
+				}
+				if (bestIndex < 0)
+				{
+					Logging.WriteDebug("[Ammo] merchant stocks no usable {0}s ({1} items).", needed, _merchantFrame.MerchantNumItems);
+					return;
+				}
+
+				int stack = Math.Max(1, bestInfo.MaxStackSize);
+				int stacks = (AmmoRestockTarget - have + stack - 1) / stack;
+				int bought = 0;
+				for (int i = 0; i < stacks; i++)
+				{
+					if (!_merchantFrame.BuyItem(bestIndex, stack))
+						break;   // out of money — keep what we got
+					bought++;
+				}
+				if (bought > 0)
+					Logging.Write("Restocked ammo: {0} x{1} stack(s) of {2} (had {3} rounds).", bestInfo.Name, bought, stack, have);
+			}
+			catch (Exception ex)
+			{
+				Logging.WriteException(ex);
+			}
 		}
 
 		/// <summary>
@@ -287,6 +359,10 @@ namespace Styx.Logic
 						_merchantFrame.BuyItem(merchantItem.Index, itemsToBuy[merchantItem.ItemId]);
 				}
 			}
+
+			// Hunter ammo restock — before the food branch's vendor-type early-return, so a run
+			// routed to an Ammo-type vendor still buys (and any merchant stocking projectiles works).
+			BuyAmmoIfNeeded();
 
 			// Handle automatic food/drink buying based on settings (HB 4.3.4 logic)
 			Vendor asVendor = BotPoi.Current.AsVendor;

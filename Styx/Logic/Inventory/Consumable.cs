@@ -146,6 +146,44 @@ return f..'|'..d";
         /// <summary>Total count (summed stacks) of usable drink currently in bags.</summary>
         public static int GetDrinkCount() { EnsureScanFresh(); return CountStacks(_cacheDrink); }
 
+        // ---- Hunter ammo (3.3.5a: only hunters consume ammo; thrown is non-consumable since 3.1,
+        // and warrior/rogue ranged slots are stat sticks the bot never Shoots with) ----
+
+        /// <summary>The projectile class the equipped ranged weapon consumes (Bow/Crossbow → Arrow,
+        /// Gun → Bullet); None for non-hunters or non-ammo weapons.</summary>
+        public static WoWItemProjectileClass NeededAmmoClass()
+        {
+            if (StyxWoW.Me == null || StyxWoW.Me.Class != Styx.Combat.CombatRoutine.WoWClass.Hunter)
+                return WoWItemProjectileClass.None;
+            WoWItem ranged = ObjectManager.Me.Inventory.Equipped.Items[(int)InventorySlot.RangedSlot - 1];
+            var info = ranged != null ? ranged.ItemInfo : null;
+            if (info == null) return WoWItemProjectileClass.None;
+            switch (info.WeaponClass)
+            {
+                case WoWItemWeaponClass.Bow:
+                case WoWItemWeaponClass.Crossbow: return WoWItemProjectileClass.Arrow;
+                case WoWItemWeaponClass.Gun:      return WoWItemProjectileClass.Bullet;
+                default: return WoWItemProjectileClass.None;
+            }
+        }
+
+        /// <summary>Rounds of the given projectile class on hand: the loaded ammo slot (Lua — the
+        /// slot-0 item isn't in the equipped-items array) plus matching bag stacks.</summary>
+        public static int GetAmmoCount(WoWItemProjectileClass projectile)
+        {
+            if (projectile == WoWItemProjectileClass.None) return 0;
+            int total = 0;
+            try { total = Lua.GetReturnVal<int>("return GetInventoryItemCount('player', 0) or 0", 0); }
+            catch { /* frame not ready — bag count still answers */ }
+            foreach (var it in ObjectManager.Me.BagItems)
+            {
+                var info = it != null ? it.ItemInfo : null;
+                if (info != null && info.ItemClass == WoWItemClass.Projectile && info.ProjectileClass == projectile)
+                    total += (int)it.StackCount;
+            }
+            return total;
+        }
+
         // Sum StackCount across every bag item whose Entry is a detected food/drink. The scan can list an entry
         // once per occupied slot, so dedupe to an id set first, then count all stacks (handles a split stack).
         private static int CountStacks(List<KeyValuePair<uint, int>> entries)

@@ -14,6 +14,7 @@ namespace Styx.Logic.Profiles
 			{
 				Vendor.VendorType.Repair => UnitNPCFlags.Repair,
 				Vendor.VendorType.Food => UnitNPCFlags.FoodVendor,
+				Vendor.VendorType.Ammo => UnitNPCFlags.AmmoVendor,   // was None → ammo vendors were unresolvable
 				Vendor.VendorType.Sell => UnitNPCFlags.AnyVendor,
 				Vendor.VendorType.Train => UnitNPCFlags.ClassTrainer,
 				Vendor.VendorType.FlightMaster => UnitNPCFlags.Flightmaster,
