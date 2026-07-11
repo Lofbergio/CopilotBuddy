@@ -243,6 +243,7 @@ namespace VibeParty
 					_progressReviewAt = DateTime.Now;
 					ReviewPartyProgress();
 				}
+				AutoInviteTick();   // party-form: invite every live bus member that isn't grouped yet
 			}
 			else
 			{
@@ -292,10 +293,11 @@ namespace VibeParty
 			};
 		}
 
-		// Follower (bot thread): report per-quest completion. Mirror-questing needs a real party.
+		// Follower (bot thread): report per-quest completion. Sent even OUTSIDE a party — the report
+		// doubles as the liveness/name beacon AutoInviteTick's roster is built from (the old in-party
+		// early-return was a chicken-and-egg: no heartbeat until invited, no invite without a heartbeat).
 		private static void ReportProgress(PartyBus bus)
 		{
-			if (!StyxWoW.Me.IsInParty && !StyxWoW.Me.IsInRaid) return;
 			List<PlayerQuest> quests = StyxWoW.Me.QuestLog.GetAllQuests();
 			if (quests == null) return;
 			System.Text.StringBuilder sb = new System.Text.StringBuilder();
@@ -305,6 +307,35 @@ namespace VibeParty
 				sb.Append(q.Id).Append(':').Append(q.IsCompleted ? '1' : '0').Append(';');
 			}
 			bus.Publish("Progress", sb.ToString());
+		}
+
+		// Leader (bot thread): invite every LIVE bus member that isn't in the group yet — press Start on
+		// five toons and the party forms itself. Roster = _partyProgress (each follower's heartbeat carries
+		// its name); the follower side auto-accepts via AcceptGroupInvitesFromLeader. Safe by construction:
+		// the hub is localhost, so only OUR OWN toons can ever be on the roster. Declines just re-invite
+		// after the per-toon cooldown; a full party (4 + me) stops inviting; raids are out of scope.
+		private DateTime _inviteTickAt = DateTime.MinValue;
+		private readonly Dictionary<ulong, DateTime> _invitedAt = new Dictionary<ulong, DateTime>();
+
+		private void AutoInviteTick()
+		{
+			if ((DateTime.Now - _inviteTickAt).TotalSeconds < 5) return;
+			_inviteTickAt = DateTime.Now;
+			if (StyxWoW.Me.IsInRaid) return;
+			if (StyxWoW.Me.PartyMembers.Count >= 4) return;
+
+			long cutoff = DateTime.UtcNow.Ticks - TimeSpan.FromSeconds(ProgressLivenessSeconds).Ticks;
+			HashSet<ulong> grouped = new HashSet<ulong>(StyxWoW.Me.PartyMemberGuids);
+			foreach (KeyValuePair<ulong, MemberProgress> kv in _partyProgress)
+			{
+				if (kv.Value.LastUtcTicks < cutoff) continue;                       // silent → not live
+				if (kv.Key == StyxWoW.Me.Guid || grouped.Contains(kv.Key)) continue;
+				if (string.IsNullOrEmpty(kv.Value.Name)) continue;
+				if (_invitedAt.TryGetValue(kv.Key, out DateTime last) && (DateTime.Now - last).TotalSeconds < 15) continue;
+				_invitedAt[kv.Key] = DateTime.Now;
+				Logging.Write(System.Drawing.Color.MediumSeaGreen, "[VibeParty] inviting {0} to the party.", kv.Value.Name);
+				Lua.DoString("InviteUnit('" + kv.Value.Name.Replace("'", "\\'") + "')");
+			}
 		}
 
 		// Leader (bot thread): log which LIVE followers are behind on each quest the leader holds — change-only,

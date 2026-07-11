@@ -46,8 +46,11 @@ namespace VibeParty
 		[Setting(Explanation = "True if the bot should accept dungeon invites.")]
 		public bool AcceptDungeonInvites { get; set; }
 
+		// Default TRUE (2026-07-11): safe by construction — it only ever accepts from the LEADER whose
+		// hub this follower joined (name-gated like the trade auto-accept), and it's the accept half of
+		// the leader's AutoInviteTick ("press Start on five toons, the party forms itself").
 		[Setting(Explanation = "True if the bot should accept group invites from the leader.")]
-		[DefaultValue(false)]
+		[DefaultValue(true)]
 		public bool AcceptGroupInvitesFromLeader { get; set; }
 
 		[Setting(Explanation = "True if the bot should auto accept shared quests")]
