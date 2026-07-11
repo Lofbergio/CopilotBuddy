@@ -107,8 +107,8 @@ namespace VibeParty
 				// broadcast it so the mage follower(s) hear it. (Targeted WaterOffers are auto-forwarded by the bus.)
 				_bus.Subscribe("WaterRequest", m => _bus!.Publish("WaterRequest", m.Payload));
 
-				// Phase 1: auto-share each quest we accept with the party (native /share).
-				if (VibePartySettings.Instance.ShareQuestsToParty && !_leaderHooked)
+				// Phase 1: auto-share each quest we accept with the party (no-ops solo/unshareable).
+				if (!_leaderHooked)
 				{
 					Lua.Events.AttachEvent("QUEST_ACCEPTED", new LuaEventHandlerDelegate(OnQuestAcceptedShare));
 					_leaderHooked = true;
@@ -294,8 +294,7 @@ namespace VibeParty
 		}
 
 		// Follower (bot thread): report per-quest completion. Sent even OUTSIDE a party — the report
-		// doubles as the liveness/name beacon AutoInviteTick's roster is built from (the old in-party
-		// early-return was a chicken-and-egg: no heartbeat until invited, no invite without a heartbeat).
+		// is also the liveness/name beacon AutoInviteTick's roster is built from.
 		private static void ReportProgress(PartyBus bus)
 		{
 			List<PlayerQuest> quests = StyxWoW.Me.QuestLog.GetAllQuests();
@@ -309,11 +308,8 @@ namespace VibeParty
 			bus.Publish("Progress", sb.ToString());
 		}
 
-		// Leader (bot thread): invite every LIVE bus member that isn't in the group yet — press Start on
-		// five toons and the party forms itself. Roster = _partyProgress (each follower's heartbeat carries
-		// its name); the follower side always accepts the leader's invite. Safe by construction:
-		// the hub is localhost, so only OUR OWN toons can ever be on the roster. Declines just re-invite
-		// after the per-toon cooldown; a full party (4 + me) stops inviting; raids are out of scope.
+		// Leader (bot thread): invite every LIVE bus member not yet grouped. Roster = _partyProgress
+		// (the follower heartbeat carries its name). Localhost hub ⇒ only our own toons can be on it.
 		private DateTime _inviteTickAt = DateTime.MinValue;
 		private readonly Dictionary<ulong, DateTime> _invitedAt = new Dictionary<ulong, DateTime>();
 
@@ -423,44 +419,41 @@ namespace VibeParty
 			if (_botMessage != null && e.Args.Length > 0)
 			{
 				string? name = e.Args[0] as string;
-				// Always accept the LEADER's invite — no toggle (2026-07-11, like the trade auto-accept:
-				// safe by construction, it's the toon whose hub we joined; a follower that ignores its own
-				// leader is never what anyone wants, and the old opt-in default sat False in every existing
-				// settings XML). Random players still can't pull us in — the name gate stays.
+				// Name-gated to the leader — random players can't pull us into their group.
 				_pendingGroupInvite = name == _botMessage.LeaderName;
 			}
 		}
 
-		// method_7 — LFG_PROPOSAL_SHOW
+		// method_7 — LFG_PROPOSAL_SHOW. Always accept: a proposal only exists because OUR party queued.
 		private void OnLfgProposalShow(object sender, LuaEventArgs e)
 		{
-			_pendingDungeonProposal = VibePartySettings.Instance.AcceptDungeonInvites;
+			_pendingDungeonProposal = true;
 		}
 
 		// method_8 — LFG_OFFER_CONTINUE
 		private void OnLfgOfferContinue(object sender, LuaEventArgs e)
 		{
-			_pendingDungeonOfferContinue = VibePartySettings.Instance.AcceptDungeonInvites;
+			_pendingDungeonOfferContinue = true;
 		}
 
 		// method_9 — LFG_ROLE_CHECK_SHOW
 		private void OnLfgRoleCheckShow(object sender, LuaEventArgs e)
 		{
-			_pendingRoleCheck = VibePartySettings.Instance.AcceptDungeonInvites;
+			_pendingRoleCheck = true;
 		}
 
-		// method_10 — QUEST_DETAIL
+		// method_10 — QUEST_DETAIL. A follower only sees an offer via the leader's share or its own
+		// quest-starter item — both mirror-intent, so accept.
 		private void OnQuestDetail(object sender, LuaEventArgs e)
 		{
-			_pendingQuestAccept = VibePartySettings.Instance.AutoAcceptSharedQuests;
+			_pendingQuestAccept = true;
 		}
 
 		// Phase 1 (follower) — auto-confirm quests the leader shares. Escort / auto-accept shares
-		// raise QUEST_ACCEPT_CONFIRM instead of QUEST_DETAIL; gated on the same opt-in.
+		// raise QUEST_ACCEPT_CONFIRM instead of QUEST_DETAIL; always on like the detail accept.
 		private void OnQuestAcceptConfirm(object sender, LuaEventArgs e)
 		{
-			if (VibePartySettings.Instance.AutoAcceptSharedQuests)
-				Lua.DoString("ConfirmAcceptQuest()");
+			Lua.DoString("ConfirmAcceptQuest()");
 		}
 
 		// Follower — auto-accept a trade from the party LEADER (gear/consumables/quest-item handoff). Always on
@@ -1284,7 +1277,7 @@ namespace VibeParty
 		private static bool WantTurnIn()
 		{
 			_turnInNpc = null;
-			if (!VibePartySettings.Instance.AutoTurnInQuests || StyxWoW.Me.Combat) return false;
+			if (StyxWoW.Me.Combat) return false;
 			if (!LeaderAtQuestGiver() || !HasCompletableQuest()) return false;
 			_turnInNpc = ResolveTurnInNpc();
 			return _turnInNpc != null;
@@ -1330,13 +1323,12 @@ namespace VibeParty
 
 		// Some quests begin by USING a drop-only item (ItemInfo.BeginQuestId), which /share can't push — so a
 		// follower that looted the same item must use ITS OWN copy. Using it raises QUEST_DETAIL, which the existing
-		// accept handler auto-confirms. Gated on AutoAcceptSharedQuests (same mirror-intent opt-in), never while
-		// combat / casting / a frame is open. Per-quest cooldown so a slow accept or a level-gated item can't spam.
+		// accept handler auto-confirms. Never while combat / casting / a frame is open. Per-quest
+		// cooldown so a slow accept or a level-gated item can't spam.
 		private static Composite CreateUseQuestStarterBehavior()
 		{
 			return new Decorator(
-				ctx => VibePartySettings.Instance.AutoAcceptSharedQuests
-					&& !StyxWoW.Me.Combat && !StyxWoW.Me.IsCasting
+				ctx => !StyxWoW.Me.Combat && !StyxWoW.Me.IsCasting
 					&& !GossipFrame.Instance.IsVisible && !QuestFrame.Instance.IsVisible
 					&& FirstUsableQuestStarter() != null,
 				new TreeSharp.Action(ctx =>

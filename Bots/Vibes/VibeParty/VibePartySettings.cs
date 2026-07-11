@@ -22,14 +22,6 @@ namespace VibeParty
 		[DefaultValue(false)]
 		public bool IsLeader { get; set; }
 
-		[Setting(Explanation = "Leader only: automatically SHARE each quest you accept with the party (native /share). Followers with 'Auto Accept Shared Quests' on will accept/confirm them. Off by default.")]
-		[DefaultValue(false)]
-		public bool ShareQuestsToParty { get; set; }
-
-		[Setting(Explanation = "Follower: turn in completed quests at the NPC the leader is interacting with. Follow the leader to the turn-in giver and it hands in whatever's ready. Off by default.")]
-		[DefaultValue(false)]
-		public bool AutoTurnInQuests { get; set; }
-
 		[DefaultValue(5)]
 		[Setting]
 		public int FollowDistance { get; set; }
@@ -41,14 +33,6 @@ namespace VibeParty
 		[DefaultValue(false)]
 		[Setting(Explanation = "True if the bot should loot in dungeons.")]
 		public bool LootInDungeons { get; set; }
-
-		[DefaultValue(false)]
-		[Setting(Explanation = "True if the bot should accept dungeon invites.")]
-		public bool AcceptDungeonInvites { get; set; }
-
-		[Setting(Explanation = "True if the bot should auto accept shared quests")]
-		[DefaultValue(false)]
-		public bool AutoAcceptSharedQuests { get; set; }
 
 		public static readonly VibePartySettings Instance = new VibePartySettings();
 	}

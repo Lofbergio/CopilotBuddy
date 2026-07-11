@@ -54,7 +54,7 @@ namespace VibeParty.Forms
                 Section(_rolePanel, "Leader", ref y);
                 Hint(_rolePanel, "The routine keeps buffs up on you + the party (out of", ref y, 18);
                 Hint(_rolePanel, "combat). You drive movement and combat yourself.", ref y, 26);
-                Check(_rolePanel, "Share quests to party (native /share)", () => _s.ShareQuestsToParty, v => _s.ShareQuestsToParty = v, ref y);
+                Hint(_rolePanel, "Invites all started followers + shares quests automatically.", ref y, 26);
             }
             else
             {
@@ -67,10 +67,8 @@ namespace VibeParty.Forms
 
                 y += 8;
                 Section(_rolePanel, "Party", ref y);
-                // Group invites from the leader are ALWAYS accepted (no toggle — safe by construction).
-                Check(_rolePanel, "Auto accept shared quests", () => _s.AutoAcceptSharedQuests, v => _s.AutoAcceptSharedQuests = v, ref y);
-                Check(_rolePanel, "Turn in quests at leader's NPC", () => _s.AutoTurnInQuests, v => _s.AutoTurnInQuests = v, ref y);
-                Check(_rolePanel, "Accept dungeon invites", () => _s.AcceptDungeonInvites, v => _s.AcceptDungeonInvites = v, ref y);
+                Hint(_rolePanel, "Accepts the leader's invites, shared quests and dungeon", ref y, 18);
+                Hint(_rolePanel, "queues, and turns in at the leader's NPC — automatic.", ref y, 26);
 
                 y += 8;
                 Section(_rolePanel, "Dungeons", ref y);
