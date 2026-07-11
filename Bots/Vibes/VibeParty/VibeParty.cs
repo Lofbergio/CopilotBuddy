@@ -311,7 +311,7 @@ namespace VibeParty
 
 		// Leader (bot thread): invite every LIVE bus member that isn't in the group yet — press Start on
 		// five toons and the party forms itself. Roster = _partyProgress (each follower's heartbeat carries
-		// its name); the follower side auto-accepts via AcceptGroupInvitesFromLeader. Safe by construction:
+		// its name); the follower side always accepts the leader's invite. Safe by construction:
 		// the hub is localhost, so only OUR OWN toons can ever be on the roster. Declines just re-invite
 		// after the per-toon cooldown; a full party (4 + me) stops inviting; raids are out of scope.
 		private DateTime _inviteTickAt = DateTime.MinValue;
@@ -423,7 +423,11 @@ namespace VibeParty
 			if (_botMessage != null && e.Args.Length > 0)
 			{
 				string? name = e.Args[0] as string;
-				_pendingGroupInvite = VibePartySettings.Instance.AcceptGroupInvitesFromLeader && name == _botMessage.LeaderName;
+				// Always accept the LEADER's invite — no toggle (2026-07-11, like the trade auto-accept:
+				// safe by construction, it's the toon whose hub we joined; a follower that ignores its own
+				// leader is never what anyone wants, and the old opt-in default sat False in every existing
+				// settings XML). Random players still can't pull us in — the name gate stays.
+				_pendingGroupInvite = name == _botMessage.LeaderName;
 			}
 		}
 
