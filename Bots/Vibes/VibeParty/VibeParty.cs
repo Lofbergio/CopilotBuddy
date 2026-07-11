@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows.Forms;
+using System.Xml.Linq;
 using Bots.Grind;
 using CommonBehaviors;
 using CommonBehaviors.Actions;
@@ -18,6 +19,7 @@ using Styx.Logic.Pathing;
 using Styx.Logic.Inventory.Frames.Gossip;
 using Styx.Logic.Inventory.Frames.Quest;
 using Styx.Logic.POI;
+using Styx.Logic.Profiles;
 using Styx.Logic.Questing;
 using Styx.Plugins;
 using Styx.RemotableObjects;
@@ -119,6 +121,7 @@ namespace VibeParty
 			// Follower: connect to the leader's hub (:1338) and mirror. The client reconnects on its own, so
 			// starting before the leader is up is fine — it just retries (fail degraded, never blocks).
 			DisableLeaderPluginIfEnabled();
+			EnsurePartyProfile();
 			if (_bus == null)
 				_bus = new PartyBus(isLeader: false, StyxWoW.Me.Guid, StyxWoW.Me.Name);
 			if (_partyLoot == null)
@@ -157,6 +160,14 @@ namespace VibeParty
 			if (VibePartySettings.Instance.DoNothing || VibePartySettings.Instance.IsLeader)
 				return;
 
+			// Restore the vendor auto-resolve flag we forced in EnsurePartyProfile — a profile-driven
+			// botbase run after us may rely on its authored <Vendor> entries only.
+			if (_origFindVendors.HasValue)
+			{
+				CharacterSettings.Instance.FindVendorsAutomatically = _origFindVendors.Value;
+				_origFindVendors = null;
+			}
+
 			DetachLuaEvents();
 			LootTargeting.Instance.IncludeTargetsFilter -= LevelBot.LevelbotIncludeLootsFilter;
 			LootTargeting.Instance.IncludeTargetsFilter -= PruneDangerousCollectibles;
@@ -166,6 +177,44 @@ namespace VibeParty
 			WoWChat.Party -= OnPartyChat;
 			WoWChat.PartyLeader -= OnPartyChat;
 			_hooked = false;
+		}
+
+		// ──────────────────────────────────────────────────────────────────────
+		// Synthetic profile — vendors/trainers resolve from data.bin
+		// ──────────────────────────────────────────────────────────────────────
+
+		// VibeParty is profile-less, and the whole vendor tree hangs off ProfileManager.CurrentProfile —
+		// a null profile made NeedToSell/Repair/Train/Buy permanently "no vendor known", so followers
+		// never trained (the class trainer can be 30yd away) and the hunter ammo restock could never
+		// fire. Same pattern as VibeGrinder's GrindAreaSynthesizer: an empty-vendor profile +
+		// FindVendorsAutomatically makes GetClosestVendor fall through to data.bin. Sell mask is
+		// GREY-ONLY — unlike VibeGrinder we have no disposition hook protecting good items, so nothing
+		// above pure junk is ever auto-sold.
+		private static Profile? _syntheticProfile;
+		private static bool? _origFindVendors;
+
+		private static void EnsurePartyProfile()
+		{
+			if (_syntheticProfile == null)
+			{
+				var xml = new XElement("HBProfile",
+					new XElement("MinFreeBagSlots", 2),
+					new XElement("MinDurability", "0.35"),
+					new XElement("SellGrey", true),
+					new XElement("SellWhite", false),
+					new XElement("SellGreen", false),
+					new XElement("SellBlue", false),
+					new XElement("SellPurple", false),
+					new XElement("MailGrey", false),
+					new XElement("MailWhite", false),
+					new XElement("MailGreen", false),
+					new XElement("MailBlue", false),
+					new XElement("MailPurple", false));
+				_syntheticProfile = new Profile(xml, null) { Name = "VibeParty (synthetic)" };
+			}
+			_origFindVendors ??= CharacterSettings.Instance.FindVendorsAutomatically;
+			CharacterSettings.Instance.FindVendorsAutomatically = true;
+			ProfileManager.UseSyntheticProfile(_syntheticProfile);
 		}
 
 		// ──────────────────────────────────────────────────────────────────────
