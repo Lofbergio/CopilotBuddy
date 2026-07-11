@@ -254,6 +254,8 @@ namespace VibeParty
 					ReportProgress(bus);
 				}
 				_partyWater?.WaterTick();   // requester: ask for water when low; mage: advertise + clean stale (throttled)
+				// Re-arm the per-fight movement one-shots the moment we drop out of combat state.
+				if (!IsInCombatState()) { _combatEntryStopDone = false; _posApproaching = false; }
 			}
 		}
 
@@ -720,7 +722,9 @@ namespace VibeParty
 			// over the instant we're in combat state (which the approach into pull-range of the leader triggers).
 			// Was ranged-only (a Charge/Intercept peel); 2026-07-07 user directive: stop follow for ALL roles the
 			// moment combat starts. No assist target yet (leader lining up / friendly target) → close on the leader.
-			if (_botMessage.LeaderInCombat)
+			// Me.Combat too: a follower with its own aggro (leader already done) must never glue itself to the
+			// leader mid-fight — a ranged toon dragged sub-melee loses its whole kit (hunter dead zone).
+			if (_botMessage.LeaderInCombat || StyxWoW.Me.Combat)
 			{
 				WoWUnit? assist = LeaderAssistTarget();
 				WoWPoint dest = assist != null ? assist.Location : LeaderLocation;
@@ -963,6 +967,21 @@ namespace VibeParty
 					// In combat — smethod_57
 					new Decorator(ctx => IsInCombatState(),
 						new PrioritySelector(
+							// Combat entry, ONE SHOT: kill any live native-/follow glue (it's client-persistent —
+							// left alive it drags us all fight and fights the routine's positioning). After this,
+							// movement belongs to the positioning below and to the ROUTINE (backpedal, AoE dodge,
+							// Blink) — nothing here may stop it again. Flag resets out of combat state (Pulse).
+							new Decorator(ctx => !_combatEntryStopDone,
+								new TreeSharp.Action(ctx =>
+								{
+									_combatEntryStopDone = true;
+									if (StyxWoW.Me.IsMoving)
+									{
+										WoWMovement.MoveStop();
+										Logging.WriteDebug("VibeParty: combat entry — cancelling follow/movement");
+									}
+									return RunStatus.Failure;   // free action — never eats the pass
+								})),
 							// Assist the leader — focus-fire its target so the routine always has an
 							// enemy. One-tick target switch, then falls through to Heal/Buff/Combat.
 							new Decorator(ctx => ShouldAssistLeaderTarget(),
@@ -972,19 +991,32 @@ namespace VibeParty
 								new TreeSharp.Action(ctx => Mount.Dismount("Combat"))),
 							// Combat positioning — hold at the routine's engagement range from the ASSIST
 							// TARGET (not the tank): ranged stay at spell range, melee close to melee, and
-							// nobody chases a Charge into the pack. Approach when beyond range; stop the
-							// instant we're within it so ranged don't coast into melee. Not while casting.
+							// nobody chases a Charge into the pack. Approach when beyond range; stop ONCE
+							// when OUR OWN approach crosses into range so ranged don't coast into melee.
+							// EDGE-triggered on _posApproaching: movement we didn't start (routine backpedal,
+							// AoE dodge, Blink reposition) is the routine's commitment — leave it alone; a
+							// level-triggered stop here pinned a hunter in its dead zone. Not while casting.
 							// In range + stopped, this falls through to Heal/Buff/Combat below.
 							new Decorator(ctx => LeaderAssistTarget() != null && !StyxWoW.Me.IsCasting,
 								new PrioritySelector(
 									new Decorator(ctx => AssistTargetBeyondRange(),
 										new Sequence(
 											new ActionSetActivity("Positioning"),
+											new TreeSharp.Action(ctx => { _posApproaching = true; }),
 											new NavigationAction(ctx => LeaderAssistTargetLocation())
 										)
 									),
-									new Decorator(ctx => StyxWoW.Me.IsMoving,
-										new TreeSharp.Action(ctx => WoWMovement.MoveStop()))
+									new Decorator(ctx => _posApproaching && StyxWoW.Me.IsMoving,
+										new TreeSharp.Action(ctx =>
+										{
+											_posApproaching = false;
+											WoWMovement.MoveStop();
+											Logging.WriteDebug("VibeParty: in position — stopping approach");
+											return RunStatus.Success;
+										})),
+									// Approach ended without coasting (nav stopped itself) — just clear the flag.
+									new Decorator(ctx => _posApproaching,
+										new TreeSharp.Action(ctx => { _posApproaching = false; return RunStatus.Failure; }))
 								)
 							),
 							// Move to POI target if too far (grind-style; skipped when assisting a leader —
@@ -1490,6 +1522,8 @@ namespace VibeParty
 
 		// Static state
 		private static BotMessage? _botMessage;
+		private static bool _combatEntryStopDone;   // one-shot follow-glue kill on combat entry (reset OOC)
+		private static bool _posApproaching;        // our positioning approach is the active movement
 		private static readonly WaitTimer _waitTimer0 = WaitTimer.TenSeconds;
 		private static readonly WaitTimer _waitTimer1 = new WaitTimer(TimeSpan.FromMinutes(3.0));
 		private static readonly Dictionary<ulong, DateTime> _turnInCooldown = new Dictionary<ulong, DateTime>();
