@@ -94,11 +94,9 @@ namespace Styx.Offsets
 		/// <summary>GUID of current target.</summary>
 		public const uint TargetGuid = 0x00BD07B0;
 
-		/// <summary>GUID of current focus. ⚠ SUSPECT: OffsetDoctor (2026-07-12) found 0x00BD07C0 reads back
-		/// the TARGET's GUID, not focus, while Lua UnitGUID('focus') differed — this slot does not hold focus
-		/// (consistent with the DiscoBot/VibeParty note that a raw write here never reaches Lua's focus unit).
-		/// Read focus via Lua until the real offset is confirmed. Only Me.FocusGuid/SetFocus consume it.</summary>
-		public const uint FocusGuid = 0x00BD07C0;
+		/// <summary>GUID of current focus. CORRECTED 2026-07-12 (OffsetDoctor scan): was 0x00BD07C0, which is a
+		/// TARGET mirror — with a focus set AND a different unit targeted, only 0x00BD07D0 held the focus GUID.</summary>
+		public const uint FocusGuid = 0x00BD07D0;
 
 		/// <summary>GUID of last target.</summary>
 		public const uint LastTargetGuid = 0x00BD07B8;
@@ -156,10 +154,12 @@ namespace Styx.Offsets
 		/// <summary>Number of spells in spellbook.</summary>
 		public const uint SpellCount = 0x00BE8D9C;
 
-		/// <summary>Current casting spell ID.</summary>
+		/// <summary>⚠ DEAD (OffsetDoctor 2026-07-12): read 0 during a live cast and nothing consumes it. The real
+		/// casting-spell id is per-unit at <c>WoWUnit.BaseAddress + 2668</c> (channel at +2688) — use
+		/// <c>WoWUnit.CastingSpellId</c>. Kept only so the constant isn't re-added by mistake.</summary>
 		public const uint CastingSpellId = 0x00CEA888;
 
-		/// <summary>Current channeling spell ID.</summary>
+		/// <summary>⚠ DEAD — see CastingSpellId. Channel id is <c>WoWUnit.BaseAddress + 2688</c>.</summary>
 		public const uint ChannelingSpellId = 0x00CEA8A8;
 
 		// ==================== Cooldowns ====================
