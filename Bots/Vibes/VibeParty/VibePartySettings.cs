@@ -34,6 +34,14 @@ namespace VibeParty
 		[Setting(Explanation = "True if the bot should loot in dungeons.")]
 		public bool LootInDungeons { get; set; }
 
+		// The LFG role is USER INTENT, per character — talents can't derive it at leveling time (a
+		// prot-bound paladin specs Ret until Seal of Command; a Disc priest opens Shadow for Spirit
+		// Tap). Auto = whatever the client already has ticked (WoW remembers the last-used LFD roles),
+		// falling back to a talent guess, falling back to Damage.
+		[DefaultValue("Auto")]
+		[Setting(Explanation = "LFG role for dungeon role checks: Auto, Tank, Healer or Damage. Auto uses the roles already ticked in the client (set them once in the LFD window), guessing from talents only when nothing is ticked.")]
+		public string LfgRole { get; set; }
+
 		public static readonly VibePartySettings Instance = new VibePartySettings();
 	}
 }

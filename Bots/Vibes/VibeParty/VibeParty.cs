@@ -186,6 +186,54 @@ namespace VibeParty
 		}
 
 		// ──────────────────────────────────────────────────────────────────────
+		// LFG teleport mirror — followers match the leader's inside/outside state
+		// ──────────────────────────────────────────────────────────────────────
+
+		// The leader porting OUT of an LFG dungeon (rest/train/vendor break) should pull the party out;
+		// porting back IN should pull them in. ⚠ GHOST GUARD: a dead leader releasing reads exactly like
+		// "leader left the instance" — a corpse run must NOT scatter the party out, so the mirror stands
+		// down entirely while LeaderGhost (and while WE are dead/ghost or in combat). STABILITY: the
+		// mismatch must hold ~8s before acting (zoning/loading screens flap both flags); vendor-errand
+		// POIs defer the port-in so a follower finishes selling/training first.
+		private static DateTime _teleportMismatchSince = DateTime.MinValue;
+		private static DateTime _teleportActedAt = DateTime.MinValue;
+
+		private static void MirrorLeaderTeleportTick()
+		{
+			if (_botMessage == null) return;
+			var me = StyxWoW.Me;
+			if (me == null || !me.IsValid) return;
+
+			bool mismatch = me.IsInInstance != _botMessage.LeaderInInstance;
+			if (!mismatch || _botMessage.LeaderGhost || me.Dead || me.IsGhost || me.Combat)
+			{
+				_teleportMismatchSince = DateTime.MinValue;
+				return;
+			}
+			if (_teleportMismatchSince == DateTime.MinValue) { _teleportMismatchSince = DateTime.Now; return; }
+			if ((DateTime.Now - _teleportMismatchSince).TotalSeconds < 8) return;
+			if ((DateTime.Now - _teleportActedAt).TotalSeconds < 20) return;   // one attempt per window
+
+			if (me.IsInInstance)
+			{
+				Logging.Write("VibeParty: leader left the dungeon — teleporting out.");
+				Lua.DoString("LFGTeleport(1)");
+			}
+			else
+			{
+				// Finish an in-flight vendor errand before porting back in.
+				PoiType poi = BotPoi.Current.Type;
+				if (poi == PoiType.Sell || poi == PoiType.Repair || poi == PoiType.Buy
+					|| poi == PoiType.Train || poi == PoiType.Mail)
+					return;
+				Logging.Write("VibeParty: leader is in the dungeon — teleporting in.");
+				Lua.DoString("LFGTeleport(0)");
+			}
+			_teleportActedAt = DateTime.Now;
+			_teleportMismatchSince = DateTime.MinValue;
+		}
+
+		// ──────────────────────────────────────────────────────────────────────
 		// Synthetic profile — vendors/trainers resolve from data.bin
 		// ──────────────────────────────────────────────────────────────────────
 
@@ -377,6 +425,7 @@ namespace VibeParty
 				}
 				_partyWater?.WaterTick();   // requester: ask for water when low; mage: advertise + clean stale (throttled)
 				LoadMailboxesIfMapChanged();   // keep the synthetic profile's mailboxes on the current map
+				MirrorLeaderTeleportTick();    // LFG: match the leader's inside/outside-the-dungeon state
 				// Re-arm the per-fight movement one-shots the moment we drop out of combat state.
 				if (!IsInCombatState()) { _combatEntryStopDone = false; _posApproaching = false; }
 			}
@@ -410,6 +459,8 @@ namespace VibeParty
 				Message = type,
 				LeaderX = loc.X, LeaderY = loc.Y, LeaderZ = loc.Z,
 				TargetGuid = targetGuid,
+				LeaderInInstance = me.IsInInstance,
+				LeaderGhost = me.Dead || me.IsGhost,
 				LeaderGuid = me.Guid,
 				LeaderName = me.Name,
 				Timestamp = DateTime.Now,
@@ -561,10 +612,94 @@ namespace VibeParty
 			_pendingDungeonOfferContinue = true;
 		}
 
-		// method_9 — LFG_ROLE_CHECK_SHOW
+		// method_9 — LFG_ROLE_CHECK_SHOW. Humanized stagger (2-5s, name-hashed so the four followers
+		// answer at different moments): four instant simultaneous accepts look botty, and the beat
+		// leaves the (human) leader time to see the check fire. The ROLE itself needs no queue-time
+		// prep — AnswerRoleCheck resolves it from the per-character LfgRole setting / the client's
+		// remembered roles / a talent guess, in that order.
 		private void OnLfgRoleCheckShow(object sender, LuaEventArgs e)
 		{
 			_pendingRoleCheck = true;
+			_roleCheckActAt = DateTime.Now.AddMilliseconds(2000 + Math.Abs(StyxWoW.Me.Name.GetHashCode()) % 3000);
+		}
+
+		// Role-check answer, three tiers. The role is USER INTENT — talents cannot derive the job at
+		// leveling time (a prot-bound paladin specs RET until Seal of Command; a Disc priest opens
+		// SHADOW for Spirit Tap), so:
+		//   1. the per-character LfgRole setting (Tank/Healer/Damage — the durable "prep");
+		//   2. Auto → whatever the client already has ticked (WoW remembers the last-used LFD roles,
+		//      so a role set once in the LFD window is honored forever);
+		//   3. nothing ticked → the talent guess below → Damage.
+		private static void AnswerRoleCheck()
+		{
+			string cfg = (VibePartySettings.Instance.LfgRole ?? "Auto").Trim();
+			bool tank = false, heal = false;
+			string source = "setting";
+			if (cfg.Equals("Tank", StringComparison.OrdinalIgnoreCase)) tank = true;
+			else if (cfg.Equals("Healer", StringComparison.OrdinalIgnoreCase)) heal = true;
+			else if (cfg.Equals("Damage", StringComparison.OrdinalIgnoreCase) || cfg.Equals("DPS", StringComparison.OrdinalIgnoreCase)) { }
+			else
+			{
+				int ticked = Lua.GetReturnVal<int>(
+					"local n = 0 " +
+					"if LFDRoleCheckPopupRoleButtonTank and LFDRoleCheckPopupRoleButtonTank.checkButton:GetChecked() then n = n + 1 end " +
+					"if LFDRoleCheckPopupRoleButtonHealer and LFDRoleCheckPopupRoleButtonHealer.checkButton:GetChecked() then n = n + 2 end " +
+					"if LFDRoleCheckPopupRoleButtonDPS and LFDRoleCheckPopupRoleButtonDPS.checkButton:GetChecked() then n = n + 4 end " +
+					"return n", 0U);
+				if (ticked != 0)
+				{
+					Logging.Write("VibeParty: role check — accepting with the client's ticked roles.");
+					Lua.DoString("LFDRoleCheckPopupAcceptButton:Click() StaticPopup1Button1:Click()");
+					return;
+				}
+				DeriveLfgRole(out tank, out heal);
+				source = "talent guess";
+			}
+			bool dps = !tank && !heal;
+			Logging.Write("VibeParty: role check — accepting as {0} ({1}).",
+				tank ? "TANK" : heal ? "HEALER" : "DAMAGE", source);
+			Lua.DoString(string.Format(
+				"local t, h, d = LFDRoleCheckPopupRoleButtonTank, LFDRoleCheckPopupRoleButtonHealer, LFDRoleCheckPopupRoleButtonDPS " +
+				"if t and t.checkButton then t.checkButton:SetChecked({0}) end " +
+				"if h and h.checkButton then h.checkButton:SetChecked({1}) end " +
+				"if d and d.checkButton then d.checkButton:SetChecked({2}) end " +
+				"if d and d.checkButton and not (t.checkButton:GetChecked() or h.checkButton:GetChecked() or d.checkButton:GetChecked()) then d.checkButton:SetChecked(true) end " +
+				"LFDRoleCheckPopupAcceptButton:Click() StaticPopup1Button1:Click()",
+				tank ? "true" : "false", heal ? "true" : "false", dps ? "true" : "false"));
+		}
+
+		// Tier-3 talent GUESS (last resort, fresh toons with nothing set anywhere): healer trees →
+		// HEALER, prot trees → TANK, else DAMAGE. Known-wrong for leveling builds by design — that's
+		// what the setting and the client-ticked tiers are for. Feral druid stays DAMAGE (cat/bear is
+		// ambiguous from the tab). Cached 30s; 0/0/0 → DAMAGE.
+		private static DateTime _lfgRoleReadAt = DateTime.MinValue;
+		private static bool _lfgTank, _lfgHeal;
+
+		private static void DeriveLfgRole(out bool tank, out bool heal)
+		{
+			if ((DateTime.Now - _lfgRoleReadAt).TotalSeconds < 30) { tank = _lfgTank; heal = _lfgHeal; return; }
+			_lfgRoleReadAt = DateTime.Now;
+			string talents = Lua.GetReturnVal<string>(
+				"local g = GetActiveTalentGroup and GetActiveTalentGroup() or 1 local r = '' " +
+				"for i = 1, 3 do local _, _, p = GetTalentTabInfo(i, false, false, g) r = r .. (p or 0) .. ';' end return r", 0U);
+			var parts = (talents ?? "").Split(';');
+			int t1 = parts.Length > 0 && int.TryParse(parts[0], out int a) ? a : 0;
+			int t2 = parts.Length > 1 && int.TryParse(parts[1], out int b) ? b : 0;
+			int t3 = parts.Length > 2 && int.TryParse(parts[2], out int c) ? c : 0;
+			int max = Math.Max(t1, Math.Max(t2, t3));
+			_lfgTank = false; _lfgHeal = false;
+			if (max > 0)
+			{
+				switch (StyxWoW.Me.Class)
+				{
+					case WoWClass.Priest:  _lfgHeal = t3 != max; break;                       // Disc/Holy heal, Shadow DPS
+					case WoWClass.Paladin: _lfgHeal = t1 == max; _lfgTank = !_lfgHeal && t2 == max; break;
+					case WoWClass.Shaman:  _lfgHeal = t3 == max; break;                       // Resto
+					case WoWClass.Druid:   _lfgHeal = t3 == max; break;                       // Resto; Feral → DAMAGE
+					case WoWClass.Warrior: _lfgTank = t3 == max; break;                       // Prot
+				}
+			}
+			tank = _lfgTank; heal = _lfgHeal;
 		}
 
 		// method_10 — QUEST_DETAIL. A follower only sees an offer via the leader's share or its own
@@ -1387,11 +1522,10 @@ namespace VibeParty
 						new TreeSharp.Action(ctx => _pendingDungeonOfferContinue = false)
 					)
 				),
-				// Role check
-				new Decorator(ctx => _pendingRoleCheck,
+				// Role check — staggered (see OnLfgRoleCheckShow), answered by the three-tier resolver.
+				new Decorator(ctx => _pendingRoleCheck && DateTime.Now >= _roleCheckActAt,
 					new Sequence(
-						new TreeSharp.Action(ctx => Logging.Write("VibeParty: Role Check is in progress")),
-						new TreeSharp.Action(ctx => Lua.DoString("LFDRoleCheckPopupAcceptButton:Click() StaticPopup1Button1:Click()")),
+						new TreeSharp.Action(ctx => AnswerRoleCheck()),
 						new TreeSharp.Action(ctx => _pendingRoleCheck = false)
 					)
 				),
@@ -1777,6 +1911,7 @@ namespace VibeParty
 		private bool _pendingDungeonProposal;
 		private bool _pendingDungeonOfferContinue;
 		private bool _pendingRoleCheck;
+		private DateTime _roleCheckActAt = DateTime.MinValue;   // humanized stagger (OnLfgRoleCheckShow)
 		private bool _pendingQuestAccept;
 
 		// Static state

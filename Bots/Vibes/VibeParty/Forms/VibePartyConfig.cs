@@ -74,6 +74,17 @@ namespace VibeParty.Forms
                 Section(_rolePanel, "Dungeons", ref y);
                 Check(_rolePanel, "Loot in dungeons", () => _s.LootInDungeons, v => _s.LootInDungeons = v, ref y);
                 Check(_rolePanel, "Wait for res in dungeons", () => _s.WaitForRessInDungeons, v => _s.WaitForRessInDungeons = v, ref y);
+
+                // The role is user intent — talents can't derive it while leveling (a prot-bound paladin
+                // specs Ret for Seal of Command; a Disc priest opens Shadow for Spirit Tap). Auto = the
+                // roles already ticked in the client's LFD window, guessed from talents only if none.
+                _rolePanel.Controls.Add(new Label { Text = "LFG role", Location = new Point(20, y + 3), AutoSize = true, ForeColor = Theme.Text });
+                var role = new ComboBox { Location = new Point(150, y), Size = new Size(120, 22), DropDownStyle = ComboBoxStyle.DropDownList };
+                role.Items.AddRange(new object[] { "Auto", "Tank", "Healer", "Damage" });
+                role.SelectedItem = role.Items.Contains(_s.LfgRole) ? _s.LfgRole : "Auto";
+                role.SelectedIndexChanged += (s, e) => _s.LfgRole = (string)role.SelectedItem;
+                _rolePanel.Controls.Add(role);
+                y += 34;
             }
 
             y += 14;

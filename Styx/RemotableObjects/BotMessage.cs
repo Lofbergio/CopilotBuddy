@@ -23,6 +23,8 @@ namespace Styx.RemotableObjects
 			LeaderName = info.GetString("LeaderName");
 			LeaderTargetGuid = (ulong)info.GetValue("LeaderTargetGuid", typeof(ulong));
 			LeaderInCombat = (bool)info.GetValue("LeaderInCombat", typeof(bool));
+			LeaderInInstance = (bool)info.GetValue("LeaderInInstance", typeof(bool));
+			LeaderGhost = (bool)info.GetValue("LeaderGhost", typeof(bool));
 		}
 
 		public override string ToString()
@@ -43,6 +45,8 @@ namespace Styx.RemotableObjects
 			info.AddValue("LeaderName", LeaderName);
 			info.AddValue("LeaderTargetGuid", LeaderTargetGuid);
 			info.AddValue("LeaderInCombat", LeaderInCombat);
+			info.AddValue("LeaderInInstance", LeaderInInstance);
+			info.AddValue("LeaderGhost", LeaderGhost);
 		}
 
 		public void SetMessage(BotMessage message)
@@ -68,5 +72,9 @@ namespace Styx.RemotableObjects
 		public ulong LeaderTargetGuid;
 		// Assist: leader is actually in combat (pull committed) — followers focus-fire only then.
 		public bool LeaderInCombat;
+		// LFG mirror: followers match the leader's inside/outside-the-dungeon state…
+		public bool LeaderInInstance;
+		// …EXCEPT while the leader is dead/ghost (a corpse run reads as "left the instance" — it isn't).
+		public bool LeaderGhost;
 	}
 }

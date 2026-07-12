@@ -13,6 +13,15 @@ Goal: make leveling 5-man dungeons viable.
 
 ⚠ Do NOT let a blind subagent write this tuned logic — read the relevant CLAUDE.md + trace the runtime first.
 
+**⚠ Instance constraint (cross-cutting, VERIFIED `GVEvents.cs:63`):** GoodVibes does **not attach the combat log
+inside instances**, so everything combat-log-fed goes DARK in dungeons — `AvgHit`/`AvgTick` (learned damage) and
+therefore `AttackWillFinish`'s learned execute degrade to their fixed-threshold fallbacks. Implications:
+- **1c** can't measure a ground effect's tick → uses an HP-band bail, not per-spell damage attribution.
+- **2b** ("AttackWillFinish already picks the instant for the lethal hit") is running on fixed thresholds in a
+  dungeon, not the EWMA — verify the one-GCD-kill logic still behaves with `AvgHit==0`.
+- 1a threat (`UnitDetailedThreatSituation`), 1d interrupts (`UnitCastingInfo` polling), and 1b totem detection do
+  NOT depend on the combat log — unaffected.
+
 ---
 
 ## Batch 1 — GoodVibes only (drop-in, INDEPENDENTLY testable, no bus). Do first.
@@ -38,8 +47,17 @@ Goal: make leveling 5-man dungeons viable.
   the API (`WoWUnit` creature type / IsTotem; GoodVibes already matches its OWN totems by `CreatedBySpellId`).
 - Motivating case: ZF (tons of casters + totems).
 
-### 1c. AoE-dodge melee exclude (user decision)
-- `AvoidGroundEffects`: gate OFF for MELEE specs (melee eat the fire to stay glued; casters/healer always step out).
+### 1c. AoE-dodge melee = eat-unless-dying (user decision 2026-07-08, revised)
+- `AvoidGroundEffects`: for MELEE specs, eat the fire to stay glued — EXCEPT step out (caster behavior) while
+  `Me.HealthPercent` is below a survival band. Casters/healer always step out unconditionally. Wire as a per-spec
+  `IsMeleeSpec` gate in the `AvoidGroundEffects` Decorator condition (`GVMovement.cs:87`); casters unchanged.
+- **Danger test = HP-band bail** — user picked the simplest of three (rejected extra-bleed-delta HP measurement and
+  a static `GroundEffectAvoid.xml` list). Reuse an EXISTING survival % (self-heal/survival band), do NOT add a knob
+  ([[avoid-new-settings-preference]]). Grade the band from logs. **Known flaw (accepted for v1):** boss melee can
+  drop HP below the band and pull melee off HARMLESS fire — the uptime loss 1c exists to prevent. If logs show it,
+  lower the band (keep it well under the healer's normal HP-swing floor so ordinary dips don't trip it).
+- **Why not measure the fire itself:** the combat log is NOT attached in instances (`GVEvents.cs:63`), so
+  `AvgTick`/incoming-damage attribution is dark exactly here — see the Instance constraint note above.
 
 ### 1d. Aggressive interrupts / caster lockdown in instances
 - In instances, drop the `Interrupt.xml` whitelist → interrupt ANY interruptible cast from any caster in the fight.
