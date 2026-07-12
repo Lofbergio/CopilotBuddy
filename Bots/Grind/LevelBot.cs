@@ -1417,8 +1417,15 @@ namespace Bots.Grind
                 new Decorator(
                     ctx => NeedToTrain(),
                     new ActionSetPoi(ctx => new BotPoi(
-                        ProfileManager.CurrentProfile.VendorManager.GetClosestVendor(Vendor.VendorType.Train), 
+                        ProfileManager.CurrentProfile.VendorManager.GetClosestVendor(Vendor.VendorType.Train),
                         PoiType.Train))
+                ),
+                // Weapon proficiencies: spare gold + a nearby same-side weapon master teaching a skill this
+                // class can learn but lacks → go learn it (cheap, permanent, easily missed). Reuses the Train
+                // POI (TrainerFrame.BuyAll buys 'available' only — the server's class filter is final truth).
+                new Decorator(
+                    ctx => NeedToTrainWeapons(),
+                    new ActionSetPoi(ctx => new BotPoi(_weaponMaster, PoiType.Train))
                 ),
                 // Check if need to buy. An ammo-driven run routes to an AMMO vendor (food vendors
                 // often stock no projectiles); food fallback keeps a combined need from stalling.
@@ -1484,6 +1491,34 @@ namespace Bots.Grind
             LogDecision("train", string.Format("[NeedToTrain] {0} — needClassTraining={1} (force={2})",
                 need ? "YES" : "no", Vendors.NeedClassTraining, Vendors.ForceTrainer));
             return need;
+        }
+
+        // Weapon-proficiency training (user 2026-07-12): >1g spare and a weapon master within 500yd that
+        // teaches something we can learn but don't know. Single-shot: returns true only on the scan tick
+        // that found one (the POI branch above owns the run from there); the visited cooldown inside
+        // WeaponMasters stops a failed visit from tight-looping. Class training must win — TrainSkills
+        // clears NeedClassTraining as a side effect, so running it at a weapon master while class training
+        // is pending would silently cancel that run.
+        private static Vendor _weaponMaster;
+        private static DateTime _weaponScanAt = DateTime.MinValue;
+        private const float WeaponMasterRange = 500f;
+
+        private static bool NeedToTrainWeapons()
+        {
+            if (StyxWoW.Me == null) return false;
+            if (!CharacterSettings.Instance.TrainNewSkills) return false;
+            if (Vendors.NeedClassTraining) return false;
+            if (StyxWoW.Me.Copper <= 10000) return false;   // over 1g spare
+            if (StyxWoW.Me.IsInInstance || Battlegrounds.IsInsideBattleground) return false;
+            if ((DateTime.Now - _weaponScanAt).TotalSeconds < 15) return false;
+            _weaponScanAt = DateTime.Now;
+
+            _weaponMaster = WeaponMasters.FindUseful(WeaponMasterRange, out string skills);
+            if (_weaponMaster == null) return false;
+            WeaponMasters.MarkVisited((uint)_weaponMaster.Entry);
+            LogDecision("trainweapons", string.Format("[NeedToTrainWeapons] YES — {0} ({1:F0}yd) teaches {2}",
+                _weaponMaster.Name, _weaponMaster.Location.Distance(StyxWoW.Me.Location), skills));
+            return true;
         }
 
         private static bool NeedToRepair()
