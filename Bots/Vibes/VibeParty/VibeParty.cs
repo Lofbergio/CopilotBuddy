@@ -1078,7 +1078,11 @@ namespace VibeParty
 				{
 					WoWMovement.ClickToMove(LeaderLocation);
 				}
-				else if (leader.Distance <= 20.0 && leader.InLineOfSight)
+				// Never native-/follow in an instance: the glue drags everyone to ~2yd behind the tank —
+				// body-pull range, and exactly where a healer/ranged must not stand. Falling through to the
+				// mesh-nav branch means FollowDistance is actually honored (nav stops there); set the healer's
+				// FollowDistance wider and it holds that gap.
+				else if (!StyxWoW.Me.IsInInstance && leader.Distance <= 20.0 && leader.InLineOfSight)
 				{
 					if (!ctmActive)
 						Lua.DoString(string.Format("FollowUnit('{0}', true)", leader.Name));
