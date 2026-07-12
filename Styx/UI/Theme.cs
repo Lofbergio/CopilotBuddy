@@ -38,6 +38,16 @@ namespace Styx.UI
         public static readonly Color RowHover = Color.FromArgb(52, 58, 68);   // list-row hover tint
         public static readonly Color Danger = Color.FromArgb(224, 96, 96);    // destructive action / close ✕
 
+        // State tints for owner-drawn widgets (selected rows, progress cells): the dim BACKGROUND
+        // versions of Gold/Green, plus the disabled family. One source of truth — never re-derive
+        // these shades locally in a form (the palette-drift rule in README.md).
+        public static readonly Color AccentDimBg = Color.FromArgb(58, 52, 32);   // gold-tinted selected/complete bg
+        public static readonly Color GreenDimBg = Color.FromArgb(33, 46, 33);    // green-tinted in-progress bg
+        public static readonly Color GreenPale = Color.FromArgb(216, 232, 206);  // readable text on GreenDimBg
+        public static readonly Color DisabledBg = Color.FromArgb(41, 46, 54);    // locked/unavailable surface
+        public static readonly Color DisabledText = Color.FromArgb(92, 98, 106); // text on DisabledBg (darker than Dim)
+        public static readonly Color DimLine = Color.FromArgb(72, 78, 88);       // inactive connectors / structure lines
+
         // ElvUI's actual `bordercolor` default is pure BLACK (Settings/Profile.lua: {r=0,g=0,b=0}, pixelPerfect)
         // — a crisp 1px black hairline around every box is its signature. Use it for STRUCTURAL boxes (cards,
         // input wells, frameless form frames). Keep `Border` (soft grey) for dividers and interactive outlines,
