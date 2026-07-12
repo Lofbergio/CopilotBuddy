@@ -1568,20 +1568,14 @@ namespace VibeParty
 			if (StyxWoW.Me.Combat) { _turnInNpc = null; return false; }
 			if (!LeaderAtQuestGiver()) { _turnInNpc = null; return false; }
 
-			// Completed set + its fingerprint, once per tick. The fingerprint keys the per-NPC
-			// "nothing to turn in here" verdicts: the quest-giver FLAG is DB data and can't be
-			// trusted (an NPC can carry it yet offer nothing live — Merissa Stilwell / 'Welcome!');
-			// only the frames a visit actually opens are truth, and a no-hand-in visit is remembered
-			// until our completed set changes.
+			// Completed set + its fingerprint, once per tick — from the LUA quest log, never
+			// PlayerQuest.IsCompleted (false-positives on in-progress quests, see CompletedQuestsLua).
+			// The fingerprint keys the per-NPC "nothing to turn in here" verdicts.
+			var completed = CompletedQuestsLua();
 			_completedFp = 17;
-			bool any = false;
-			List<PlayerQuest> quests = StyxWoW.Me.QuestLog.GetAllQuests();
-			if (quests != null)
-				foreach (PlayerQuest q in quests.Where(q => q != null && q.IsCompleted).OrderBy(q => q.Id))
-				{
-					any = true;
-					unchecked { _completedFp = _completedFp * 31 + (int)q.Id; }
-				}
+			bool any = completed.Count > 0;
+			foreach (uint id in completed.Keys.OrderBy(x => x))
+				unchecked { _completedFp = _completedFp * 31 + (int)id; }
 			// COMMIT to the chosen NPC while it stays usable — re-picking "nearest" every tick
 			// flip-flops between givers mid-travel (observed: Eagan→Merissa 1.7s apart).
 			if (_turnInNpc != null && _turnInNpc.IsValid && !_turnInNpc.Dead
@@ -1721,10 +1715,9 @@ namespace VibeParty
 			LocalPlayer me = StyxWoW.Me;
 			if (me.IsMoving) WoWMovement.MoveStop();
 
-			TiDebug("visit {0} [{1}] status={2}; my completed: {3}",
+			TiDebug("visit {0} [{1}] status={2}; my completed (Lua log): {3}",
 				npc.Name, npc.Entry, npc.QuestGiverStatus,
-				string.Join(",", me.QuestLog.GetAllQuests()
-					.Where(q => q != null && q.IsCompleted).Select(q => q.Id + " '" + q.Name + "'")));
+				string.Join(",", CompletedQuestsLua().Select(kv => kv.Key + " '" + kv.Value + "'")));
 
 			if (!GossipFrame.Instance.IsVisible && !QuestFrame.Instance.IsVisible)
 			{
@@ -1768,9 +1761,10 @@ namespace VibeParty
 					{
 						if (q == null || q.Id == 0) continue;
 						PlayerQuest held = me.QuestLog.GetQuestById((uint)q.Id);
-						TiDebug("gossip active #{0}: quest {1} — held={2} completed={3}",
-							q.Index, q.Id, held != null, held != null && held.IsCompleted);
-						if (held == null || !held.IsCompleted) continue;
+						bool luaComplete = CompletedQuestsLua().ContainsKey((uint)q.Id);
+						TiDebug("gossip active #{0}: quest {1} — held={2} luaComplete={3} memComplete={4}",
+							q.Index, q.Id, held != null, luaComplete, held != null && held.IsCompleted);
+						if (!luaComplete) continue;
 
 						TiDebug("selecting gossip active #{0} (quest {1})", q.Index, q.Id);
 						GossipFrame.Instance.SelectActiveQuest(q.Index);
@@ -1795,8 +1789,7 @@ namespace VibeParty
 					 && QuestFrame.Instance.CurrentShownQuestId == 0; guard++)
 				{
 					var completedTitles = new HashSet<string>(
-						me.QuestLog.GetAllQuests().Where(q => q != null && q.IsCompleted).Select(q => q.Name),
-						StringComparer.OrdinalIgnoreCase);
+						CompletedQuestsLua().Values, StringComparer.OrdinalIgnoreCase);
 					int n = Lua.GetReturnVal<int>("return GetNumActiveQuests()", 0U);
 					int pick = 0;
 					for (int i = 1; i <= n; i++)
@@ -1812,10 +1805,9 @@ namespace VibeParty
 					if (!WaitFrame(() => QuestFrame.Instance.CurrentShownQuestId != 0, 2500))
 					{ TiDebug("greeting select #{0} never showed a quest.", pick); break; }
 					uint shownId = QuestFrame.Instance.CurrentShownQuestId;
-					PlayerQuest heldQ = shownId != 0 ? me.QuestLog.GetQuestById(shownId) : null;
-					TiDebug("greeting select showed quest {0} — held={1} completed={2}",
-						shownId, heldQ != null, heldQ != null && heldQ.IsCompleted);
-					if (heldQ == null || !heldQ.IsCompleted) break;
+					bool shownComplete = shownId != 0 && CompletedQuestsLua().ContainsKey(shownId);
+					TiDebug("greeting select showed quest {0} — luaComplete={1}", shownId, shownComplete);
+					if (!shownComplete) break;
 					attempted = true;
 					if (CompleteShownQuest(shownId)) handedIn = true;
 					else break;
@@ -1825,10 +1817,9 @@ namespace VibeParty
 			else if (QuestFrame.Instance.IsVisible)
 			{
 				uint shown = QuestFrame.Instance.CurrentShownQuestId;
-				PlayerQuest held = shown != 0 ? me.QuestLog.GetQuestById(shown) : null;
-				TiDebug("direct quest frame: shown={0} held={1} completed={2}",
-					shown, held != null, held != null && held.IsCompleted);
-				if (held != null && held.IsCompleted)
+				bool shownComplete = shown != 0 && CompletedQuestsLua().ContainsKey(shown);
+				TiDebug("direct quest frame: shown={0} luaComplete={1}", shown, shownComplete);
+				if (shownComplete)
 				{
 					attempted = true;
 					if (CompleteShownQuest(shown)) handedIn = true;
@@ -1841,6 +1832,21 @@ namespace VibeParty
 			// acceptance by the quest ENTERING the log (never frame flow).
 			int pickedUp = 0;
 			var doneBefore = me.QuestLog.GetCompletedQuests();
+
+			// A failed hand-in can leave ITS quest panel up, hiding the gossip/greeting lists — that
+			// stale frame blocked a class-quest pickup on the second live run. Close it and re-interact
+			// once so the pickup phase sees the giver's real lists.
+			if (!GossipFrame.Instance.IsVisible && QuestFrame.Instance.IsVisible
+				&& QuestFrame.Instance.CurrentShownQuestId != 0
+				&& me.QuestLog.ContainsQuest(QuestFrame.Instance.CurrentShownQuestId))
+			{
+				TiDebug("stale quest frame (shown={0}) before pickup — closing and re-interacting.",
+					QuestFrame.Instance.CurrentShownQuestId);
+				QuestFrame.Instance.Close();
+				StyxWoW.Sleep(300);
+				npc.Interact();
+				WaitFrame(() => GossipFrame.Instance.IsVisible || QuestFrame.Instance.IsVisible, 2500);
+			}
 			TiDebug("pickup phase: {0}", QuestFrameSnapshot());
 
 			if (GossipFrame.Instance.IsVisible)
@@ -1931,6 +1937,36 @@ namespace VibeParty
 		private static void TiDebug(string fmt, params object[] args)
 			=> Logging.WriteDebug("VibeParty[turnin]: " + string.Format(fmt, args));
 
+		// ⚠ The client QUEST LOG is the only completion truth — PlayerQuest.IsCompleted (descriptor
+		// flag + native call) returned TRUE for an IN-PROGRESS kill quest (quest 15, second live run)
+		// and sent the turn-in at an incomplete quest, wedging 25s of Continue-spam against a progress
+		// panel the server rightly refused to advance. GetQuestLogTitle's isComplete (1 = complete) is
+		// what the player's own quest log shows. One Lua sweep, id→title, cached ~1s.
+		private static DateTime _completedScanAt = DateTime.MinValue;
+		private static readonly Dictionary<uint, string> _completedCache = new Dictionary<uint, string>();
+
+		private static Dictionary<uint, string> CompletedQuestsLua()
+		{
+			if ((DateTime.Now - _completedScanAt).TotalMilliseconds < 1000) return _completedCache;
+			_completedScanAt = DateTime.Now;
+			_completedCache.Clear();
+			string res = Lua.GetReturnVal<string>(
+				"local r = '' " +
+				"for i = 1, GetNumQuestLogEntries() do " +
+				"local t, _, _, _, h, _, c, _, q = GetQuestLogTitle(i) " +
+				"if not h and c == 1 and q and t then r = r .. q .. '\\1' .. t .. '\\2' end end " +
+				"return r", 0U);
+			foreach (string tok in (res ?? "").Split('\x02'))
+			{
+				if (tok.Length == 0) continue;
+				int cut = tok.IndexOf('\x01');
+				if (cut <= 0) continue;
+				if (uint.TryParse(tok.Substring(0, cut), out uint id))
+					_completedCache[id] = tok.Substring(cut + 1);
+			}
+			return _completedCache;
+		}
+
 		// Compact snapshot of every quest-frame surface the client can show.
 		private static string QuestFrameSnapshot()
 		{
@@ -1993,7 +2029,16 @@ namespace VibeParty
 				}
 				if (progress)
 				{
-					TiDebug("progress panel — sending Continue (CompleteQuest())");
+					// The progress frame ITSELF knows whether the quest can be completed — ask it
+					// before spending a Continue. An incomplete quest that slipped past the gates
+					// (the IsCompleted false positive) otherwise wedges here in a Continue-spam loop.
+					if (Lua.GetReturnVal<int>("return IsQuestCompletable() and 1 or 0", 0U) != 1)
+					{
+						TiDebug("progress panel says quest {0} is NOT completable — the completion gate was wrong; bailing.", questId);
+						QuestFrame.Instance.Close();
+						return false;
+					}
+					TiDebug("progress panel (completable) — sending Continue (CompleteQuest())");
 					Lua.DoString("CompleteQuest()");
 					WaitFrame(() => Lua.GetReturnVal<int>(
 							"return (QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()) and 1 or 0", 0U) == 1
