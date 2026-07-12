@@ -499,8 +499,14 @@ namespace VibeParty
 			if ((DateTime.Now - _leaderBagsCheckedAt).TotalSeconds >= 1)
 			{
 				_leaderBagsCheckedAt = DateTime.Now;
-				_leaderBagsOpen = Lua.GetReturnVal<int>(
-					"local o=0 for i=0,4 do if IsBagOpen and IsBagOpen(i) then o=1 end end return o", 0) == 1;
+				// Container FRAMES, not IsBagOpen(): that helper isn't a global on this 3.3.5a client,
+				// and the nil-guard quietly pinned the state to "closed" forever (first live run).
+				// Any shown ContainerFrame = some bag is open — exactly the visual we mirror.
+				bool open = Lua.GetReturnVal<int>(
+					"local o=0 for i=1,(NUM_CONTAINER_FRAMES or 13) do local f=_G['ContainerFrame'..i] if f and f:IsShown() then o=1 end end return o", 0) == 1;
+				if (open != _leaderBagsOpen)
+					Logging.WriteDebug("[VibeParty] leader bags {0} — mirroring to followers.", open ? "OPEN" : "closed");
+				_leaderBagsOpen = open;
 			}
 			return _leaderBagsOpen;
 		}
@@ -1185,6 +1191,7 @@ namespace VibeParty
 		{
 			if (_botMessage == null || _botMessage.LeaderBagsOpen == _bagsMirrorOpen) return;
 			_bagsMirrorOpen = _botMessage.LeaderBagsOpen;
+			Logging.WriteDebug("[VibeParty] mirroring leader's bags: {0}.", _bagsMirrorOpen ? "OPEN" : "closed");
 			Lua.DoString(_bagsMirrorOpen
 				? "OpenBackpack() for i=1,4 do OpenBag(i) end"
 				: "CloseBackpack() for i=1,4 do CloseBag(i) end");
@@ -1908,6 +1915,12 @@ namespace VibeParty
 			TiDebug("visit {0} [{1}] status={2}; my completed (Lua log): {3}",
 				npc.Name, npc.Entry, npc.QuestGiverStatus,
 				string.Join(",", CompletedQuestsLua().Select(kv => kv.Key + " '" + kv.Value + "'")));
+			// Full held-quest snapshot ('+' complete, '~' in progress) — chain-gate questions ("why did
+			// the server offer nothing?") are unanswerable without knowing where WE are in the chain.
+			TiDebug("my quest log: {0}", Lua.GetReturnVal<string>(
+				"local r = '' for i = 1, GetNumQuestLogEntries() do " +
+				"local t, _, _, _, h, _, c, _, q = GetQuestLogTitle(i) " +
+				"if not h and q then r = r .. q .. (c == 1 and '+' or '~') .. ' ' end end return r", 0U));
 
 			if (!GossipFrame.Instance.IsVisible && !QuestFrame.Instance.IsVisible)
 			{
@@ -2101,12 +2114,18 @@ namespace VibeParty
 					}
 					GossipQuestEntry give = null;
 					List<GossipQuestEntry> avails = GossipFrame.Instance.AvailableQuests;
-					if (avails != null)
+					if (avails == null || avails.Count == 0)
+						// The decisive line for "status said Available but the visit found nothing" —
+						// an empty offer list is the SERVER's verdict (chain prerequisite not met, class
+						// gate, level gate), not a frame-reading failure.
+						TiDebug("gossip avail: server offers NOTHING takeable (status={0}).", npc.QuestGiverStatus);
+					else
 						foreach (GossipQuestEntry q in avails)
 						{
-							if (q == null || q.Id == 0 || tried.Contains("g:" + q.Id)) continue;
-							if (me.QuestLog.ContainsQuest((uint)q.Id)) continue;
-							if (doneBefore != null && doneBefore.Contains((uint)q.Id)) continue;
+							if (q == null || q.Id == 0) { TiDebug("gossip avail: null/id-less entry — skipping."); continue; }
+							if (tried.Contains("g:" + q.Id)) { TiDebug("gossip avail #{0}: quest {1} — already tried this visit.", q.Index, q.Id); continue; }
+							if (me.QuestLog.ContainsQuest((uint)q.Id)) { TiDebug("gossip avail #{0}: quest {1} — already in my log.", q.Index, q.Id); continue; }
+							if (doneBefore != null && doneBefore.Contains((uint)q.Id)) { TiDebug("gossip avail #{0}: quest {1} — already completed.", q.Index, q.Id); continue; }
 							give = q;
 							break;
 						}
@@ -2145,6 +2164,14 @@ namespace VibeParty
 					// (the Militia Hammer poisoning, first run); retry on the normal cooldown and shout.
 					Logging.Write(System.Drawing.Color.Orange,
 						"VibeParty: turn-in FAILED at {0} — the quest did not leave the log; will retry.", npc.Name);
+				}
+				else if (GiverHasAvailable(npc))
+				{
+					// Status still shows "!" but the frames offered nothing takeable — a chain gate we
+					// haven't satisfied yet (McBride: 7→15→21→54; our next step unlocks as OUR kills
+					// land, without touching the completed-set the latch keys on). Latching here would
+					// freeze this NPC for the whole session — cooldown-retry instead.
+					Logging.WriteDebug("VibeParty: {0} shows Available but offered nothing takeable (chain gate?) — retry on cooldown.", npc.Name);
 				}
 				else
 				{
@@ -2200,8 +2227,9 @@ namespace VibeParty
 				"local function b(f) return (f and f:IsShown()) and 1 or 0 end " +
 				"return b(GossipFrame) .. ';' .. b(QuestFrame) .. ';' .. b(QuestFrameProgressPanel) .. ';' " +
 				".. b(QuestFrameRewardPanel) .. ';' .. b(QuestFrameDetailPanel) .. ';' .. b(QuestFrameGreetingPanel) .. ';' " +
-				".. GetNumActiveQuests() .. ';' .. GetNumAvailableQuests() .. ';' .. GetNumQuestChoices()", 0U) ?? "?";
-			return string.Format("[gossip;quest;progress;reward;detail;greeting;nActive;nAvail;nChoices]={0} shownId={1}",
+				".. GetNumActiveQuests() .. ';' .. GetNumAvailableQuests() .. ';' .. GetNumQuestChoices() .. ';' " +
+				".. GetNumGossipActiveQuests() .. ';' .. GetNumGossipAvailableQuests() .. ';' .. GetNumGossipOptions()", 0U) ?? "?";
+			return string.Format("[gossip;quest;progress;reward;detail;greeting;nActive;nAvail;nChoices;gAct;gAvail;gOpt]={0} shownId={1}",
 				lua, QuestFrame.Instance.CurrentShownQuestId);
 		}
 
