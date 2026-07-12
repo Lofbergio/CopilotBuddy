@@ -107,14 +107,25 @@ namespace VibeParty
 				}
 				_bus.Subscribe("Progress", OnProgressReceived);
 				_partyLoot = new PartyLoot(_bus, isLeader: true);   // Phase 5: the lease broker
+				// The leader drinks too: requester-side PartyWater (ask when out, hear WaterKind, purge stale).
+				// MUST be created BEFORE the relay below — Subscribe is last-wins per type and the relay must
+				// own the WaterRequest slot (the leader never serves, so losing OnWaterRequest costs nothing).
+				if (_partyWater == null)
+					_partyWater = new PartyWater(_bus);
 				// Relay follower→follower water requests: a requester's WaterRequest reaches us (target 0); re-
-				// broadcast it so the mage follower(s) hear it. (Targeted WaterOffers are auto-forwarded by the bus.)
+				// broadcast it so the mage follower(s) hear it. (Targeted WaterOffers are auto-forwarded by the
+				// bus; our OWN requests broadcast directly — Publish never loops back into this relay.)
 				_bus.Subscribe("WaterRequest", m => _bus!.Publish("WaterRequest", m.Payload));
 
 				// Phase 1: auto-share each quest we accept with the party (no-ops solo/unshareable).
 				if (!_leaderHooked)
 				{
 					Lua.Events.AttachEvent("QUEST_ACCEPTED", new LuaEventHandlerDelegate(OnQuestAcceptedShare));
+					// Water arrives by trade — the leader gets the WATER-ONLY auto-accept (see OnTradeShouldAccept).
+					Lua.Events.AttachEvent("TRADE_SHOW",                new LuaEventHandlerDelegate(OnTradeShouldAccept));
+					Lua.Events.AttachEvent("TRADE_ACCEPT_UPDATE",       new LuaEventHandlerDelegate(OnTradeShouldAccept));
+					Lua.Events.AttachEvent("TRADE_TARGET_ITEM_CHANGED", new LuaEventHandlerDelegate(OnTradeShouldAccept));
+					Lua.Events.AttachEvent("TRADE_MONEY_CHANGED",       new LuaEventHandlerDelegate(OnTradeShouldAccept));
 					_leaderHooked = true;
 				}
 				return;
@@ -154,6 +165,10 @@ namespace VibeParty
 			if (_leaderHooked)
 			{
 				Lua.Events.DetachEvent("QUEST_ACCEPTED", new LuaEventHandlerDelegate(OnQuestAcceptedShare));
+				Lua.Events.DetachEvent("TRADE_SHOW",                new LuaEventHandlerDelegate(OnTradeShouldAccept));
+				Lua.Events.DetachEvent("TRADE_ACCEPT_UPDATE",       new LuaEventHandlerDelegate(OnTradeShouldAccept));
+				Lua.Events.DetachEvent("TRADE_TARGET_ITEM_CHANGED", new LuaEventHandlerDelegate(OnTradeShouldAccept));
+				Lua.Events.DetachEvent("TRADE_MONEY_CHANGED",       new LuaEventHandlerDelegate(OnTradeShouldAccept));
 				_leaderHooked = false;
 			}
 
@@ -415,6 +430,7 @@ namespace VibeParty
 					ReviewPartyProgress();
 				}
 				AutoInviteTick();   // party-form: invite every live bus member that isn't grouped yet
+				_partyWater?.WaterTick();   // requester side only: the leader asks for water when out
 			}
 			else
 			{
@@ -736,6 +752,19 @@ namespace VibeParty
 		// converges by the time the leader clicks. AcceptTrade() when already accepted is a no-op → can't loop.
 		private void OnTradeShouldAccept(object sender, LuaEventArgs e)
 		{
+			if (VibePartySettings.Instance.IsLeader)
+			{
+				// Leader (human-driven): auto-accept ONLY a pure water delivery — our side empty, at least one
+				// incoming item, EVERY incoming item a Conjured…Water, partner in the party. Anything else is
+				// the human's own trade in progress; completing it under their cursor would hand over whatever
+				// they'd placed so far.
+				Lua.DoString(
+					"local ok=(UnitInParty('npc') or UnitInRaid('npc')) and true or false " +
+					"local incoming=0 " +
+					"if ok then for i=1,6 do if GetTradePlayerItemLink(i) then ok=false end local l=GetTradeTargetItemLink(i) if l then if string.find(l,'Conjured') and string.find(l,'Water') then incoming=incoming+1 else ok=false end end end end " +
+					"if ok and incoming>0 then AcceptTrade() end");
+				return;
+			}
 			if (_botMessage == null) return;
 			string leaderName = _botMessage.LeaderName ?? "";
 			// Accept from the leader (by name — covers ungrouped TCP-follow) OR any party/raid member (covers a
@@ -1078,11 +1107,11 @@ namespace VibeParty
 				{
 					WoWMovement.ClickToMove(LeaderLocation);
 				}
-				// Never native-/follow in an instance: the glue drags everyone to ~2yd behind the tank —
-				// body-pull range, and exactly where a healer/ranged must not stand. Falling through to the
-				// mesh-nav branch means FollowDistance is actually honored (nav stops there); set the healer's
-				// FollowDistance wider and it holds that gap.
-				else if (!StyxWoW.Me.IsInInstance && leader.Distance <= 20.0 && leader.InLineOfSight)
+				else if (StyxWoW.Me.IsInInstance)
+				{
+					InstanceFollow(leader, ctmActive);
+				}
+				else if (leader.Distance <= 20.0 && leader.InLineOfSight)
 				{
 					if (!ctmActive)
 						Lua.DoString(string.Format("FollowUnit('{0}', true)", leader.Name));
@@ -1096,6 +1125,45 @@ namespace VibeParty
 			else
 			{
 				Navigator.MoveTo(LeaderLocation);
+			}
+		}
+
+		// Instance follow: mesh-nav holds FollowDistance spacing — never the native-/follow glue, which drags
+		// everyone to ~2yd behind the tank (body-pull range, exactly where healer/ranged must not stand). Set
+		// the healer's FollowDistance wider and it holds that gap. SAFEGUARD: if the mesh can't reach the
+		// leader (path failure, or the gap stops closing — a hole in the dungeon mmap), native follow IS the
+		// rescue — the leader just walked that path, so the client glue can always retrace it. Windowed so the
+		// spacing model resumes as soon as nav recovers.
+		private static DateTime _instFollowUntil = DateTime.MinValue;
+		private static double _instGapBest = double.MaxValue;
+		private static DateTime _instGapImprovedAt = DateTime.MinValue;
+
+		private static void InstanceFollow(WoWPlayer leader, bool ctmActive)
+		{
+			if (DateTime.UtcNow < _instFollowUntil)
+			{
+				if (!ctmActive)
+					Lua.DoString(string.Format("FollowUnit('{0}', true)", leader.Name));
+				return;
+			}
+			if (leader.Distance < VibePartySettings.Instance.FollowDistance)
+			{
+				_instGapBest = double.MaxValue;   // in position — re-arm the progress watchdog
+				_instGapImprovedAt = DateTime.MinValue;
+				return;
+			}
+
+			MoveResult mr = Navigator.MoveTo(LeaderLocation);
+			if (leader.Distance + 1 < _instGapBest) { _instGapBest = leader.Distance; _instGapImprovedAt = DateTime.UtcNow; }
+			bool navDead = mr == MoveResult.Failed || mr == MoveResult.PathGenerationFailed
+				|| (_instGapImprovedAt != DateTime.MinValue && (DateTime.UtcNow - _instGapImprovedAt).TotalSeconds > 5);
+			if (navDead)
+			{
+				_instFollowUntil = DateTime.UtcNow.AddSeconds(12);
+				_instGapBest = double.MaxValue;
+				_instGapImprovedAt = DateTime.MinValue;
+				Logging.Write(System.Drawing.Color.Orange,
+					"[VibeParty] can't navigate to the leader ({0}) — native follow for 12s.", mr);
 			}
 		}
 
@@ -1439,8 +1507,8 @@ namespace VibeParty
 				ctx => _partyWater != null && StyxWoW.Me.Class == WoWClass.Mage
 					&& !StyxWoW.Me.Combat && _partyWater.HasRequests,
 				new PrioritySelector(
-					// 1. Deliver to the nearest requester (any surplus above the reserve is deliverable — the
-					//    trade splits stacks, so even a fresh rank's 2-per-cast trickle reaches the thirsty).
+					// 1. Deliver to the nearest requester once a full stack is spare (the trade splits bag
+					//    stacks to assemble it — a fresh rank's 2-per-cast trickle never lands in one slot).
 					new Decorator(ctx => WantDeliverWater(),
 						new PrioritySelector(
 							new Decorator(ctx => _waterTarget!.Distance > WaterTradeRange,
@@ -1462,11 +1530,14 @@ namespace VibeParty
 				));
 		}
 
-		// Resolve the delivery target once per tick (needs water in bags + a servable requester).
+		// Resolve the delivery target once per tick (needs a FULL STACK to give + a servable requester).
+		// One stack per delivery, refill-on-empty (user 2026-07-12): partial top-ups left everyone holding
+		// random amounts (11, 12, 6…) — consistent 20s beat frequent dribbles even if the requester waits
+		// while a fresh-rank mage slowly stocks back up.
 		private bool WantDeliverWater()
 		{
 			_waterTarget = null;
-			if (_partyWater == null || PartyWater.ConjuredWaterCount() <= PartyWater.ReserveForSelf) return false;   // keep our reserve
+			if (_partyWater == null || PartyWater.ConjuredWaterCount() < PartyWater.ReserveForSelf + WaterStackGive) return false;
 			_waterTarget = _partyWater.NextRequester();
 			return _waterTarget != null;
 		}
@@ -1501,11 +1572,10 @@ namespace VibeParty
 				}
 			}
 
-			// Give min(10, total-5) by COUNT, splitting stacks as needed — a fresh conjure rank makes only
-			// 2/cast, so the whole stock can sit in ONE small stack that a whole-stack give could never hand
-			// over while keeping the reserve. All conjured drinks in bag count (stale ranks get purged lazily).
+			// Give one full STACK (20) by COUNT, splitting bag stacks as needed to assemble it. All conjured
+			// drinks in bag count (stale ranks get purged lazily).
 			int given = Lua.GetReturnVal<int>(
-				"local reserve=5 local giveMax=10 local total=0 " +
+				"local reserve=5 local giveMax=20 local total=0 " +
 				"for b=0,4 do for s=1,GetContainerNumSlots(b) do local l=GetContainerItemLink(b,s) if l and string.find(l,'Conjured') and string.find(l,'Water') then local _,c=GetContainerItemInfo(b,s) total=total+(c or 1) end end end " +
 				"local give=math.min(giveMax,total-reserve) local given=0 local slot=1 " +
 				"if give>0 then for b=0,4 do for s=1,GetContainerNumSlots(b) do if given<give and slot<=6 then local l=GetContainerItemLink(b,s) if l and string.find(l,'Conjured') and string.find(l,'Water') then local _,c=GetContainerItemInfo(b,s) c=c or 1 local take=math.min(c,give-given) if take==c then PickupContainerItem(b,s) else SplitContainerItem(b,s,take) end ClickTradeButton(slot) slot=slot+1 given=given+take end end end end end " +
@@ -2098,7 +2168,8 @@ namespace VibeParty
 		private PartyLoot? _partyLoot;
 		private static PartyWater? _partyWater;   // static so the static FollowLeader can read AwaitingWater
 		private WoWPlayer? _waterTarget;
-		private const int MageWaterStock = 25;    // mage conjures until it holds this (~5 reserve + a couple handouts)
+		private const int WaterStackGive = 20;    // one full stack per delivery (refill-on-empty model)
+		private const int MageWaterStock = 25;    // reserve (5) + one full stack handout (20)
 		private const float WaterTradeRange = 8f;
 		private static DateTime _nextConjureTry = DateTime.MinValue;   // paces the stock-up cast (see CreateWaterServiceBehavior)
 		private static readonly System.Text.Json.JsonSerializerOptions _cmdJson = new System.Text.Json.JsonSerializerOptions { IncludeFields = true };

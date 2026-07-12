@@ -23,7 +23,8 @@ namespace VibeParty
 	public sealed class PartyWater
 	{
 		public const int ReserveForSelf = 5;     // the mage never trades below this many drinks
-		private const int LowWater = 5;          // request when current-water drinks drop below this
+		private const int LowWater = 2;          // refill-on-empty: ask only when down to the last drink or two
+		                                         // (the buffer covers one more rest while the mage walks over)
 		private const double RequestEvery = 30;  // seconds between our water requests
 		private const double ServeCooldown = 20; // per-requester cooldown after a delivery attempt
 		private const double RequestStale = 90;  // drop a request we haven't re-heard in this long
