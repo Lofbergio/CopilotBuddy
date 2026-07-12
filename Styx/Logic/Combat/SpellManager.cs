@@ -63,7 +63,7 @@ namespace Styx.Logic.Combat
 					if (!_knownSpells.ContainsKey(spell.Name))
 					{
 						_knownSpells.Add(spell.Name, spell);
-						Logging.Write("Adding {0}", spell.Name);
+						Logging.WriteDebug("Adding {0}", spell.Name);
 					}
 				}
 
