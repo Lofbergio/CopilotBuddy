@@ -1,6 +1,10 @@
 # Dungeon viability — combat coordination plan
 
-**Status:** designed 2026-07-08 (long session), **NOT built**. Build after `/clear` with this + the CLAUDE.mds loaded.
+**Status:** designed 2026-07-08. **Batch 1 BUILT 2026-07-12** (GoodVibes `GVDungeon.cs` + movement/interrupt
+edits, commit `25c477a` in the routine repo — 1a threat-ease w/ skull bypass, 1b off-target totem swat,
+1c melee-eats-fire via `AvoidingGroundEffects`, 1d whitelist-free party-aware interrupts + paladin HoJ
+lockdown; UNTESTED live). **LFG lifecycle glue BUILT 2026-07-12** (`cfaf4a3`: ghost-guarded teleport mirror,
+three-tier role check — see VibeParty CLAUDE.md). **Batch 2 NOT built** (needs the smoke-tested bus).
 **Scenario:** user drives the TANK manually (VibeParty leader) + 4 bot followers (VibeParty follower + GoodVibes).
 Goal: make leveling 5-man dungeons viable.
 
