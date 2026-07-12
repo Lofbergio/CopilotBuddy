@@ -471,16 +471,19 @@ namespace VibeParty
 		}
 
 		// Follower (bot thread): report per-quest completion. Sent even OUTSIDE a party — the report
-		// is also the liveness/name beacon AutoInviteTick's roster is built from.
+		// is also the liveness/name beacon AutoInviteTick's roster is built from. Completion comes
+		// from the LUA quest log (CompletedQuestsLua) — PlayerQuest.IsCompleted false-positives on
+		// in-progress quests (docs/gotchas.md) and painted wrong states onto the leader's readout.
 		private static void ReportProgress(PartyBus bus)
 		{
 			List<PlayerQuest> quests = StyxWoW.Me.QuestLog.GetAllQuests();
 			if (quests == null) return;
+			var completed = CompletedQuestsLua();
 			System.Text.StringBuilder sb = new System.Text.StringBuilder();
 			foreach (PlayerQuest q in quests)
 			{
 				if (q == null || q.Id == 0) continue;
-				sb.Append(q.Id).Append(':').Append(q.IsCompleted ? '1' : '0').Append(';');
+				sb.Append(q.Id).Append(':').Append(completed.ContainsKey(q.Id) ? '1' : '0').Append(';');
 			}
 			bus.Publish("Progress", sb.ToString());
 		}
@@ -518,6 +521,13 @@ namespace VibeParty
 			List<PlayerQuest> mine = StyxWoW.Me.QuestLog.GetAllQuests();
 			if (mine == null) return;
 			long cutoff = DateTime.UtcNow.Ticks - TimeSpan.FromSeconds(ProgressLivenessSeconds).Ticks;
+
+			// Hold the readout until every CURRENT party member has a live report — reviewing from the
+			// first heartbeat re-logged every quest line per joiner as connections trickled in ("waiting
+			// on Marge" → "Maggie, Marge" → …, pure arrival-order churn that read as state).
+			foreach (ulong g in StyxWoW.Me.PartyMemberGuids)
+				if (!_partyProgress.TryGetValue(g, out MemberProgress mp0) || mp0.LastUtcTicks < cutoff)
+					return;
 
 			foreach (PlayerQuest q in mine)
 			{
