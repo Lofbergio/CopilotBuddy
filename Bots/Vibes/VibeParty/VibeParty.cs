@@ -1629,8 +1629,34 @@ namespace VibeParty
 				.FirstOrDefault();
 		}
 
+		// The CLIENT already knows whether an NPC has business with us — the server pushes per-NPC
+		// quest-giver status (what renders the "!"/"?" markers) and the port exposes it as a memory
+		// read (WoWObject.QuestGiverStatus), no interaction needed. This is the pre-filter that stops
+		// "walk to a flagged giver and learn it has nothing" entirely: Merissa (deprecated 'Welcome!'
+		// relation) reads None and is never visited. Incomplete (grey "?") is excluded too — we're on
+		// the quest but not done, nothing to do there. The visit-and-learn latches below stay as
+		// backstops for stale or lying status.
+		private static bool GiverHasBusiness(WoWUnit u)
+		{
+			switch (u.QuestGiverStatus)
+			{
+				case QuestGiverStatus.TurnIn:
+				case QuestGiverStatus.TurnInRepeatable:
+				case QuestGiverStatus.TurnInInvisible:
+				case QuestGiverStatus.LowLevelTurnInRepeatable:
+				case QuestGiverStatus.Available:
+				case QuestGiverStatus.AvailableRepeatable:
+				case QuestGiverStatus.LowLevelAvailable:
+				case QuestGiverStatus.LowLevelAvailableRepeatable:
+					return true;
+				default:
+					return false;
+			}
+		}
+
 		private static bool IsUsableGiver(WoWUnit? u)
 			=> u != null && !u.Dead && u.IsQuestGiver
+			   && GiverHasBusiness(u)
 			   && !_turnInDeadNpc.Contains(u.Guid)
 			   && !(_turnInCooldown.TryGetValue(u.Guid, out DateTime until) && DateTime.UtcNow < until)
 			   && !(_turnInNothingHere.TryGetValue(u.Guid, out int fp) && fp == _completedFp);
