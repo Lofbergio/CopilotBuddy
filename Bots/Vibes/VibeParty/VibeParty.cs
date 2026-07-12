@@ -5,6 +5,8 @@ using System.Linq;
 using System.Windows.Forms;
 using System.Xml.Linq;
 using Bots.Grind;
+using Bots.Vibes.Shared;
+using Bots.VibeGrinder;
 using CommonBehaviors;
 using CommonBehaviors.Actions;
 using CommonBehaviors.Decorators;
@@ -133,6 +135,8 @@ namespace VibeParty
 			{
 				_bus.Subscribe("Command", OnCommandReceived);
 				AttachLuaEvents();
+				Vendors.OnVendorItems += OnVendorSweep;   // disposition: only true junk sells
+				Vendors.OnMailItems += OnMailSweep;       // disposition: valuables queue for the bank
 				LootTargeting.Instance.IncludeTargetsFilter += LevelBot.LevelbotIncludeLootsFilter;
 				LootTargeting.Instance.IncludeTargetsFilter += PruneDangerousCollectibles;
 				LootTargeting.Instance.IncludeTargetsFilter += PartyLootFilter;   // Phase 5: lease-gate collectibles
@@ -169,6 +173,8 @@ namespace VibeParty
 			}
 
 			DetachLuaEvents();
+			Vendors.OnVendorItems -= OnVendorSweep;
+			Vendors.OnMailItems -= OnMailSweep;
 			LootTargeting.Instance.IncludeTargetsFilter -= LevelBot.LevelbotIncludeLootsFilter;
 			LootTargeting.Instance.IncludeTargetsFilter -= PruneDangerousCollectibles;
 			LootTargeting.Instance.IncludeTargetsFilter -= PartyLootFilter;
@@ -187,11 +193,14 @@ namespace VibeParty
 		// a null profile made NeedToSell/Repair/Train/Buy permanently "no vendor known", so followers
 		// never trained (the class trainer can be 30yd away) and the hunter ammo restock could never
 		// fire. Same pattern as VibeGrinder's GrindAreaSynthesizer: an empty-vendor profile +
-		// FindVendorsAutomatically makes GetClosestVendor fall through to data.bin. Sell mask is
-		// GREY-ONLY — unlike VibeGrinder we have no disposition hook protecting good items, so nothing
-		// above pure junk is ever auto-sold.
+		// FindVendorsAutomatically makes GetClosestVendor fall through to data.bin. The sell mask is
+		// WIDE (grey→blue, never purple) because the shared ItemDisposition sweeps protect everything
+		// that isn't true junk and queue the valuables for mail — identical policy (and the same
+		// VibeGrinderSettings "Loot" knobs) as VibeGrinder, so one loot policy governs both botbases.
 		private static Profile? _syntheticProfile;
 		private static bool? _origFindVendors;
+		private static readonly MailboxService _mailboxes = new MailboxService();
+		private static uint _mailboxMap = uint.MaxValue;
 
 		private static void EnsurePartyProfile()
 		{
@@ -201,9 +210,9 @@ namespace VibeParty
 					new XElement("MinFreeBagSlots", 2),
 					new XElement("MinDurability", "0.35"),
 					new XElement("SellGrey", true),
-					new XElement("SellWhite", false),
-					new XElement("SellGreen", false),
-					new XElement("SellBlue", false),
+					new XElement("SellWhite", true),
+					new XElement("SellGreen", true),
+					new XElement("SellBlue", true),
 					new XElement("SellPurple", false),
 					new XElement("MailGrey", false),
 					new XElement("MailWhite", false),
@@ -215,6 +224,70 @@ namespace VibeParty
 			_origFindVendors ??= CharacterSettings.Instance.FindVendorsAutomatically;
 			CharacterSettings.Instance.FindVendorsAutomatically = true;
 			ProfileManager.UseSyntheticProfile(_syntheticProfile);
+			LoadMailboxesIfMapChanged();
+		}
+
+		// Feed the map's faction-safe mailboxes into the synthetic profile so the mail run (which
+		// piggybacks on sell/repair visits when MailRecipient is set) can find one. No toggle: an
+		// unset MailRecipient already means "no mailing", and with no mailbox the Mail items just
+		// stay in bags (the safe failure).
+		private static void LoadMailboxesIfMapChanged()
+		{
+			// MapId is event-written and can read -1 (= uint.MaxValue) in some states — skip those ticks.
+			uint map = StyxWoW.Me?.MapId is uint m ? m : uint.MaxValue;
+			if (map == uint.MaxValue || map == _mailboxMap) return;
+			var mgr = ProfileManager.CurrentProfile?.MailboxManager;
+			if (mgr == null) return;
+			mgr.ForcedMailboxes = _mailboxes.LoadSafeMailboxes(map);
+			_mailboxMap = map;
+		}
+
+		// Disposition sweeps — thin mirrors of VibeGrinder's (same shared ItemDisposition classifier;
+		// see VibeGrinder/Loot/CLAUDE.md for the policy table). Sell hook protects every bag item whose
+		// disposition isn't Vendor (the wide mask then only sells true junk); mail hook queues the Mail
+		// items. Fail-safe: an item that can't classify is protected.
+		private static void OnVendorSweep(SellItemsEventArgs args)
+		{
+			var me = StyxWoW.Me;
+			if (me == null) return;
+			int protectedCount = 0, willMail = 0;
+			foreach (WoWItem item in me.BagItems)   // BagItems, never CarriedItems (equipped gear)
+			{
+				if (item == null) continue;
+				DispositionAction action;
+				try { action = ItemDisposition.Classify(item); }
+				catch { action = DispositionAction.Keep; }
+				if (action != DispositionAction.Vendor && !args.IdExceptions.Contains(item.Entry))
+				{
+					args.IdExceptions.Add(item.Entry);
+					protectedCount++;
+					if (action == DispositionAction.Mail) willMail++;
+				}
+			}
+			if (protectedCount > 0)
+				Logging.Write("[VibeParty] Vendor sweep: protecting {0} item(s) from sale ({1} queued to mail, rest kept).",
+					protectedCount, willMail);
+		}
+
+		private static void OnMailSweep(MailItemsEventArgs args)
+		{
+			var me = StyxWoW.Me;
+			if (me == null) return;
+			int queued = 0;
+			foreach (WoWItem item in me.BagItems)
+			{
+				if (item == null) continue;
+				DispositionAction action;
+				try { action = ItemDisposition.Classify(item); }
+				catch { continue; }
+				if (action == DispositionAction.Mail && !args.AdditionalItems.Contains(item))
+				{
+					args.AdditionalItems.Add(item);
+					queued++;
+				}
+			}
+			if (queued > 0)
+				Logging.Write("[VibeParty] Mail run: queuing {0} valuable item(s) for the bank.", queued);
 		}
 
 		// ──────────────────────────────────────────────────────────────────────
@@ -303,6 +376,7 @@ namespace VibeParty
 					ReportProgress(bus);
 				}
 				_partyWater?.WaterTick();   // requester: ask for water when low; mage: advertise + clean stale (throttled)
+				LoadMailboxesIfMapChanged();   // keep the synthetic profile's mailboxes on the current map
 				// Re-arm the per-fight movement one-shots the moment we drop out of combat state.
 				if (!IsInCombatState()) { _combatEntryStopDone = false; _posApproaching = false; }
 			}
