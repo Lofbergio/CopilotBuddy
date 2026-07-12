@@ -443,6 +443,7 @@ namespace VibeParty
 				_partyWater?.WaterTick();   // requester: ask for water when low; mage: advertise + clean stale (throttled)
 				LoadMailboxesIfMapChanged();   // keep the synthetic profile's mailboxes on the current map
 				MirrorLeaderTeleportTick();    // LFG: match the leader's inside/outside-the-dungeon state
+				MirrorLeaderBagsTick();        // bag-visibility sync: leader's bags open ⇒ ours open
 				// Re-arm the per-fight movement one-shots the moment we drop out of combat state.
 				if (!IsInCombatState()) { _combatEntryStopDone = false; _posApproaching = false; }
 			}
@@ -482,8 +483,25 @@ namespace VibeParty
 				LeaderName = me.Name,
 				Timestamp = DateTime.Now,
 				LeaderTargetGuid = me.CurrentTargetGuid,
-				LeaderInCombat = me.Combat
+				LeaderInCombat = me.Combat,
+				LeaderBagsOpen = LeaderBagsOpenCached()
 			};
+		}
+
+		// Bag-visibility sync: bag UI state is Lua-only, so poll at 1Hz and cache — the 10Hz command
+		// build must stay memory-read cheap.
+		private static bool _leaderBagsOpen;
+		private static DateTime _leaderBagsCheckedAt = DateTime.MinValue;
+
+		private static bool LeaderBagsOpenCached()
+		{
+			if ((DateTime.Now - _leaderBagsCheckedAt).TotalSeconds >= 1)
+			{
+				_leaderBagsCheckedAt = DateTime.Now;
+				_leaderBagsOpen = Lua.GetReturnVal<int>(
+					"local o=0 for i=0,4 do if IsBagOpen and IsBagOpen(i) then o=1 end end return o", 0) == 1;
+			}
+			return _leaderBagsOpen;
 		}
 
 		// Follower (bot thread): report per-quest completion. Sent even OUTSIDE a party — the report
@@ -1126,6 +1144,20 @@ namespace VibeParty
 			{
 				Navigator.MoveTo(LeaderLocation);
 			}
+		}
+
+		// Bag-visibility sync (follower): mirror the leader's open/closed bag UI, edge-triggered — apply only
+		// on state CHANGE so a follower can still open its own bags without a per-tick fight. Explicit
+		// Open/CloseBag (never OpenAllBags — it toggles) keeps the apply idempotent.
+		private static bool _bagsMirrorOpen;
+
+		private static void MirrorLeaderBagsTick()
+		{
+			if (_botMessage == null || _botMessage.LeaderBagsOpen == _bagsMirrorOpen) return;
+			_bagsMirrorOpen = _botMessage.LeaderBagsOpen;
+			Lua.DoString(_bagsMirrorOpen
+				? "OpenBackpack() for i=1,4 do OpenBag(i) end"
+				: "CloseBackpack() for i=1,4 do CloseBag(i) end");
 		}
 
 		// Instance follow: mesh-nav holds FollowDistance spacing — never the native-/follow glue, which drags

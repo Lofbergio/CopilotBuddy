@@ -25,6 +25,7 @@ namespace Styx.RemotableObjects
 			LeaderInCombat = (bool)info.GetValue("LeaderInCombat", typeof(bool));
 			LeaderInInstance = (bool)info.GetValue("LeaderInInstance", typeof(bool));
 			LeaderGhost = (bool)info.GetValue("LeaderGhost", typeof(bool));
+			LeaderBagsOpen = (bool)info.GetValue("LeaderBagsOpen", typeof(bool));
 		}
 
 		public override string ToString()
@@ -47,6 +48,7 @@ namespace Styx.RemotableObjects
 			info.AddValue("LeaderInCombat", LeaderInCombat);
 			info.AddValue("LeaderInInstance", LeaderInInstance);
 			info.AddValue("LeaderGhost", LeaderGhost);
+			info.AddValue("LeaderBagsOpen", LeaderBagsOpen);
 		}
 
 		public void SetMessage(BotMessage message)
@@ -76,5 +78,7 @@ namespace Styx.RemotableObjects
 		public bool LeaderInInstance;
 		// …EXCEPT while the leader is dead/ghost (a corpse run reads as "left the instance" — it isn't).
 		public bool LeaderGhost;
+		// Bag-visibility sync: followers mirror the leader's open/closed bag UI.
+		public bool LeaderBagsOpen;
 	}
 }
