@@ -94,7 +94,10 @@ namespace Styx.Offsets
 		/// <summary>GUID of current target.</summary>
 		public const uint TargetGuid = 0x00BD07B0;
 
-		/// <summary>GUID of current focus.</summary>
+		/// <summary>GUID of current focus. ⚠ SUSPECT: OffsetDoctor (2026-07-12) found 0x00BD07C0 reads back
+		/// the TARGET's GUID, not focus, while Lua UnitGUID('focus') differed — this slot does not hold focus
+		/// (consistent with the DiscoBot/VibeParty note that a raw write here never reaches Lua's focus unit).
+		/// Read focus via Lua until the real offset is confirmed. Only Me.FocusGuid/SetFocus consume it.</summary>
 		public const uint FocusGuid = 0x00BD07C0;
 
 		/// <summary>GUID of last target.</summary>

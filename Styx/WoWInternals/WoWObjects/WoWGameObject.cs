@@ -559,7 +559,9 @@ namespace Styx.WoWInternals.WoWObjects
         /// </summary>
         private static void LoadSlotMappingTable()
         {
-            const uint SlotMappingTableAddress = 10710832U; // 0xA38F90 — WotLK 3.3.5a
+            const uint SlotMappingTableAddress = 10710832U; // 0xA36F30 — WotLK 3.3.5a (the old "0xA38F90"
+                                                            // comment was wrong: that address holds string
+                                                            // bytes; 0xA36F30 holds the table pointer — OffsetDoctor 2026-07-12)
             const int GameObjectTypeCount = 36;
             const int MaxSlotsPerType = 24; // Properties[] SizeConst
 

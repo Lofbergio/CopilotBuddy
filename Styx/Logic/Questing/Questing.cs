@@ -11,8 +11,10 @@ namespace Styx.Logic.Questing
 	/// </summary>
 	public static class Questing
 	{
-		// Offset for completed quests linked list (3.3.5a 12340)
-		private const uint CompletedQuestsPtr = 0xAD0DF4; // 11337204
+		// Completed-quest linked-list head (3.3.5a 12340). VERIFIED live 2026-07-12 by OffsetDoctor:
+		// walking 0xACFDF4 yielded the character's 1 completed quest; the old 0xAD0DF4 (a 0x1000 typo,
+		// its "11337204" comment already pointed at 0xACFDF4) walked into garbage. Matches StyxWoW.cs:270.
+		private const uint CompletedQuestsPtr = 0xACFDF4; // 11337204
 
 		// CGQuestLog__GetQuestIDByIndex function address (3.3.5a 12340)
 		private const uint CGQuestLogGetQuestIDByIndex = 0x5E3E40; // 6174784

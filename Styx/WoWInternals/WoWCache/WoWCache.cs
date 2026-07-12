@@ -18,8 +18,11 @@ namespace Styx.WoWInternals.WoWCache
 
         public WoWCache()
         {
-            // Base address for cache structures in 3.3.5a (HB uses 12965520 = 0xC5D790)
-            uint baseAddr = 12965520U; // Was 0xC5D780, correct is 0xC5D790
+            // Cache-structure array base (3.3.5a 12340) = 0xC5D690. VERIFIED live 2026-07-12 by
+            // OffsetDoctor: creature names resolve through here and match Lua; the dword at the old
+            // "correct 0xC5D790" is null. (The prior comment claiming 0xC5D790 was wrong — the working
+            // literal is and always was 0xC5D690.)
+            uint baseAddr = 12965520U; // 0xC5D690
             
             for (int i = 0; i < 15; i++)
             {
