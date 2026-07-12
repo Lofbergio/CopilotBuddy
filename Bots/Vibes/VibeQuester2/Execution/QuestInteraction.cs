@@ -61,15 +61,15 @@ namespace Bots.Vibes.VibeQuester2.Execution
             // server saying "not offerable here/now" — the exact state the old bot looped on for 23 min.
             if (GossipFrame.Instance.IsVisible && !QuestFrame.Instance.IsVisible)
             {
-                int index = FindQuestIndex(GossipFrame.Instance.AvailableQuests, task.QuestId);
-                if (index < 0)
+                int index = FindGossipIndex(actives: false, task.QuestId, task.QuestName);
+                if (index <= 0)
                 {
                     Logging.Write("[VQ2-Task] pickup q{0} '{1}': {2} does not OFFER it (gossip has no matching entry).",
                         task.QuestId, task.QuestName, task.EntityName);
                     GossipFrame.Instance.Close();
                     return InteractionResult.NotOffered;
                 }
-                GossipFrame.Instance.SelectAvailableQuest(index);
+                Lua.DoString("SelectGossipAvailableQuest({0})", index);
                 if (!WaitState(() => QuestFrame.Instance.IsVisible, FrameOpenTimeoutMs))
                 {
                     Logging.WriteDebug("[VQ2-Task] pickup q{0}: detail frame never opened after select — retry.", task.QuestId);
@@ -83,7 +83,7 @@ namespace Bots.Vibes.VibeQuester2.Execution
                 return InteractionResult.Retry;
             }
 
-            uint shown = QuestFrame.Instance.CurrentShownQuestId;
+            uint shown = ShownQuestId();
             if (shown != 0 && shown != (uint)task.QuestId)
             {
                 // Direct-detail giver showing some OTHER quest — not ours to accept blind.
@@ -125,15 +125,15 @@ namespace Bots.Vibes.VibeQuester2.Execution
 
             if (GossipFrame.Instance.IsVisible && !QuestFrame.Instance.IsVisible)
             {
-                int index = FindQuestIndex(GossipFrame.Instance.ActiveQuests, task.QuestId);
-                if (index < 0)
+                int index = FindGossipIndex(actives: true, task.QuestId, task.QuestName);
+                if (index <= 0)
                 {
                     Logging.Write("[VQ2-Task] turn-in q{0} '{1}': {2} does not TAKE it (gossip has no matching active entry).",
                         task.QuestId, task.QuestName, task.EntityName);
                     GossipFrame.Instance.Close();
                     return InteractionResult.NotOffered;
                 }
-                GossipFrame.Instance.SelectActiveQuest(index);
+                Lua.DoString("SelectGossipActiveQuest({0})", index);
                 if (!WaitState(() => QuestFrame.Instance.IsVisible, FrameOpenTimeoutMs))
                     return InteractionResult.Retry;
             }
@@ -152,13 +152,23 @@ namespace Bots.Vibes.VibeQuester2.Execution
                 if (!QuestFrame.Instance.IsVisible)
                     return InteractionResult.Retry;   // frame died without completion — re-approach
 
-                uint shown = QuestFrame.Instance.CurrentShownQuestId;
+                uint shown = ShownQuestId();
                 if (shown != 0 && shown != (uint)task.QuestId)
                 {
                     // Wrong quest's frame while ours is still in the log (multi-quest NPC quirk) —
                     // close and let the retry re-select ours from the gossip list.
                     QuestFrame.Instance.Close();
                     StyxWoW.Sleep(300);
+                    return InteractionResult.Retry;
+                }
+
+                // Progress panel is the server's own verdict: not completable = our state is wrong
+                // (planner raced, objective lagging) — Continue-spamming it wedged the old bot 25s.
+                if (Lua.GetReturnVal<int>(
+                        "return ((QuestFrameProgressPanel and QuestFrameProgressPanel:IsShown()) and not IsQuestCompletable()) and 1 or 0", 0U) == 1)
+                {
+                    Logging.WriteDebug("[VQ2-Task] turn-in q{0}: server says NOT completable — closing, retry.", task.QuestId);
+                    QuestFrame.Instance.Close();
                     return InteractionResult.Retry;
                 }
 
@@ -191,7 +201,7 @@ namespace Bots.Vibes.VibeQuester2.Execution
         {
             if (!WaitState(() => QuestFrame.Instance.IsVisible, 800))
                 return;   // nothing chained
-            uint shown = QuestFrame.Instance.CurrentShownQuestId;
+            uint shown = ShownQuestId();
             if (shown == 0 || shown == (uint)completed.QuestId)
                 return;
             if (plan != null && plan.QuestIds.Contains((int)shown))
@@ -271,13 +281,43 @@ namespace Bots.Vibes.VibeQuester2.Execution
             return opened;
         }
 
-        private static int FindQuestIndex(List<GossipQuestEntry> entries, int questId)
+        /// <summary>
+        /// 1-based gossip select index for OUR quest, or 0 when it isn't listed. ⚠ LUA is the truth:
+        /// the memory wrapper (GossipFrame.ActiveQuests/AvailableQuests) returned EMPTY lists while
+        /// GetNumGossip*Quests() was non-zero live (docs/gotchas.md) — trusting it here turns a quest
+        /// the server IS offering into a NotOffered strike and a wrongful abandon. Wrapper ids match
+        /// first when they read; otherwise the Lua TITLES match against the DB quest name (same enUS
+        /// strings the server sends).
+        /// </summary>
+        private static int FindGossipIndex(bool actives, int questId, string questTitle)
         {
-            if (entries == null) return -1;
-            for (int i = 0; i < entries.Count; i++)
-                if (entries[i] != null && entries[i].Id == questId)
-                    return entries[i].Index;
-            return -1;
+            List<GossipQuestEntry> entries = actives ? GossipFrame.Instance.ActiveQuests : GossipFrame.Instance.AvailableQuests;
+            if (entries != null)
+                foreach (GossipQuestEntry e in entries)
+                    if (e != null && e.Id == questId)
+                        return e.Index + 1;   // wrapper index is 0-based; Lua selects are 1-based
+
+            string fn = actives ? "Active" : "Available";
+            string luaList = Lua.GetReturnVal<string>(
+                "local r = '' local n = GetNumGossip" + fn + "Quests() local q = { GetGossip" + fn + "Quests() } " +
+                "if n > 0 then local s = math.floor(#q / n) for i = 0, n - 1 do r = r .. tostring(q[i*s+1]) .. '\\2' end end return r", 0U) ?? "";
+            string[] titles = luaList.Split(new[] { '\x02' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < titles.Length; i++)
+                if (string.Equals(titles[i], questTitle, StringComparison.OrdinalIgnoreCase))
+                    return i + 1;
+            Logging.WriteDebug("[VQ2-Task] q{0} '{1}' not in the gossip {2} list ({3} entries: {4}).",
+                questId, questTitle, fn.ToLowerInvariant(), titles.Length, string.Join(" | ", titles));
+            return 0;
+        }
+
+        /// <summary>CurrentShownQuestId is a memory read that can report 0 with a panel open —
+        /// GetQuestID() is the client's own answer (docs/gotchas.md).</summary>
+        private static uint ShownQuestId()
+        {
+            uint shown = QuestFrame.Instance.CurrentShownQuestId;
+            if (shown == 0 && QuestFrame.Instance.IsVisible)
+                shown = (uint)Lua.GetReturnVal<int>("return GetQuestID() or 0", 0U);
+            return shown;
         }
 
         /// <summary>Bounded STATE poll (frames/log are state — doctrine rule 1; no event mirror to desync).</summary>

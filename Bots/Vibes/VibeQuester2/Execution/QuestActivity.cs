@@ -326,8 +326,9 @@ namespace Bots.Vibes.VibeQuester2.Execution
 
         private static bool QuestReadyToTurnIn(QuestTask task, LocalPlayer me)
         {
-            var pq = me.QuestLog.GetAllQuests().FirstOrDefault(q => q.Id == (uint)task.QuestId);
-            return pq != null && pq.IsCompleted;
+            // Lua-log truth, NOT PlayerQuest.IsCompleted (false-positives on in-progress quests —
+            // docs/gotchas.md); the set only ever contains quests currently in the log.
+            return QuestLogTruth.IsCompleteInLog((uint)task.QuestId);
         }
 
         /// <summary>Per-objective progress from the player descriptor (server truth in memory).</summary>
@@ -335,7 +336,7 @@ namespace Bots.Vibes.VibeQuester2.Execution
         {
             var pq = me.QuestLog.GetAllQuests().FirstOrDefault(q => q.Id == (uint)task.QuestId);
             if (pq == null) return true;    // left the log (turned in / abandoned) — nothing to do
-            if (pq.IsCompleted) return true;
+            if (QuestLogTruth.IsCompleteInLog((uint)task.QuestId)) return true;   // never PlayerQuest.IsCompleted (gotchas)
 
             int required = task.Objective.Type == ObjectiveType.KillMob
                 ? task.Objective.KillCount

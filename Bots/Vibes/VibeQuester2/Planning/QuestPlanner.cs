@@ -189,7 +189,10 @@ namespace Bots.Vibes.VibeQuester2.Planning
         /// </summary>
         private void BuildTasks(QuestPlan plan, List<QuestEntry> selected, QuestDatabase db, LocalPlayer me)
         {
-            var readyIds = me.QuestLog.GetAllQuests().Where(q => q.IsCompleted).Select(q => (uint)q.Id).ToHashSet();
+            // Lua-log truth, NOT PlayerQuest.IsCompleted — that false-positives on in-progress quests
+            // and plans turn-ins the server then refuses, striking innocent quests toward abandon
+            // (docs/gotchas.md).
+            var readyIds = new HashSet<uint>(QuestLogTruth.CompleteSet());
             var inLog = me.QuestLog.GetAllQuests().Select(q => (uint)q.Id).ToHashSet();
 
             var turnInsReady = new List<QuestTask>();
