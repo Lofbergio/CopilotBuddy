@@ -150,13 +150,13 @@ namespace Styx
 
             // Gather all .cs files recursively
             sourceFiles.AddRange(Directory.GetFiles(path, "*.cs", SearchOption.AllDirectories));
-            Logging.Write("Found {0} source files", sourceFiles.Count);
+            Logging.WriteDebug("Found {0} source files", sourceFiles.Count);
 
             // Gather all .dll files - load directly, excluding Temp/ subdirectories
             var dllFiles = Directory.GetFiles(path, "*.dll", SearchOption.AllDirectories)
                 .Where(f => !f.Contains(Path.DirectorySeparatorChar + "Temp" + Path.DirectorySeparatorChar))
                 .ToArray();
-            Logging.Write("Found {0} dll files", dllFiles.Length);
+            Logging.WriteDebug("Found {0} dll files", dllFiles.Length);
             
             foreach (string dllFile in dllFiles)
             {
@@ -200,7 +200,7 @@ namespace Styx
             // Compile root-level files individually
             foreach (string sourceFile in rootFiles)
             {
-                Logging.Write("Compiling: {0}", Path.GetFileName(sourceFile));
+                Logging.WriteDebug("Compiling: {0}", Path.GetFileName(sourceFile));
                 CompilerResults compilerResults;
                 classCollection.CompileAndLoadFrom(sourceFile, out compilerResults);
 
@@ -211,7 +211,7 @@ namespace Styx
                 }
                 else if (compilerResults != null)
                 {
-                    Logging.Write("Compiled successfully: {0}", Path.GetFileName(sourceFile));
+                    Logging.WriteDebug("Compiled successfully: {0}", Path.GetFileName(sourceFile));
                 }
             }
 
@@ -220,7 +220,7 @@ namespace Styx
             {
                 string dirPath = kvp.Key;
                 string dirName = Path.GetFileName(dirPath);
-                Logging.Write("Compiling directory: {0}/ ({1} files)", dirName, kvp.Value.Count);
+                Logging.WriteDebug("Compiling directory: {0}/ ({1} files)", dirName, kvp.Value.Count);
                 CompilerResults compilerResults;
                 classCollection.CompileAndLoadFrom(dirPath, out compilerResults);
 
@@ -231,15 +231,15 @@ namespace Styx
                 }
                 else if (compilerResults != null)
                 {
-                    Logging.Write("Compiled successfully: {0}/", dirName);
+                    Logging.WriteDebug("Compiled successfully: {0}/", dirName);
                 }
             }
 
             // Add all compiled bots
-            Logging.Write("ClassCollection contains {0} compiled bots", classCollection.Count);
+            Logging.WriteDebug("ClassCollection contains {0} compiled bots", classCollection.Count);
             foreach (BotBase bot in classCollection)
             {
-                Logging.Write("Adding bot: {0}", bot.Name);
+                Logging.WriteDebug("Adding bot: {0}", bot.Name);
                 Add(bot.Name, bot);
             }
 
@@ -280,7 +280,7 @@ namespace Styx
             if (_bots != null && !_bots.ContainsKey(name))
             {
                 _bots.Add(name, bot);
-                Logging.Write("New bot added: {0}", name);
+                Logging.WriteDebug("New bot added: {0}", name);
             }
         }
 

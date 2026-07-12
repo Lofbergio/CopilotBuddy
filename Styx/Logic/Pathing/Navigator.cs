@@ -380,7 +380,7 @@ namespace Styx.Logic.Pathing
 		/// </summary>
 		private static void OnTileLoaded(object? sender, TripperNav.TileLoadedEventArgs e)
 		{
-			Logging.Write("Loading {0}_{1}_{2}", e.MapId, e.TileX, e.TileY);
+			Logging.WriteDebug("Loading {0}_{1}_{2}", e.MapId, e.TileX, e.TileY);
 		}
 
 		private static void OnBotStart(EventArgs args)
