@@ -101,8 +101,18 @@ namespace CopilotBuddy.UI
             if (!Directory.Exists(logDir))
                 Directory.CreateDirectory(logDir);
             var timestamp = DateTime.Now;
+            // Under Warband (N boxes, one Logs folder) pid-only names make per-toon logs unfindable —
+            // tag the file with the relog profile's character when one is configured. The pid stays
+            // for uniqueness (same-minute restarts happen); no character → pid-only as before.
+            // NOTE: warband-<pid>.log is untouched — its exact name is the Warband hub's tail contract.
+            var tagSb = new System.Text.StringBuilder();
+            foreach (char c in Styx.Logic.Relogging.RelogSettings.Instance.CharacterName ?? "")
+                if (char.IsLetterOrDigit(c)) tagSb.Append(c);
+            string logTag = tagSb.Length > 0
+                ? $"{tagSb}_{Process.GetCurrentProcess().Id}"
+                : Process.GetCurrentProcess().Id.ToString();
             Logging.LogFilePath = Path.Combine(logDir,
-                $"{timestamp.Year}-{timestamp.Month:D2}-{timestamp.Day:D2}_{timestamp.Hour:D2}{timestamp.Minute:D2}_{Process.GetCurrentProcess().Id}.log");
+                $"{timestamp.Year}-{timestamp.Month:D2}-{timestamp.Day:D2}_{timestamp.Hour:D2}{timestamp.Minute:D2}_{logTag}.log");
 
             // Subscribe to logging events
             Logging.OnLogMessage += OnLogMessage;
