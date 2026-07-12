@@ -444,6 +444,7 @@ namespace VibeParty
 				LoadMailboxesIfMapChanged();   // keep the synthetic profile's mailboxes on the current map
 				MirrorLeaderTeleportTick();    // LFG: match the leader's inside/outside-the-dungeon state
 				MirrorLeaderBagsTick();        // bag-visibility sync: leader's bags open ⇒ ours open
+				RestEntryFollowBreak();        // one backward step on rest entry kills stationary follow glue
 				// Re-arm the per-fight movement one-shots the moment we drop out of combat state.
 				if (!IsInCombatState()) { _combatEntryStopDone = false; _posApproaching = false; }
 			}
@@ -1144,6 +1145,35 @@ namespace VibeParty
 			{
 				Navigator.MoveTo(LeaderLocation);
 			}
+		}
+
+		// Rest-entry follow break (user 2026-07-12): ONE tap of the backpedal key when rest begins. The
+		// hold-position MoveStop in FollowLeader case (3) only fires if we happen to be MOVING when rest
+		// starts, so /follow glue armed while the leader stands still survives into the rest and drags us
+		// off the drink at his first step. A movement INPUT always cancels /follow, and rest issues no CTM,
+		// so nothing re-arms it. Press on one pulse, release on the next (a tap, not a walk); skipped if a
+		// Food/Drink aura is already up (the tap would cancel it — the reactive MoveStop covers that path).
+		// Lives in Pulse, not the tree: a release inside a tree branch can be orphaned mid-step and leave
+		// the walk key held forever (the GVHunter run-7 moonwalk).
+		private static bool _restStepDone;
+		private static bool _restStepHeld;
+
+		private static void RestEntryFollowBreak()
+		{
+			if (_restStepHeld)
+			{
+				_restStepHeld = false;
+				WoWMovement.MoveStop(WoWMovement.MovementDirection.Backwards);
+				return;
+			}
+			bool needRest = RoutineManager.Current != null && RoutineManager.Current.NeedRest;
+			if (!needRest) { _restStepDone = false; return; }
+			if (_restStepDone) return;
+			var me = StyxWoW.Me;
+			if (me.Combat || me.IsCasting || me.Mounted || me.HasAura("Drink") || me.HasAura("Food")) return;
+			_restStepDone = true;
+			_restStepHeld = true;
+			WoWMovement.Move(WoWMovement.MovementDirection.Backwards);
 		}
 
 		// Bag-visibility sync (follower): mirror the leader's open/closed bag UI, edge-triggered — apply only
