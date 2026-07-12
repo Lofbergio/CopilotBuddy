@@ -18,16 +18,17 @@ using MySqlConnector;
 
 class Program
 {
-    // --- data.bin ---
-    const string DataBinPath = @"C:\Users\Texy6\Desktop\newhcb\CopilotBuddy\datadb\data.bin";
+    // --- data.bin (the RUNTIME copy — sync datadb/data.bin afterwards) ---
+    static readonly string DataBinPath =
+        Environment.GetEnvironmentVariable("DATABIN_PATH") ?? @"E:\!Games\World of Warcraft\CopilotBuddy\data.bin";
     const string DataBinPassword = "JkejXP5_fG2vN-jlFVME";
 
-    // --- TrinityCore MySQL (Naaru repack defaults) ---
-    const string MySqlHost = "127.0.0.1";
-    const int    MySqlPort = 3306;
-    const string MySqlUser = "root";
-    const string MySqlPass = "";   // blank by default
-    const string MySqlDb   = "world";
+    // --- world DB (AzerothCore defaults; override via env like GrindMobsExtractor) ---
+    static readonly string MySqlHost = Environment.GetEnvironmentVariable("ACORE_DB_HOST") ?? "127.0.0.1";
+    const int MySqlPort = 3306;
+    static readonly string MySqlUser = Environment.GetEnvironmentVariable("ACORE_DB_USER") ?? "acore";
+    static readonly string MySqlPass = Environment.GetEnvironmentVariable("ACORE_DB_PASS") ?? "acore";
+    static readonly string MySqlDb   = Environment.GetEnvironmentVariable("ACORE_DB_WORLD") ?? "acore_world";
 
     // NPC flags that are useful for the bot:
     // Trainer=16, ClassTrainer=32, ProfTrainer=64,
@@ -135,6 +136,10 @@ JOIN creature           c   ON  c.id  = ct.entry
 LEFT JOIN creature_default_trainer cdt ON cdt.CreatureId = ct.entry
 LEFT JOIN trainer       t   ON  t.Id  = cdt.TrainerId
 WHERE (ct.npcflag | c.npcflag) & @mask != 0
+  -- Never import event-gated spawns: eventEntry > 0 = exists ONLY while the event runs. The Arena
+  -- Tournament ghosts (generic 'Hunter Trainer' 26325 etc., game_event 31 which never runs) would
+  -- otherwise land in data.bin and send bots to empty grass.
+  AND NOT EXISTS (SELECT 1 FROM game_event_creature g WHERE g.guid = c.guid AND g.eventEntry > 0)
 ORDER BY ct.entry, c.guid";
 
         using var cmd = new MySqlCommand(sql, conn);
