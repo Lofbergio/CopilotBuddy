@@ -1721,6 +1721,11 @@ namespace VibeParty
 			LocalPlayer me = StyxWoW.Me;
 			if (me.IsMoving) WoWMovement.MoveStop();
 
+			TiDebug("visit {0} [{1}] status={2}; my completed: {3}",
+				npc.Name, npc.Entry, npc.QuestGiverStatus,
+				string.Join(",", me.QuestLog.GetAllQuests()
+					.Where(q => q != null && q.IsCompleted).Select(q => q.Id + " '" + q.Name + "'")));
+
 			if (!GossipFrame.Instance.IsVisible && !QuestFrame.Instance.IsVisible)
 			{
 				npc.Target();
@@ -1747,6 +1752,7 @@ namespace VibeParty
 				}
 			}
 			_turnInFrameFails.Remove(npc.Guid);
+			TiDebug("frames after interact: {0}", QuestFrameSnapshot());
 
 			bool handedIn = false;
 			bool attempted = false;   // we FOUND our quest in a frame and tried to complete it
@@ -1762,14 +1768,18 @@ namespace VibeParty
 					{
 						if (q == null || q.Id == 0) continue;
 						PlayerQuest held = me.QuestLog.GetQuestById((uint)q.Id);
+						TiDebug("gossip active #{0}: quest {1} — held={2} completed={3}",
+							q.Index, q.Id, held != null, held != null && held.IsCompleted);
 						if (held == null || !held.IsCompleted) continue;
 
+						TiDebug("selecting gossip active #{0} (quest {1})", q.Index, q.Id);
 						GossipFrame.Instance.SelectActiveQuest(q.Index);
 						if (WaitFrame(() => QuestFrame.Instance.IsVisible, 2500))
 						{
 							attempted = true;
 							if (CompleteShownQuest((uint)q.Id)) handedIn = true;
 						}
+						else TiDebug("gossip select of quest {0} opened no quest frame.", q.Id);
 						if (!GossipFrame.Instance.IsVisible) break;
 					}
 				}
@@ -1792,13 +1802,19 @@ namespace VibeParty
 					for (int i = 1; i <= n; i++)
 					{
 						string title = Lua.GetReturnVal<string>("return (GetActiveTitle(" + i + "))", 0U);
-						if (!string.IsNullOrEmpty(title) && completedTitles.Contains(title)) { pick = i; break; }
+						bool match = !string.IsNullOrEmpty(title) && completedTitles.Contains(title);
+						TiDebug("greeting active #{0}/{1}: '{2}' — completed-title match={3}", i, n, title, match);
+						if (match) { pick = i; break; }
 					}
-					if (pick == 0) break;
+					if (pick == 0) { TiDebug("greeting: no completed-title match — done handing in."); break; }
+					TiDebug("selecting greeting active #{0}", pick);
 					Lua.DoString("SelectActiveQuest({0})", pick);
-					if (!WaitFrame(() => QuestFrame.Instance.CurrentShownQuestId != 0, 2500)) break;
+					if (!WaitFrame(() => QuestFrame.Instance.CurrentShownQuestId != 0, 2500))
+					{ TiDebug("greeting select #{0} never showed a quest.", pick); break; }
 					uint shownId = QuestFrame.Instance.CurrentShownQuestId;
 					PlayerQuest heldQ = shownId != 0 ? me.QuestLog.GetQuestById(shownId) : null;
+					TiDebug("greeting select showed quest {0} — held={1} completed={2}",
+						shownId, heldQ != null, heldQ != null && heldQ.IsCompleted);
 					if (heldQ == null || !heldQ.IsCompleted) break;
 					attempted = true;
 					if (CompleteShownQuest(shownId)) handedIn = true;
@@ -1810,6 +1826,8 @@ namespace VibeParty
 			{
 				uint shown = QuestFrame.Instance.CurrentShownQuestId;
 				PlayerQuest held = shown != 0 ? me.QuestLog.GetQuestById(shown) : null;
+				TiDebug("direct quest frame: shown={0} held={1} completed={2}",
+					shown, held != null, held != null && held.IsCompleted);
 				if (held != null && held.IsCompleted)
 				{
 					attempted = true;
@@ -1823,6 +1841,7 @@ namespace VibeParty
 			// acceptance by the quest ENTERING the log (never frame flow).
 			int pickedUp = 0;
 			var doneBefore = me.QuestLog.GetCompletedQuests();
+			TiDebug("pickup phase: {0}", QuestFrameSnapshot());
 
 			if (GossipFrame.Instance.IsVisible)
 			{
@@ -1834,12 +1853,13 @@ namespace VibeParty
 						foreach (GossipQuestEntry q in avail)
 						{
 							if (q == null || q.Id == 0) continue;
-							if (me.QuestLog.ContainsQuest((uint)q.Id)) continue;
-							if (doneBefore != null && doneBefore.Contains((uint)q.Id)) continue;
+							if (me.QuestLog.ContainsQuest((uint)q.Id)) { TiDebug("gossip avail quest {0}: already on it — skip.", q.Id); continue; }
+							if (doneBefore != null && doneBefore.Contains((uint)q.Id)) { TiDebug("gossip avail quest {0}: done before — skip.", q.Id); continue; }
 							pick = q;
 							break;
 						}
 					if (pick == null) break;
+					TiDebug("picking up gossip avail #{0} (quest {1})", pick.Index, pick.Id);
 					GossipFrame.Instance.SelectAvailableQuest(pick.Index);
 					if (!WaitFrame(() => QuestFrame.Instance.IsVisible, 2500)) break;
 					QuestFrame.Instance.AcceptQuest();
@@ -1906,32 +1926,90 @@ namespace VibeParty
 			SetTurnInCooldown(npc.Guid);
 		}
 
+		// Turn-in trace — the debug channel that answers "what the fuck did the quester decide".
+		// One visit ≈ a dozen lines; grep "VibeParty[turnin]".
+		private static void TiDebug(string fmt, params object[] args)
+			=> Logging.WriteDebug("VibeParty[turnin]: " + string.Format(fmt, args));
+
+		// Compact snapshot of every quest-frame surface the client can show.
+		private static string QuestFrameSnapshot()
+		{
+			string lua = Lua.GetReturnVal<string>(
+				"local function b(f) return (f and f:IsShown()) and 1 or 0 end " +
+				"return b(GossipFrame) .. ';' .. b(QuestFrame) .. ';' .. b(QuestFrameProgressPanel) .. ';' " +
+				".. b(QuestFrameRewardPanel) .. ';' .. b(QuestFrameDetailPanel) .. ';' .. b(QuestFrameGreetingPanel) .. ';' " +
+				".. GetNumActiveQuests() .. ';' .. GetNumAvailableQuests() .. ';' .. GetNumQuestChoices()", 0U) ?? "?";
+			return string.Format("[gossip;quest;progress;reward;detail;greeting;nActive;nAvail;nChoices]={0} shownId={1}",
+				lua, QuestFrame.Instance.CurrentShownQuestId);
+		}
+
+		// State-DRIVEN completion, never sequence-assumed: depending on the quest the server opens the
+		// PROGRESS panel ("Continue" → a round-trip to the reward panel) OR the reward panel directly,
+		// possibly in the same frame as the interact — the loop just reads whichever panel is up and
+		// acts on it, logging every transition. Truth = the quest LEAVING the log.
 		private static bool CompleteShownQuest(uint questId)
 		{
-			// PROGRESS panel first ("Continue" — the Lua CompleteQuest() advances it): reward choices are
-			// only CLICKABLE on the REWARD panel. The old order selected the reward first — the quest
-			// CACHE made the choice look selectable (ActionSelectReward logged "Choosing …"), but its
-			// QuestInfoItem click no-ops on the progress panel — then raced the panel flip, so every
-			// reward-CHOICE quest silently failed to hand in (Militia Hammer at Deputy Willem, first run).
-			if (Lua.GetReturnVal<int>("return (QuestFrameProgressPanel and QuestFrameProgressPanel:IsShown()) and 1 or 0", 0U) == 1)
+			bool rewardSelected = false;
+			for (int step = 0; step < 12; step++)
 			{
-				Lua.DoString("CompleteQuest()");
-				WaitFrame(() => Lua.GetReturnVal<int>(
-					"return (QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()) and 1 or 0", 0U) == 1, 2000);
-			}
-			if (Lua.GetReturnVal<int>("return GetNumQuestChoices()", 0U) >= 1)
-			{
-				try
+				if (!StyxWoW.Me.QuestLog.ContainsQuest(questId))
 				{
-					Bots.Quest.Actions.ActionSelectReward pick = new Bots.Quest.Actions.ActionSelectReward();
-					pick.Start(null); pick.Tick(null); pick.Stop(null);
+					TiDebug("quest {0} left the log — complete (step {1}).", questId, step);
+					return true;
 				}
-				catch { QuestFrame.Instance.SelectQuestReward(0); }
-				StyxWoW.Sleep(300);
+				string s = Lua.GetReturnVal<string>(
+					"local function b(f) return (f and f:IsShown()) and 1 or 0 end " +
+					"return b(QuestFrameProgressPanel) .. ';' .. b(QuestFrameRewardPanel) .. ';' " +
+					".. b(QuestFrameDetailPanel) .. ';' .. GetNumQuestChoices()", 0U) ?? "0;0;0;0";
+				var p = s.Split(';');
+				bool progress = p.Length > 0 && p[0] == "1";
+				bool reward = p.Length > 1 && p[1] == "1";
+				bool detail = p.Length > 2 && p[2] == "1";
+				int choices = p.Length > 3 && int.TryParse(p[3], out int ch) ? ch : 0;
+				TiDebug("complete step {0} (quest {1}): progress={2} reward={3} detail={4} choices={5}",
+					step, questId, progress, reward, detail, choices);
+
+				if (reward)
+				{
+					if (choices >= 1 && !rewardSelected)
+					{
+						try
+						{
+							Bots.Quest.Actions.ActionSelectReward pick = new Bots.Quest.Actions.ActionSelectReward();
+							pick.Start(null); pick.Tick(null); pick.Stop(null);
+						}
+						catch (Exception ex) { TiDebug("ActionSelectReward threw ({0}) — falling back to choice 1.", ex.Message); QuestFrame.Instance.SelectQuestReward(0); }
+						rewardSelected = true;
+						StyxWoW.Sleep(300);
+					}
+					TiDebug("reward panel — clicking complete (choices={0}, selected={1})", choices, rewardSelected);
+					Lua.DoString("if QuestFrameCompleteQuestButton and QuestFrameCompleteQuestButton:IsVisible() then QuestFrameCompleteQuestButton:Click() end");
+					if (WaitFrame(() => !StyxWoW.Me.QuestLog.ContainsQuest(questId), 2000))
+					{
+						TiDebug("quest {0} left the log — complete.", questId);
+						return true;
+					}
+					continue;   // click didn't take (selection settling?) — re-read the state and retry
+				}
+				if (progress)
+				{
+					TiDebug("progress panel — sending Continue (CompleteQuest())");
+					Lua.DoString("CompleteQuest()");
+					WaitFrame(() => Lua.GetReturnVal<int>(
+							"return (QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()) and 1 or 0", 0U) == 1
+						|| !StyxWoW.Me.QuestLog.ContainsQuest(questId), 2000);
+					continue;
+				}
+				if (detail)
+				{
+					TiDebug("detail panel (an OFFER, not a completion) — bailing on quest {0}.", questId);
+					return false;
+				}
+				StyxWoW.Sleep(150);   // no panel yet — maybe mid-transition; re-read
 			}
-			// The reward-panel button routes GetQuestReward(itemChoice) with the selection made above.
-			Lua.DoString("if QuestFrameCompleteQuestButton and QuestFrameCompleteQuestButton:IsVisible() then QuestFrameCompleteQuestButton:Click() end");
-			return WaitFrame(() => !StyxWoW.Me.QuestLog.ContainsQuest(questId), 2500);
+			bool gone = !StyxWoW.Me.QuestLog.ContainsQuest(questId);
+			TiDebug("gave up on quest {0} after 12 steps (in log: {1}).", questId, !gone);
+			return gone;
 		}
 
 		private static bool WaitFrame(Func<bool> cond, int timeoutMs)
