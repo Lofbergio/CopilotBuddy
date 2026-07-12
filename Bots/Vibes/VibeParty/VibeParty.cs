@@ -506,11 +506,12 @@ namespace VibeParty
 			if ((DateTime.Now - _leaderBagsCheckedAt).TotalSeconds >= 1)
 			{
 				_leaderBagsCheckedAt = DateTime.Now;
-				// Container FRAMES, not IsBagOpen(): that helper isn't a global on this 3.3.5a client,
-				// and the nil-guard quietly pinned the state to "closed" forever (first live run).
-				// Any shown ContainerFrame = some bag is open — exactly the visual we mirror.
+				// Frame truth, addon-aware: this client runs ElvUI, whose bag module REPLACES the stock
+				// ContainerFrames (they never show — second dead run), so check its frame first, then
+				// the defaults. IsBagOpen() isn't a global here at all (first dead run).
 				bool open = Lua.GetReturnVal<int>(
-					"local o=0 for i=1,(NUM_CONTAINER_FRAMES or 13) do local f=_G['ContainerFrame'..i] if f and f:IsShown() then o=1 end end return o", 0) == 1;
+					"local o=0 if ElvUI_ContainerFrame and ElvUI_ContainerFrame:IsShown() then o=1 end " +
+					"if o==0 then for i=1,(NUM_CONTAINER_FRAMES or 13) do local f=_G['ContainerFrame'..i] if f and f:IsShown() then o=1 end end end return o", 0) == 1;
 				if (open != _leaderBagsOpen)
 					Logging.WriteDebug("[VibeParty] leader bags {0} — mirroring to followers.", open ? "OPEN" : "closed");
 				_leaderBagsOpen = open;
@@ -1304,9 +1305,14 @@ namespace VibeParty
 			if (_botMessage == null || _botMessage.LeaderBagsOpen == _bagsMirrorOpen) return;
 			_bagsMirrorOpen = _botMessage.LeaderBagsOpen;
 			Logging.WriteDebug("[VibeParty] mirroring leader's bags: {0}.", _bagsMirrorOpen ? "OPEN" : "closed");
+			// OpenAllBags/CloseAllBags are the entry points every bag addon hooks (ElvUI replaces the
+			// stock frames — direct OpenBag() bypasses it). OpenAllBags TOGGLES in the stock UI, so it
+			// only fires when the same addon-aware detector as the leader's says we're actually closed.
 			Lua.DoString(_bagsMirrorOpen
-				? "OpenBackpack() for i=1,4 do OpenBag(i) end"
-				: "CloseBackpack() for i=1,4 do CloseBag(i) end");
+				? "local o=0 if ElvUI_ContainerFrame and ElvUI_ContainerFrame:IsShown() then o=1 end " +
+				  "if o==0 then for i=1,(NUM_CONTAINER_FRAMES or 13) do local f=_G['ContainerFrame'..i] if f and f:IsShown() then o=1 end end end " +
+				  "if o==0 then OpenAllBags() end"
+				: "CloseAllBags()");
 		}
 
 		// Instance follow: mesh-nav holds FollowDistance spacing — never the native-/follow glue, which drags
@@ -2112,6 +2118,10 @@ namespace VibeParty
 				int nAvail    = p.Length > 6 && int.TryParse(p[6], out int nv) ? nv : 0;
 				int nChoices  = p.Length > 7 && int.TryParse(p[7], out int nc) ? nc : 0;
 				uint shown = QuestFrame.Instance.CurrentShownQuestId;
+				// The memory read can miss (gossip wrapper returned empty lists live) — GetQuestID()
+				// is the client's own answer for whatever quest panel is up.
+				if (shown == 0 && (progress || rewardP || detail))
+					shown = (uint)Lua.GetReturnVal<int>("return GetQuestID() or 0", 0U);
 				TiDebug("step {0}: gossip={1} progress={2} reward={3} detail={4} greeting={5} nAct={6} nAvail={7} nCh={8} shown={9}",
 					step, gossip, progress, rewardP, detail, greeting, nActive, nAvail, nChoices, shown);
 
@@ -2216,61 +2226,74 @@ namespace VibeParty
 				}
 				if (gossip)
 				{
-					// Gossip actives carry a Lua isComplete flag (3.3.5 GetGossipActiveQuests quadruples);
-					// when the counts line up it pre-filters, else every untried active gets a try — the
-					// progress branch's IsQuestCompletable() is the real judge either way.
-					List<GossipQuestEntry> actives = GossipFrame.Instance.ActiveQuests;
-					string flagStr = Lua.GetReturnVal<string>(
-						"local r = '' local q = { GetGossipActiveQuests() } " +
-						"for i = 4, #q, 4 do r = r .. (q[i] and 1 or 0) .. ';' end return r", 0U) ?? "";
-					var flags = flagStr.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
-					bool flagsUsable = actives != null && flags.Length == actives.Count;
-					GossipQuestEntry sel = null;
-					if (actives != null)
-						foreach (GossipQuestEntry q in actives)
-						{
-							if (q == null || q.Id == 0 || tried.Contains("g:" + q.Id)) continue;
-							bool luaComplete = flagsUsable && q.Index >= 0 && q.Index < flags.Length && flags[q.Index] == "1";
-							TiDebug("gossip active #{0}: quest {1} luaComplete={2}", q.Index, q.Id,
-								flagsUsable ? luaComplete.ToString() : "? (flags unusable — trying)");
-							if (flagsUsable && !luaComplete) continue;
-							sel = q;
-							break;
-						}
-					if (sel != null)
+					// ⚠ LUA is the only trustworthy reader of the gossip lists: the memory wrapper
+					// (GossipFrame.ActiveQuests/AvailableQuests) returned EMPTY while
+					// GetNumGossipAvailableQuests()==1 live (McBride 2026-07-12) and starved every
+					// pickup. Titles key the per-visit 'tried' set, selection is by 1-based Lua index,
+					// and the detail/progress panels downstream are the id-aware judges (held / done /
+					// leader-abandoned / completable). Wrapper ids, when they DO read, only pre-filter.
+					bool acted = false;
+
+					// Actives: field 4 of each quadruple = isComplete (1), '?' when the stride is odd.
+					string actStr = Lua.GetReturnVal<string>(
+						"local r = '' local n = GetNumGossipActiveQuests() local q = { GetGossipActiveQuests() } " +
+						"if n > 0 then local s = math.floor(#q / n) for i = 0, n - 1 do " +
+						"local f = 2 if s >= 4 then f = q[i*s+4] and 1 or 0 end " +
+						"r = r .. tostring(q[i*s+1]) .. '\\1' .. f .. '\\2' end end return r", 0U) ?? "";
+					int idx = 0;
+					foreach (string tok in actStr.Split('\x02'))
 					{
-						tried.Add("g:" + sel.Id);
-						TiDebug("gossip: selecting active #{0} (quest {1})", sel.Index, sel.Id);
-						GossipFrame.Instance.SelectActiveQuest(sel.Index);
+						if (tok.Length == 0) continue;
+						idx++;
+						int cut = tok.IndexOf('\x01');
+						string title = cut > 0 ? tok.Substring(0, cut) : tok;
+						string flag = cut > 0 ? tok.Substring(cut + 1) : "2";
+						if (tried.Contains("ga:" + title)) continue;
+						TiDebug("gossip active #{0} '{1}' luaComplete={2}", idx, title, flag == "2" ? "? (trying)" : flag);
+						if (flag == "0") continue;   // our log says not done — the progress panel would refuse
+						tried.Add("ga:" + title);
+						TiDebug("gossip: selecting active #{0} '{1}'", idx, title);
+						Lua.DoString("SelectGossipActiveQuest({0})", idx);
 						WaitFrame(() => QuestFrame.Instance.IsVisible || !GossipFrame.Instance.IsVisible, 2500);
-						continue;
+						acted = true;
+						break;
 					}
-					GossipQuestEntry give = null;
-					List<GossipQuestEntry> avails = GossipFrame.Instance.AvailableQuests;
-					if (avails == null || avails.Count == 0)
+					if (acted) continue;
+
+					string avStr = Lua.GetReturnVal<string>(
+						"local r = '' local n = GetNumGossipAvailableQuests() local q = { GetGossipAvailableQuests() } " +
+						"if n > 0 then local s = math.floor(#q / n) for i = 0, n - 1 do " +
+						"r = r .. tostring(q[i*s+1]) .. '\\2' end end return r", 0U) ?? "";
+					if (avStr.Length == 0)
 						// The decisive line for "status said Available but the visit found nothing" —
-						// an empty offer list is the SERVER's verdict (chain prerequisite not met, class
-						// gate, level gate), not a frame-reading failure.
+						// an empty LUA list is the SERVER's verdict (chain prerequisite, class/level gate).
 						TiDebug("gossip avail: server offers NOTHING takeable (status={0}).", npc.QuestGiverStatus);
-					else
-						foreach (GossipQuestEntry q in avails)
-						{
-							if (q == null || q.Id == 0) { TiDebug("gossip avail: null/id-less entry — skipping."); continue; }
-							if (tried.Contains("g:" + q.Id)) { TiDebug("gossip avail #{0}: quest {1} — already tried this visit.", q.Index, q.Id); continue; }
-							if (QuestBlocked((uint)q.Id)) { TiDebug("gossip avail #{0}: quest {1} — leader abandoned it.", q.Index, q.Id); continue; }
-							if (me.QuestLog.ContainsQuest((uint)q.Id)) { TiDebug("gossip avail #{0}: quest {1} — already in my log.", q.Index, q.Id); continue; }
-							if (doneBefore != null && doneBefore.Contains((uint)q.Id)) { TiDebug("gossip avail #{0}: quest {1} — already completed.", q.Index, q.Id); continue; }
-							give = q;
-							break;
-						}
-					if (give != null)
+					List<GossipQuestEntry> avails = GossipFrame.Instance.AvailableQuests;
+					idx = 0;
+					foreach (string tok in avStr.Split('\x02'))
 					{
-						tried.Add("g:" + give.Id);
-						TiDebug("gossip: selecting available #{0} (quest {1})", give.Index, give.Id);
-						GossipFrame.Instance.SelectAvailableQuest(give.Index);
+						if (tok.Length == 0) continue;
+						idx++;
+						string title = tok;
+						if (tried.Contains("gv:" + title)) continue;
+						uint id = 0;
+						if (avails != null)
+							foreach (GossipQuestEntry q in avails)
+								if (q != null && q.Index == idx - 1 && q.Id != 0) { id = (uint)q.Id; break; }
+						if (id != 0)
+						{
+							if (QuestBlocked(id)) { TiDebug("gossip avail #{0} '{1}' (quest {2}) — leader abandoned it.", idx, title, id); tried.Add("gv:" + title); continue; }
+							if (me.QuestLog.ContainsQuest(id)) { TiDebug("gossip avail #{0} '{1}' (quest {2}) — already in my log.", idx, title, id); tried.Add("gv:" + title); continue; }
+							if (doneBefore != null && doneBefore.Contains(id)) { TiDebug("gossip avail #{0} '{1}' (quest {2}) — already completed.", idx, title, id); tried.Add("gv:" + title); continue; }
+						}
+						tried.Add("gv:" + title);
+						TiDebug("gossip: selecting available #{0} '{1}' (id {2})", idx, title, id);
+						Lua.DoString("SelectGossipAvailableQuest({0})", idx);
 						WaitFrame(() => QuestFrame.Instance.IsVisible || !GossipFrame.Instance.IsVisible, 2500);
-						continue;
+						acted = true;
+						break;
 					}
+					if (acted) continue;
 					TiDebug("gossip exhausted.");
 					break;
 				}

@@ -460,11 +460,14 @@ namespace Styx.Logic.Combat
 
 			ulong castTargetGuid = target?.Guid ?? 0UL;
 
-			// WotLK combo finisher: SPELL_ATTR1_REQ_COMBO_POINTS1 = 0x10 (bit 4 of AttributesEx).
+			// WotLK combo finisher: SPELL_ATTR1_REQ_COMBO_POINTS1|2 = 0x10|0x20 of AttributesEx.
 			// Confirmed from live memory: SnD (5171) AttributesEx=0x5000010.
 			// BuffSelf passes Me.Guid → sub_72BDB0 @ 0x80D661 calls CanAttack(player, self) = false
 			// → silent drop. Remap to CurrentTarget so CanAttack passes.
-			if ((spell.AttributesEx & 0x50u) != 0)
+			// ⚠ Mask must be EXACTLY the combo bits: the old 0x50 included 0x40, which ordinary BUFFS
+			// carry (Blessing of Might, Arcane Intellect…) — every party buff got remapped to the
+			// caster's CURRENT TARGET (a paladin buffed Marshal McBride→self all night, live 2026-07-12).
+			if ((spell.AttributesEx & 0x30u) != 0)
 			{
 				WoWUnit? comboTarget = StyxWoW.Me?.CurrentTarget;
 				if (comboTarget != null)
