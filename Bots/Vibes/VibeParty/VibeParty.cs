@@ -121,6 +121,8 @@ namespace VibeParty
 				if (!_leaderHooked)
 				{
 					Lua.Events.AttachEvent("QUEST_ACCEPTED", new LuaEventHandlerDelegate(OnQuestAcceptedShare));
+					// Abandon sync: diff our log on every change (turn-in vs abandon resolved in Pulse).
+					Lua.Events.AttachEvent("QUEST_LOG_UPDATE", new LuaEventHandlerDelegate(OnLeaderQuestLogUpdate));
 					// Water arrives by trade — the leader gets the WATER-ONLY auto-accept (see OnTradeShouldAccept).
 					Lua.Events.AttachEvent("TRADE_SHOW",                new LuaEventHandlerDelegate(OnTradeShouldAccept));
 					Lua.Events.AttachEvent("TRADE_ACCEPT_UPDATE",       new LuaEventHandlerDelegate(OnTradeShouldAccept));
@@ -146,6 +148,8 @@ namespace VibeParty
 			{
 				_bus.Subscribe("Command", OnCommandReceived);
 				_bus.Subscribe("LeaderPickup", OnLeaderPickup);   // durable "I took a quest HERE" records
+				_bus.Subscribe("QuestAbandon", OnQuestAbandonMsg);   // leader dropped a quest — drop + block it
+				_bus.Subscribe("QuestAccept", OnQuestAcceptMsg);     // leader re-accepted — lift the block
 				AttachLuaEvents();
 				Vendors.OnVendorItems += OnVendorSweep;   // disposition: only true junk sells
 				Vendors.OnMailItems += OnMailSweep;       // disposition: valuables queue for the bank
@@ -165,6 +169,7 @@ namespace VibeParty
 			if (_leaderHooked)
 			{
 				Lua.Events.DetachEvent("QUEST_ACCEPTED", new LuaEventHandlerDelegate(OnQuestAcceptedShare));
+				Lua.Events.DetachEvent("QUEST_LOG_UPDATE", new LuaEventHandlerDelegate(OnLeaderQuestLogUpdate));
 				Lua.Events.DetachEvent("TRADE_SHOW",                new LuaEventHandlerDelegate(OnTradeShouldAccept));
 				Lua.Events.DetachEvent("TRADE_ACCEPT_UPDATE",       new LuaEventHandlerDelegate(OnTradeShouldAccept));
 				Lua.Events.DetachEvent("TRADE_TARGET_ITEM_CHANGED", new LuaEventHandlerDelegate(OnTradeShouldAccept));
@@ -431,6 +436,7 @@ namespace VibeParty
 				}
 				AutoInviteTick();   // party-form: invite every live bus member that isn't grouped yet
 				_partyWater?.WaterTick();   // requester side only: the leader asks for water when out
+				QuestAbandonSyncTick(bus);  // abandoned (NOT completed) quests propagate to the party
 			}
 			else
 			{
@@ -444,6 +450,7 @@ namespace VibeParty
 				LoadMailboxesIfMapChanged();   // keep the synthetic profile's mailboxes on the current map
 				MirrorLeaderTeleportTick();    // LFG: match the leader's inside/outside-the-dungeon state
 				MirrorLeaderBagsTick();        // bag-visibility sync: leader's bags open ⇒ ours open
+				ProcessAbandonQueue();         // drop quests the leader abandoned (block set stops re-accepts)
 				RestEntryFollowBreak();        // one backward step on rest entry kills stationary follow glue
 				// Re-arm the per-fight movement one-shots the moment we drop out of combat state.
 				if (!IsInCombatState()) { _combatEntryStopDone = false; _posApproaching = false; }
@@ -768,6 +775,105 @@ namespace VibeParty
 			Lua.DoString("ConfirmAcceptQuest()");
 		}
 
+		// ──────────────────────────────────────────────────────────────────────
+		// Quest-abandon sync — the leader's quest log is the party's source of truth
+		// ──────────────────────────────────────────────────────────────────────
+		// Turn-in and abandon are IDENTICAL at the "quest left the log" level. The discriminator is
+		// the server's permanent completed flag (IsQuestFlaggedCompleted), checked on a 2s deferral —
+		// a turn-in sets it in the same transaction, but the client-side write can lag the log-removal
+		// event, and broadcasting an abandon for a completed quest would strip the party of done work.
+
+		private static readonly HashSet<uint> _leaderLogIds = new HashSet<uint>();
+		private static bool _leaderLogSeeded;
+		private static bool _leaderLogDirty = true;   // seed on the first tick
+		private static readonly Dictionary<uint, DateTime> _pendingAbandonCheck = new Dictionary<uint, DateTime>();
+
+		private void OnLeaderQuestLogUpdate(object sender, LuaEventArgs e)
+		{
+			_leaderLogDirty = true;
+		}
+
+		private static void QuestAbandonSyncTick(PartyBus bus)
+		{
+			// Deferred verdicts first: gone from the log for 2s — completed or abandoned?
+			if (_pendingAbandonCheck.Count > 0)
+			{
+				List<uint> due = _pendingAbandonCheck.Where(kv => DateTime.UtcNow >= kv.Value).Select(kv => kv.Key).ToList();
+				foreach (uint id in due)
+				{
+					_pendingAbandonCheck.Remove(id);
+					if (_leaderLogIds.Contains(id))
+						continue;   // re-accepted inside the window
+					if (Lua.GetReturnVal<int>("return IsQuestFlaggedCompleted(" + id + ") and 1 or 0", 0U) == 1)
+						continue;   // turned in — never an abandon
+					Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] leader abandoned quest {0} — the party follows.", id);
+					bus.Publish("QuestAbandon", id.ToString());
+				}
+			}
+
+			if (!_leaderLogDirty) return;
+			_leaderLogDirty = false;
+
+			HashSet<uint> current = ReadOwnQuestLogIds();
+			if (_leaderLogSeeded)
+				foreach (uint id in _leaderLogIds)
+					if (!current.Contains(id) && !_pendingAbandonCheck.ContainsKey(id))
+						_pendingAbandonCheck[id] = DateTime.UtcNow.AddSeconds(2);
+			_leaderLogSeeded = true;
+			_leaderLogIds.Clear();
+			foreach (uint id in current) _leaderLogIds.Add(id);
+		}
+
+		private static HashSet<uint> ReadOwnQuestLogIds()
+		{
+			var set = new HashSet<uint>();
+			string res = Lua.GetReturnVal<string>(
+				"local r = '' for i = 1, GetNumQuestLogEntries() do " +
+				"local t, _, _, _, h, _, _, _, q = GetQuestLogTitle(i) " +
+				"if not h and q then r = r .. q .. ';' end end return r", 0U) ?? "";
+			foreach (string tok in res.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+				if (uint.TryParse(tok, out uint id)) set.Add(id);
+			return set;
+		}
+
+		// Follower side. Handlers fire on hub threads → pure data (the queue/block set); the Lua
+		// abandon runs from Pulse. The BLOCK set is what makes an abandon stick: every accept path
+		// consults it, otherwise the turn-in machinery re-hoovers the quest at the next giver visit
+		// (or the 10-min pickup record replays it) and the abandon silently un-does itself.
+		private static readonly ConcurrentDictionary<uint, DateTime> _abandonBlock = new ConcurrentDictionary<uint, DateTime>();
+		private static readonly ConcurrentQueue<uint> _abandonQueue = new ConcurrentQueue<uint>();
+		private static readonly TimeSpan AbandonBlockTtl = TimeSpan.FromMinutes(30);
+
+		private static void OnQuestAbandonMsg(PartyMessage m)
+		{
+			if (!uint.TryParse(m.Payload, out uint id) || id == 0) return;
+			_abandonBlock[id] = DateTime.UtcNow + AbandonBlockTtl;
+			_abandonQueue.Enqueue(id);
+		}
+
+		// Leader re-accepted a quest → lift the block so the share/pickup paths work again.
+		private static void OnQuestAcceptMsg(PartyMessage m)
+		{
+			if (uint.TryParse(m.Payload, out uint id))
+				_abandonBlock.TryRemove(id, out _);
+		}
+
+		private static bool QuestBlocked(uint id)
+			=> id != 0 && _abandonBlock.TryGetValue(id, out DateTime until) && DateTime.UtcNow < until;
+
+		private static void ProcessAbandonQueue()
+		{
+			while (_abandonQueue.TryDequeue(out uint id))
+			{
+				if (!StyxWoW.Me.QuestLog.ContainsQuest(id)) continue;
+				Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] abandoning quest {0} (leader abandoned it).", id);
+				Lua.DoString(
+					"for i = 1, GetNumQuestLogEntries() do " +
+					"local t, _, _, _, h, _, _, _, q = GetQuestLogTitle(i) " +
+					"if not h and q == " + id + " then SelectQuestLogEntry(i) SetAbandonQuest() AbandonQuest() break end end");
+			}
+		}
+
 		// Follower — auto-accept a trade from the party LEADER (gear/consumables/quest-item handoff). Always on
 		// (no toggle): it's safe by construction. Receive-only — the bot never places items on ITS side, so
 		// accepting can only take what the leader offers, never give anything away — and gated to the leader BY
@@ -805,6 +911,12 @@ namespace VibeParty
 		private void OnQuestAcceptedShare(object sender, LuaEventArgs e)
 		{
 			if (e.Args.Length < 1) return;
+			// Lift any follower-side abandon block FIRST (bus is near-instant; the share below round-trips
+			// the server) — re-accepting on the leader re-arms the quest for the whole party.
+			int acceptedId = Lua.GetReturnVal<int>(
+				"local t, _, _, _, _, _, _, _, q = GetQuestLogTitle(" + e.Args[0] + ") return q or 0", 0U);
+			if (acceptedId > 0 && _bus != null)
+				_bus.Publish("QuestAccept", acceptedId.ToString());
 			Lua.DoString("SelectQuestLogEntry(" + e.Args[0] + ") QuestLogPushQuest()");
 			// Durable pickup record: trailing followers arrive AFTER the live leader-at-giver signal
 			// is gone — publish WHERE this quest was taken so they replay the visit when they pass
@@ -1722,11 +1834,24 @@ namespace VibeParty
 						new TreeSharp.Action(ctx => _pendingRoleCheck = false)
 					)
 				),
-				// Quest accept
+				// Quest accept — but never one the leader abandoned (a stale share/frame could re-arm it).
 				new Decorator(ctx => _pendingQuestAccept,
 					new Sequence(
-						new TreeSharp.Action(ctx => Logging.Write("VibeParty: Accepting shared quest")),
-						new TreeSharp.Action(ctx => Lua.DoString("AcceptQuest()")),
+						new TreeSharp.Action(ctx =>
+						{
+							uint shown = QuestFrame.Instance.CurrentShownQuestId;
+							if (QuestBlocked(shown))
+							{
+								Logging.Write("VibeParty: declining shared quest {0} — the leader abandoned it.", shown);
+								Lua.DoString("DeclineQuest()");
+							}
+							else
+							{
+								Logging.Write("VibeParty: Accepting shared quest");
+								Lua.DoString("AcceptQuest()");
+							}
+							return RunStatus.Success;
+						}),
 						new TreeSharp.Action(ctx => _pendingQuestAccept = false)
 					)
 				)
@@ -1899,6 +2024,7 @@ namespace VibeParty
 				if (item == null || item.ItemInfo == null) continue;
 				int qid = item.ItemInfo.BeginQuestId;
 				if (qid <= 0) continue;
+				if (QuestBlocked((uint)qid)) continue;   // leader abandoned it — don't restart it from the item
 				if (me.QuestLog.ContainsQuest((uint)qid)) continue;
 				if (completed != null && completed.Contains((uint)qid)) continue;
 				if (_starterCooldown.TryGetValue((uint)qid, out DateTime until) && DateTime.UtcNow < until) continue;
@@ -2036,6 +2162,13 @@ namespace VibeParty
 				}
 				if (detail)
 				{
+					if (shown != 0 && QuestBlocked(shown))
+					{
+						TiDebug("detail panel offers quest {0} — leader ABANDONED it, declining.", shown);
+						QuestFrame.Instance.Close();
+						StyxWoW.Sleep(200);
+						continue;
+					}
 					if (shown != 0 && !me.QuestLog.ContainsQuest(shown)
 						&& (doneBefore == null || !doneBefore.Contains(shown)))
 					{
@@ -2124,6 +2257,7 @@ namespace VibeParty
 						{
 							if (q == null || q.Id == 0) { TiDebug("gossip avail: null/id-less entry — skipping."); continue; }
 							if (tried.Contains("g:" + q.Id)) { TiDebug("gossip avail #{0}: quest {1} — already tried this visit.", q.Index, q.Id); continue; }
+							if (QuestBlocked((uint)q.Id)) { TiDebug("gossip avail #{0}: quest {1} — leader abandoned it.", q.Index, q.Id); continue; }
 							if (me.QuestLog.ContainsQuest((uint)q.Id)) { TiDebug("gossip avail #{0}: quest {1} — already in my log.", q.Index, q.Id); continue; }
 							if (doneBefore != null && doneBefore.Contains((uint)q.Id)) { TiDebug("gossip avail #{0}: quest {1} — already completed.", q.Index, q.Id); continue; }
 							give = q;
