@@ -134,6 +134,7 @@ namespace VibeParty
 			if (!_hooked)
 			{
 				_bus.Subscribe("Command", OnCommandReceived);
+				_bus.Subscribe("LeaderPickup", OnLeaderPickup);   // durable "I took a quest HERE" records
 				AttachLuaEvents();
 				Vendors.OnVendorItems += OnVendorSweep;   // disposition: only true junk sells
 				Vendors.OnMailItems += OnMailSweep;       // disposition: valuables queue for the bank
@@ -741,6 +742,25 @@ namespace VibeParty
 		{
 			if (e.Args.Length < 1) return;
 			Lua.DoString("SelectQuestLogEntry(" + e.Args[0] + ") QuestLogPushQuest()");
+			// Durable pickup record: trailing followers arrive AFTER the live leader-at-giver signal
+			// is gone — publish WHERE this quest was taken so they replay the visit when they pass
+			// (10 min TTL, follower side). The share above covers shareables instantly; this record
+			// covers the unshareables. Item-started accepts have no NPC target → nothing published
+			// (the quest-starter path owns those).
+			var giver = StyxWoW.Me.CurrentTarget;
+			if (giver != null && giver.IsQuestGiver && _bus != null)
+			{
+				Logging.WriteDebug("VibeParty: pickup record — quest accepted at {0} [{1}].", giver.Name, giver.Entry);
+				_bus.Publish("LeaderPickup", giver.Entry.ToString());
+			}
+		}
+
+		// Bus (hub thread — pure data only): the leader accepted a quest at this NPC entry; remember
+		// it for the trailing-replay window (RecentLeaderPickup).
+		private void OnLeaderPickup(PartyMessage msg)
+		{
+			if (uint.TryParse(msg.Payload, out uint entry) && entry != 0)
+				_leaderPickupLog[entry] = DateTime.UtcNow;
 		}
 
 		// ──────────────────────────────────────────────────────────────────────
@@ -1566,35 +1586,36 @@ namespace VibeParty
 		private static bool WantTurnIn()
 		{
 			if (StyxWoW.Me.Combat) { _turnInNpc = null; return false; }
-			if (!LeaderAtQuestGiver()) { _turnInNpc = null; return false; }
 
 			// Completed set + its fingerprint, once per tick — from the LUA quest log, never
 			// PlayerQuest.IsCompleted (false-positives on in-progress quests, see CompletedQuestsLua).
-			// The fingerprint keys the per-NPC "nothing to turn in here" verdicts.
+			// The fingerprint keys the per-NPC "nothing to do here" verdicts.
 			var completed = CompletedQuestsLua();
 			_completedFp = 17;
-			bool any = completed.Count > 0;
 			foreach (uint id in completed.Keys.OrderBy(x => x))
 				unchecked { _completedFp = _completedFp * 31 + (int)id; }
+
+			_leaderSignal = LeaderAtQuestGiver();
+
 			// COMMIT to the chosen NPC while it stays usable — re-picking "nearest" every tick
 			// flip-flops between givers mid-travel (observed: Eagan→Merissa 1.7s apart).
 			if (_turnInNpc != null && _turnInNpc.IsValid && !_turnInNpc.Dead
 				&& IsUsableGiver(_turnInNpc) && _turnInNpc.Distance <= TurnInVicinity * 1.5)
 				return true;
 
-			if (!any)
+			// The leader's own giver first (it knows the hub) while the live signal is up…
+			if (_leaderSignal && _botMessage != null)
 			{
-				// Nothing to turn in — but the visit can still PICK UP: a share pushes exactly one
-				// quest and unshareable follow-ups never arrive at all. Only the leader's own giver
-				// (never the nearest-fallback), and the verdict latch (keyed on the empty fingerprint
-				// here) makes it one visit per quest-state, not an orbit.
-				WoWUnit? lg = _botMessage != null && _botMessage.LeaderTargetGuid != 0
-					? ObjectManager.GetObjectByGuid<WoWUnit>(_botMessage.LeaderTargetGuid) : null;
-				_turnInNpc = IsUsableGiver(lg) ? lg : null;
-				return _turnInNpc != null;
+				WoWUnit? lt = ObjectManager.GetObjectByGuid<WoWUnit>(_botMessage.LeaderTargetGuid);
+				if (IsUsableGiver(lt)) { _turnInNpc = lt; return true; }
 			}
-
-			_turnInNpc = ResolveTurnInNpc();
+			// …else the nearest giver with business: TURN-IN statuses need no signal at all (the "?"
+			// IS the signal, however late we arrive), AVAILABLE statuses need the live signal or a
+			// recent leader visit record (see IsUsableGiver / OnLeaderPickup).
+			_turnInNpc = ObjectManager.GetObjectsOfType<WoWUnit>(false, false)
+				.Where(u => u != null && u.Distance <= TurnInVicinity && IsUsableGiver(u))
+				.OrderBy(u => u.Distance)
+				.FirstOrDefault();
 			return _turnInNpc != null;
 		}
 
@@ -1607,30 +1628,14 @@ namespace VibeParty
 			return npc != null && !npc.Dead && npc.IsQuestGiver;
 		}
 
-		// Prefer the leader's own giver (it knows the right ender); else the nearest giver in the hub, so a follower
-		// that fell behind still offloads. Both skip givers we just poked (per-NPC cooldown) and givers that proved
-		// to have nothing for our current completed set (verdict latch).
-		private static WoWUnit? ResolveTurnInNpc()
-		{
-			if (_botMessage != null && _botMessage.LeaderTargetGuid != 0)
-			{
-				WoWUnit? lt = ObjectManager.GetObjectByGuid<WoWUnit>(_botMessage.LeaderTargetGuid);
-				if (IsUsableGiver(lt)) return lt;
-			}
-			return ObjectManager.GetObjectsOfType<WoWUnit>(false, false)
-				.Where(u => IsUsableGiver(u) && u.Distance <= TurnInVicinity)
-				.OrderBy(u => u.Distance)
-				.FirstOrDefault();
-		}
-
 		// The CLIENT already knows whether an NPC has business with us — the server pushes per-NPC
 		// quest-giver status (what renders the "!"/"?" markers) and the port exposes it as a memory
-		// read (WoWObject.QuestGiverStatus), no interaction needed. This is the pre-filter that stops
-		// "walk to a flagged giver and learn it has nothing" entirely: Merissa (deprecated 'Welcome!'
-		// relation) reads None and is never visited. Incomplete (grey "?") is excluded too — we're on
-		// the quest but not done, nothing to do there. The visit-and-learn latches below stay as
-		// backstops for stale or lying status.
-		private static bool GiverHasBusiness(WoWUnit u)
+		// read (WoWObject.QuestGiverStatus), no interaction needed. TURN-IN statuses make an NPC a
+		// candidate on their own — a follower reads the "?" like a player, so a talk-to quest that
+		// completes by walking up never depends on leader timing (Milly, run 3). AVAILABLE statuses
+		// only count while the leader signal is live (leader-at-giver = the leader intends this hub) —
+		// otherwise followers would hoover every "!" they pass. Incomplete/None/Unavailable: never.
+		private static bool GiverHasTurnIn(WoWUnit u)
 		{
 			switch (u.QuestGiverStatus)
 			{
@@ -1638,6 +1643,16 @@ namespace VibeParty
 				case QuestGiverStatus.TurnInRepeatable:
 				case QuestGiverStatus.TurnInInvisible:
 				case QuestGiverStatus.LowLevelTurnInRepeatable:
+					return true;
+				default:
+					return false;
+			}
+		}
+
+		private static bool GiverHasAvailable(WoWUnit u)
+		{
+			switch (u.QuestGiverStatus)
+			{
 				case QuestGiverStatus.Available:
 				case QuestGiverStatus.AvailableRepeatable:
 				case QuestGiverStatus.LowLevelAvailable:
@@ -1648,9 +1663,18 @@ namespace VibeParty
 			}
 		}
 
+		// A recent leader visit record makes an AVAILABLE giver usable without the live signal — the
+		// leader accepted quests here minutes ago and the trailing follower replays the visit when it
+		// passes (the "I talked to this NPC, you do the same" log). TTL'd; entry-keyed (any spawn of
+		// the same NPC counts).
+		private static bool RecentLeaderPickup(uint entry)
+			=> _leaderPickupLog.TryGetValue(entry, out DateTime at)
+			   && (DateTime.UtcNow - at).TotalMinutes < 10;
+
 		private static bool IsUsableGiver(WoWUnit? u)
 			=> u != null && !u.Dead && u.IsQuestGiver
-			   && GiverHasBusiness(u)
+			   && (GiverHasTurnIn(u)
+			       || ((_leaderSignal || RecentLeaderPickup(u.Entry)) && GiverHasAvailable(u)))
 			   && !_turnInDeadNpc.Contains(u.Guid)
 			   && !(_turnInCooldown.TryGetValue(u.Guid, out DateTime until) && DateTime.UtcNow < until)
 			   && !(_turnInNothingHere.TryGetValue(u.Guid, out int fp) && fp == _completedFp);
@@ -1748,159 +1772,195 @@ namespace VibeParty
 			TiDebug("frames after interact: {0}", QuestFrameSnapshot());
 
 			bool handedIn = false;
-			bool attempted = false;   // we FOUND our quest in a frame and tried to complete it
-
-			// Multi-quest giver: hand in each active quest our LOG marks complete (truth = the quest
-			// leaving the log, never frame flow — same rule as VibeQuester2's QuestInteraction).
-			if (GossipFrame.Instance.IsVisible && !QuestFrame.Instance.IsVisible)
-			{
-				List<GossipQuestEntry> active = GossipFrame.Instance.ActiveQuests;
-				if (active != null)
-				{
-					foreach (GossipQuestEntry q in active)
-					{
-						if (q == null || q.Id == 0) continue;
-						PlayerQuest held = me.QuestLog.GetQuestById((uint)q.Id);
-						bool luaComplete = CompletedQuestsLua().ContainsKey((uint)q.Id);
-						TiDebug("gossip active #{0}: quest {1} — held={2} luaComplete={3} memComplete={4}",
-							q.Index, q.Id, held != null, luaComplete, held != null && held.IsCompleted);
-						if (!luaComplete) continue;
-
-						TiDebug("selecting gossip active #{0} (quest {1})", q.Index, q.Id);
-						GossipFrame.Instance.SelectActiveQuest(q.Index);
-						if (WaitFrame(() => QuestFrame.Instance.IsVisible, 2500))
-						{
-							attempted = true;
-							if (CompleteShownQuest((uint)q.Id)) handedIn = true;
-						}
-						else TiDebug("gossip select of quest {0} opened no quest frame.", q.Id);
-						if (!GossipFrame.Instance.IsVisible) break;
-					}
-				}
-			}
-			// QUEST GREETING panel (multi-quest ender without gossip): QuestFrame is up but no quest is
-			// "shown" — the old code read CurrentShownQuestId=0 as "nothing here" and every greeting NPC
-			// silently no-op'd. The 3.3.5 greeting Lua has no isComplete flag, so match TITLES against
-			// our own completed log entries and select only those; completing returns to the greeting
-			// (or closes it), so rescan until no completed title remains.
-			else if (QuestFrame.Instance.IsVisible && QuestFrame.Instance.CurrentShownQuestId == 0)
-			{
-				for (int guard = 0; guard < 8 && QuestFrame.Instance.IsVisible
-					 && QuestFrame.Instance.CurrentShownQuestId == 0; guard++)
-				{
-					var completedTitles = new HashSet<string>(
-						CompletedQuestsLua().Values, StringComparer.OrdinalIgnoreCase);
-					int n = Lua.GetReturnVal<int>("return GetNumActiveQuests()", 0U);
-					int pick = 0;
-					for (int i = 1; i <= n; i++)
-					{
-						string title = Lua.GetReturnVal<string>("return (GetActiveTitle(" + i + "))", 0U);
-						bool match = !string.IsNullOrEmpty(title) && completedTitles.Contains(title);
-						TiDebug("greeting active #{0}/{1}: '{2}' — completed-title match={3}", i, n, title, match);
-						if (match) { pick = i; break; }
-					}
-					if (pick == 0) { TiDebug("greeting: no completed-title match — done handing in."); break; }
-					TiDebug("selecting greeting active #{0}", pick);
-					Lua.DoString("SelectActiveQuest({0})", pick);
-					if (!WaitFrame(() => QuestFrame.Instance.CurrentShownQuestId != 0, 2500))
-					{ TiDebug("greeting select #{0} never showed a quest.", pick); break; }
-					uint shownId = QuestFrame.Instance.CurrentShownQuestId;
-					bool shownComplete = shownId != 0 && CompletedQuestsLua().ContainsKey(shownId);
-					TiDebug("greeting select showed quest {0} — luaComplete={1}", shownId, shownComplete);
-					if (!shownComplete) break;
-					attempted = true;
-					if (CompleteShownQuest(shownId)) handedIn = true;
-					else break;
-				}
-			}
-			// Single-quest giver: detail frame straight away.
-			else if (QuestFrame.Instance.IsVisible)
-			{
-				uint shown = QuestFrame.Instance.CurrentShownQuestId;
-				bool shownComplete = shown != 0 && CompletedQuestsLua().ContainsKey(shown);
-				TiDebug("direct quest frame: shown={0} luaComplete={1}", shown, shownComplete);
-				if (shownComplete)
-				{
-					attempted = true;
-					if (CompleteShownQuest(shown)) handedIn = true;
-				}
-			}
-
-			// ---- Pickup phase: hoover every AVAILABLE quest while we're here. The frame's available
-			// list already excludes quests we're on, so "we have quest 1, grab quest 2" needs no
-			// special skipping — the list IS the skip. Guards: never re-take a finished quest, verify
-			// acceptance by the quest ENTERING the log (never frame flow).
 			int pickedUp = 0;
+			bool attempted = false;       // a completion was genuinely tried (reward reached / completable Continue)
+			int reInteracts = 0;
+			uint rewardSelectedFor = 0;   // reward already chosen for this quest (don't re-pick per step)
+			var tried = new HashSet<string>();   // menu entries already selected this visit (termination)
 			var doneBefore = me.QuestLog.GetCompletedQuests();
 
-			// A failed hand-in can leave ITS quest panel up, hiding the gossip/greeting lists — that
-			// stale frame blocked a class-quest pickup on the second live run. Close it and re-interact
-			// once so the pickup phase sees the giver's real lists.
-			if (!GossipFrame.Instance.IsVisible && QuestFrame.Instance.IsVisible
-				&& QuestFrame.Instance.CurrentShownQuestId != 0
-				&& me.QuestLog.ContainsQuest(QuestFrame.Instance.CurrentShownQuestId))
+			// ONE frame-driven loop — the server's frames are COMMANDS, not claims to verify:
+			//  - REWARD panel  → complete it. The server only offers a reward the quest can pay; a
+			//    talk-to quest reads INCOMPLETE in our own log right up until this panel (Milly,
+			//    run 3), so NO client-side completion check may veto it.
+			//  - PROGRESS panel → the frame itself knows: IsQuestCompletable() → Continue, else close
+			//    (that quest just isn't done — not an error, not a latch).
+			//  - DETAIL panel  → an OFFER: accept if new, close if held/done.
+			//  - GREETING/GOSSIP → menus: select untried actives (gossip pre-filters on the Lua
+			//    isComplete flag when it lines up — an optimization, never a verdict), then availables.
+			//  - no frame      → re-interact (bounded).
+			// Truth for a hand-in stays "the quest LEFT the log"; for a pickup "the quest ENTERED it".
+			for (int step = 0; step < 20; step++)
 			{
-				TiDebug("stale quest frame (shown={0}) before pickup — closing and re-interacting.",
-					QuestFrame.Instance.CurrentShownQuestId);
-				QuestFrame.Instance.Close();
-				StyxWoW.Sleep(300);
-				npc.Interact();
-				WaitFrame(() => GossipFrame.Instance.IsVisible || QuestFrame.Instance.IsVisible, 2500);
-			}
-			TiDebug("pickup phase: {0}", QuestFrameSnapshot());
+				string snap = Lua.GetReturnVal<string>(
+					"local function b(f) return (f and f:IsShown()) and 1 or 0 end " +
+					"return b(GossipFrame) .. ';' .. b(QuestFrameProgressPanel) .. ';' .. b(QuestFrameRewardPanel) .. ';' " +
+					".. b(QuestFrameDetailPanel) .. ';' .. b(QuestFrameGreetingPanel) .. ';' " +
+					".. GetNumActiveQuests() .. ';' .. GetNumAvailableQuests() .. ';' .. GetNumQuestChoices()", 0U) ?? "";
+				var p = snap.Split(';');
+				bool gossip   = p.Length > 0 && p[0] == "1";
+				bool progress = p.Length > 1 && p[1] == "1";
+				bool rewardP  = p.Length > 2 && p[2] == "1";
+				bool detail   = p.Length > 3 && p[3] == "1";
+				bool greeting = p.Length > 4 && p[4] == "1";
+				int nActive   = p.Length > 5 && int.TryParse(p[5], out int na) ? na : 0;
+				int nAvail    = p.Length > 6 && int.TryParse(p[6], out int nv) ? nv : 0;
+				int nChoices  = p.Length > 7 && int.TryParse(p[7], out int nc) ? nc : 0;
+				uint shown = QuestFrame.Instance.CurrentShownQuestId;
+				TiDebug("step {0}: gossip={1} progress={2} reward={3} detail={4} greeting={5} nAct={6} nAvail={7} nCh={8} shown={9}",
+					step, gossip, progress, rewardP, detail, greeting, nActive, nAvail, nChoices, shown);
 
-			if (GossipFrame.Instance.IsVisible)
-			{
-				for (int guard = 0; guard < 8 && GossipFrame.Instance.IsVisible; guard++)
+				if (rewardP)
 				{
-					GossipQuestEntry pick = null;
-					List<GossipQuestEntry> avail = GossipFrame.Instance.AvailableQuests;
-					if (avail != null)
-						foreach (GossipQuestEntry q in avail)
+					attempted = true;
+					if (nChoices >= 1 && rewardSelectedFor != shown)
+					{
+						try
 						{
-							if (q == null || q.Id == 0) continue;
-							if (me.QuestLog.ContainsQuest((uint)q.Id)) { TiDebug("gossip avail quest {0}: already on it — skip.", q.Id); continue; }
-							if (doneBefore != null && doneBefore.Contains((uint)q.Id)) { TiDebug("gossip avail quest {0}: done before — skip.", q.Id); continue; }
-							pick = q;
+							Bots.Quest.Actions.ActionSelectReward pick2 = new Bots.Quest.Actions.ActionSelectReward();
+							pick2.Start(null); pick2.Tick(null); pick2.Stop(null);
+						}
+						catch (Exception ex) { TiDebug("ActionSelectReward threw ({0}) — choice 1.", ex.Message); QuestFrame.Instance.SelectQuestReward(0); }
+						rewardSelectedFor = shown;
+						StyxWoW.Sleep(300);
+					}
+					TiDebug("reward panel (quest {0}) — completing (choices={1})", shown, nChoices);
+					Lua.DoString("if QuestFrameCompleteQuestButton and QuestFrameCompleteQuestButton:IsVisible() then QuestFrameCompleteQuestButton:Click() end");
+					uint shownNow = shown;
+					if (WaitFrame(() => (shownNow != 0 && !me.QuestLog.ContainsQuest(shownNow))
+										|| Lua.GetReturnVal<int>("return (QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()) and 1 or 0", 0U) == 0, 2500)
+						&& (shownNow == 0 || !me.QuestLog.ContainsQuest(shownNow)))
+					{
+						TiDebug("quest {0} completed.", shownNow);
+						handedIn = true;
+					}
+					continue;
+				}
+				if (progress)
+				{
+					if (Lua.GetReturnVal<int>("return IsQuestCompletable() and 1 or 0", 0U) == 1)
+					{
+						attempted = true;
+						TiDebug("progress panel (quest {0}, completable) — Continue", shown);
+						Lua.DoString("CompleteQuest()");
+						uint shownNow = shown;
+						WaitFrame(() => Lua.GetReturnVal<int>("return (QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()) and 1 or 0", 0U) == 1
+									|| (shownNow != 0 && !me.QuestLog.ContainsQuest(shownNow)), 2500);
+					}
+					else
+					{
+						TiDebug("progress panel (quest {0}) NOT completable — closing that quest.", shown);
+						QuestFrame.Instance.Close();
+						StyxWoW.Sleep(200);
+					}
+					continue;
+				}
+				if (detail)
+				{
+					if (shown != 0 && !me.QuestLog.ContainsQuest(shown)
+						&& (doneBefore == null || !doneBefore.Contains(shown)))
+					{
+						TiDebug("detail panel offers quest {0} — accepting.", shown);
+						QuestFrame.Instance.AcceptQuest();
+						uint shownNow = shown;
+						if (WaitFrame(() => me.QuestLog.ContainsQuest(shownNow), 2500)) pickedUp++;
+					}
+					else
+					{
+						TiDebug("detail panel shows quest {0} (held/done) — closing.", shown);
+						QuestFrame.Instance.Close();
+						StyxWoW.Sleep(200);
+					}
+					continue;
+				}
+				if (greeting)
+				{
+					int pick = 0;
+					for (int i = 1; i <= nActive; i++)
+					{
+						string title = Lua.GetReturnVal<string>("return (GetActiveTitle(" + i + "))", 0U);
+						if (string.IsNullOrEmpty(title) || tried.Contains("a:" + title)) continue;
+						tried.Add("a:" + title);
+						pick = i;
+						TiDebug("greeting: selecting active #{0} '{1}'", i, title);
+						break;
+					}
+					if (pick != 0)
+					{
+						Lua.DoString("SelectActiveQuest({0})", pick);
+						WaitFrame(() => QuestFrame.Instance.CurrentShownQuestId != 0 || !QuestFrame.Instance.IsVisible, 2500);
+						continue;
+					}
+					if (nAvail >= 1 && !tried.Contains("v:" + nAvail))
+					{
+						tried.Add("v:" + nAvail);   // keyed on remaining count — shrinks as accepts land
+						TiDebug("greeting: selecting available #1 ({0} available)", nAvail);
+						Lua.DoString("SelectAvailableQuest(1)");
+						WaitFrame(() => QuestFrame.Instance.CurrentShownQuestId != 0 || !QuestFrame.Instance.IsVisible, 2500);
+						continue;
+					}
+					TiDebug("greeting exhausted.");
+					break;
+				}
+				if (gossip)
+				{
+					// Gossip actives carry a Lua isComplete flag (3.3.5 GetGossipActiveQuests quadruples);
+					// when the counts line up it pre-filters, else every untried active gets a try — the
+					// progress branch's IsQuestCompletable() is the real judge either way.
+					List<GossipQuestEntry> actives = GossipFrame.Instance.ActiveQuests;
+					string flagStr = Lua.GetReturnVal<string>(
+						"local r = '' local q = { GetGossipActiveQuests() } " +
+						"for i = 4, #q, 4 do r = r .. (q[i] and 1 or 0) .. ';' end return r", 0U) ?? "";
+					var flags = flagStr.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+					bool flagsUsable = actives != null && flags.Length == actives.Count;
+					GossipQuestEntry sel = null;
+					if (actives != null)
+						foreach (GossipQuestEntry q in actives)
+						{
+							if (q == null || q.Id == 0 || tried.Contains("g:" + q.Id)) continue;
+							bool luaComplete = flagsUsable && q.Index >= 0 && q.Index < flags.Length && flags[q.Index] == "1";
+							TiDebug("gossip active #{0}: quest {1} luaComplete={2}", q.Index, q.Id,
+								flagsUsable ? luaComplete.ToString() : "? (flags unusable — trying)");
+							if (flagsUsable && !luaComplete) continue;
+							sel = q;
 							break;
 						}
-					if (pick == null) break;
-					TiDebug("picking up gossip avail #{0} (quest {1})", pick.Index, pick.Id);
-					GossipFrame.Instance.SelectAvailableQuest(pick.Index);
-					if (!WaitFrame(() => QuestFrame.Instance.IsVisible, 2500)) break;
-					QuestFrame.Instance.AcceptQuest();
-					if (WaitFrame(() => me.QuestLog.ContainsQuest((uint)pick.Id), 2500)) pickedUp++;
-					else break;
+					if (sel != null)
+					{
+						tried.Add("g:" + sel.Id);
+						TiDebug("gossip: selecting active #{0} (quest {1})", sel.Index, sel.Id);
+						GossipFrame.Instance.SelectActiveQuest(sel.Index);
+						WaitFrame(() => QuestFrame.Instance.IsVisible || !GossipFrame.Instance.IsVisible, 2500);
+						continue;
+					}
+					GossipQuestEntry give = null;
+					List<GossipQuestEntry> avails = GossipFrame.Instance.AvailableQuests;
+					if (avails != null)
+						foreach (GossipQuestEntry q in avails)
+						{
+							if (q == null || q.Id == 0 || tried.Contains("g:" + q.Id)) continue;
+							if (me.QuestLog.ContainsQuest((uint)q.Id)) continue;
+							if (doneBefore != null && doneBefore.Contains((uint)q.Id)) continue;
+							give = q;
+							break;
+						}
+					if (give != null)
+					{
+						tried.Add("g:" + give.Id);
+						TiDebug("gossip: selecting available #{0} (quest {1})", give.Index, give.Id);
+						GossipFrame.Instance.SelectAvailableQuest(give.Index);
+						WaitFrame(() => QuestFrame.Instance.IsVisible || !GossipFrame.Instance.IsVisible, 2500);
+						continue;
+					}
+					TiDebug("gossip exhausted.");
+					break;
 				}
-			}
-			else if (QuestFrame.Instance.IsVisible && QuestFrame.Instance.CurrentShownQuestId == 0)
-			{
-				// Greeting panel: always select available slot 1 — an accepted quest leaves the
-				// available list, so slot 1 is always "the next one".
-				for (int guard = 0; guard < 8; guard++)
-				{
-					if (!QuestFrame.Instance.IsVisible || QuestFrame.Instance.CurrentShownQuestId != 0) break;
-					if (Lua.GetReturnVal<int>("return GetNumAvailableQuests()", 0U) < 1) break;
-					Lua.DoString("SelectAvailableQuest(1)");
-					if (!WaitFrame(() => QuestFrame.Instance.CurrentShownQuestId != 0, 2500)) break;
-					uint offered = QuestFrame.Instance.CurrentShownQuestId;
-					if (me.QuestLog.ContainsQuest(offered)) break;   // shouldn't happen — bail, don't loop
-					if (doneBefore != null && doneBefore.Contains(offered)) break;
-					QuestFrame.Instance.AcceptQuest();
-					if (WaitFrame(() => me.QuestLog.ContainsQuest(offered), 2500)) pickedUp++;
-					else break;
-				}
-			}
-			else if (QuestFrame.Instance.IsVisible)
-			{
-				// Straight detail frame with an un-held quest = a single-quest giver OFFERING it.
-				uint offered = QuestFrame.Instance.CurrentShownQuestId;
-				if (offered != 0 && !me.QuestLog.ContainsQuest(offered)
-					&& (doneBefore == null || !doneBefore.Contains(offered)))
-				{
-					QuestFrame.Instance.AcceptQuest();
-					if (WaitFrame(() => me.QuestLog.ContainsQuest(offered), 2500)) pickedUp++;
-				}
+				// No frame at all — either the server closed everything (done) or we lost the window.
+				if (reInteracts >= 2) { TiDebug("no frame and re-interact budget spent — done."); break; }
+				reInteracts++;
+				TiDebug("no frame — re-interacting ({0}/2).", reInteracts);
+				npc.Interact();
+				if (!WaitFrame(() => GossipFrame.Instance.IsVisible || QuestFrame.Instance.IsVisible, 2000)) break;
 			}
 
 			if (GossipFrame.Instance.IsVisible) GossipFrame.Instance.Close();
@@ -1979,84 +2039,6 @@ namespace VibeParty
 				lua, QuestFrame.Instance.CurrentShownQuestId);
 		}
 
-		// State-DRIVEN completion, never sequence-assumed: depending on the quest the server opens the
-		// PROGRESS panel ("Continue" → a round-trip to the reward panel) OR the reward panel directly,
-		// possibly in the same frame as the interact — the loop just reads whichever panel is up and
-		// acts on it, logging every transition. Truth = the quest LEAVING the log.
-		private static bool CompleteShownQuest(uint questId)
-		{
-			bool rewardSelected = false;
-			for (int step = 0; step < 12; step++)
-			{
-				if (!StyxWoW.Me.QuestLog.ContainsQuest(questId))
-				{
-					TiDebug("quest {0} left the log — complete (step {1}).", questId, step);
-					return true;
-				}
-				string s = Lua.GetReturnVal<string>(
-					"local function b(f) return (f and f:IsShown()) and 1 or 0 end " +
-					"return b(QuestFrameProgressPanel) .. ';' .. b(QuestFrameRewardPanel) .. ';' " +
-					".. b(QuestFrameDetailPanel) .. ';' .. GetNumQuestChoices()", 0U) ?? "0;0;0;0";
-				var p = s.Split(';');
-				bool progress = p.Length > 0 && p[0] == "1";
-				bool reward = p.Length > 1 && p[1] == "1";
-				bool detail = p.Length > 2 && p[2] == "1";
-				int choices = p.Length > 3 && int.TryParse(p[3], out int ch) ? ch : 0;
-				TiDebug("complete step {0} (quest {1}): progress={2} reward={3} detail={4} choices={5}",
-					step, questId, progress, reward, detail, choices);
-
-				if (reward)
-				{
-					if (choices >= 1 && !rewardSelected)
-					{
-						try
-						{
-							Bots.Quest.Actions.ActionSelectReward pick = new Bots.Quest.Actions.ActionSelectReward();
-							pick.Start(null); pick.Tick(null); pick.Stop(null);
-						}
-						catch (Exception ex) { TiDebug("ActionSelectReward threw ({0}) — falling back to choice 1.", ex.Message); QuestFrame.Instance.SelectQuestReward(0); }
-						rewardSelected = true;
-						StyxWoW.Sleep(300);
-					}
-					TiDebug("reward panel — clicking complete (choices={0}, selected={1})", choices, rewardSelected);
-					Lua.DoString("if QuestFrameCompleteQuestButton and QuestFrameCompleteQuestButton:IsVisible() then QuestFrameCompleteQuestButton:Click() end");
-					if (WaitFrame(() => !StyxWoW.Me.QuestLog.ContainsQuest(questId), 2000))
-					{
-						TiDebug("quest {0} left the log — complete.", questId);
-						return true;
-					}
-					continue;   // click didn't take (selection settling?) — re-read the state and retry
-				}
-				if (progress)
-				{
-					// The progress frame ITSELF knows whether the quest can be completed — ask it
-					// before spending a Continue. An incomplete quest that slipped past the gates
-					// (the IsCompleted false positive) otherwise wedges here in a Continue-spam loop.
-					if (Lua.GetReturnVal<int>("return IsQuestCompletable() and 1 or 0", 0U) != 1)
-					{
-						TiDebug("progress panel says quest {0} is NOT completable — the completion gate was wrong; bailing.", questId);
-						QuestFrame.Instance.Close();
-						return false;
-					}
-					TiDebug("progress panel (completable) — sending Continue (CompleteQuest())");
-					Lua.DoString("CompleteQuest()");
-					WaitFrame(() => Lua.GetReturnVal<int>(
-							"return (QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()) and 1 or 0", 0U) == 1
-						|| !StyxWoW.Me.QuestLog.ContainsQuest(questId), 2000);
-					continue;
-				}
-				if (detail)
-				{
-					TiDebug("detail panel (an OFFER, not a completion) — bailing on quest {0}.", questId);
-					return false;
-				}
-				StyxWoW.Sleep(150);   // no panel yet — maybe mid-transition; re-read
-			}
-			bool gone = !StyxWoW.Me.QuestLog.ContainsQuest(questId);
-			TiDebug("gave up on quest {0} after 12 steps (in log: {1}).", questId, !gone);
-			return gone;
-		}
-
 		private static bool WaitFrame(Func<bool> cond, int timeoutMs)
 		{
 			DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
@@ -2113,6 +2095,8 @@ namespace VibeParty
 		private static readonly Dictionary<ulong, int> _turnInNothingHere = new Dictionary<ulong, int>();   // guid → completed-set fingerprint at verdict time
 		private static readonly Dictionary<ulong, int> _turnInFrameFails = new Dictionary<ulong, int>();    // guid → no-frame interacts (reset only on a frame opening)
 		private static readonly HashSet<ulong> _turnInDeadNpc = new HashSet<ulong>();                       // 4+ silent visits → dead for the session
+		private static readonly ConcurrentDictionary<uint, DateTime> _leaderPickupLog = new ConcurrentDictionary<uint, DateTime>();   // npc entry → leader accepted a quest there (hub thread writes)
+		private static bool _leaderSignal;                        // LeaderAtQuestGiver(), cached per tick by WantTurnIn
 		private static int _completedFp;                          // fingerprint of our completed quest ids (per tick, WantTurnIn)
 		private static WoWUnit? _turnInNpc;                       // resolved once per tick by WantTurnIn(), committed while usable
 		private const float TurnInVicinity = 40f;                 // hub radius for the nearest-giver fallback
