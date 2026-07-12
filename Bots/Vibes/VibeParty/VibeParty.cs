@@ -1631,6 +1631,7 @@ namespace VibeParty
 
 		private static bool IsUsableGiver(WoWUnit? u)
 			=> u != null && !u.Dead && u.IsQuestGiver
+			   && !_turnInDeadNpc.Contains(u.Guid)
 			   && !(_turnInCooldown.TryGetValue(u.Guid, out DateTime until) && DateTime.UtcNow < until)
 			   && !(_turnInNothingHere.TryGetValue(u.Guid, out int fp) && fp == _completedFp);
 
@@ -1707,6 +1708,14 @@ namespace VibeParty
 					_turnInFrameFails[npc.Guid] = fails;
 					Logging.WriteDebug("VibeParty: {0} opened no frame (attempt {1}).", npc.Name, fails);
 					if (fails >= 2) _turnInNothingHere[npc.Guid] = _completedFp;
+					// The fingerprint latch re-opens on every quest-state change — but an NPC that has
+					// stayed SILENT four times total (never a frame, e.g. Merissa Stilwell holding only
+					// the deprecated 'Welcome!' relation) is dead: give it up for the session.
+					if (fails >= 4)
+					{
+						_turnInDeadNpc.Add(npc.Guid);
+						Logging.Write("VibeParty: {0} has never opened a frame ({1} visits) — giving up on it this session.", npc.Name, fails);
+					}
 					_turnInCooldown[npc.Guid] = DateTime.UtcNow.AddSeconds(fails >= 2 ? 120 : 15);
 					return;
 				}
@@ -1714,6 +1723,7 @@ namespace VibeParty
 			_turnInFrameFails.Remove(npc.Guid);
 
 			bool handedIn = false;
+			bool attempted = false;   // we FOUND our quest in a frame and tried to complete it
 
 			// Multi-quest giver: hand in each active quest our LOG marks complete (truth = the quest
 			// leaving the log, never frame flow — same rule as VibeQuester2's QuestInteraction).
@@ -1729,8 +1739,11 @@ namespace VibeParty
 						if (held == null || !held.IsCompleted) continue;
 
 						GossipFrame.Instance.SelectActiveQuest(q.Index);
-						if (WaitFrame(() => QuestFrame.Instance.IsVisible, 2500) && CompleteShownQuest((uint)q.Id))
-							handedIn = true;
+						if (WaitFrame(() => QuestFrame.Instance.IsVisible, 2500))
+						{
+							attempted = true;
+							if (CompleteShownQuest((uint)q.Id)) handedIn = true;
+						}
 						if (!GossipFrame.Instance.IsVisible) break;
 					}
 				}
@@ -1760,8 +1773,9 @@ namespace VibeParty
 					if (!WaitFrame(() => QuestFrame.Instance.CurrentShownQuestId != 0, 2500)) break;
 					uint shownId = QuestFrame.Instance.CurrentShownQuestId;
 					PlayerQuest heldQ = shownId != 0 ? me.QuestLog.GetQuestById(shownId) : null;
-					if (heldQ != null && heldQ.IsCompleted && CompleteShownQuest(shownId))
-						handedIn = true;
+					if (heldQ == null || !heldQ.IsCompleted) break;
+					attempted = true;
+					if (CompleteShownQuest(shownId)) handedIn = true;
 					else break;
 				}
 			}
@@ -1770,8 +1784,11 @@ namespace VibeParty
 			{
 				uint shown = QuestFrame.Instance.CurrentShownQuestId;
 				PlayerQuest held = shown != 0 ? me.QuestLog.GetQuestById(shown) : null;
-				if (held != null && held.IsCompleted && CompleteShownQuest(shown))
-					handedIn = true;
+				if (held != null && held.IsCompleted)
+				{
+					attempted = true;
+					if (CompleteShownQuest(shown)) handedIn = true;
+				}
 			}
 
 			// ---- Pickup phase: hoover every AVAILABLE quest while we're here. The frame's available
@@ -1843,17 +1860,39 @@ namespace VibeParty
 				Logging.Write("VibeParty: Picked up {0} quest(s) at {1}.", pickedUp, npc.Name);
 			if (!handedIn && pickedUp == 0)
 			{
-				// The frames were the Lua truth and offered nothing for us either way — latch that
-				// verdict for the CURRENT completed set so we never orbit this NPC again until our
-				// quest state changes (the DB's quest-giver flag alone proved untrustworthy).
-				_turnInNothingHere[npc.Guid] = _completedFp;
-				Logging.WriteDebug("VibeParty: nothing to do at {0} — skipping until quest state changes.", npc.Name);
+				if (attempted)
+				{
+					// We FOUND our quest here and the completion flow failed — that's OUR bug or lag,
+					// NOT "nothing here". A latch would block this quest until the fingerprint changes
+					// (the Militia Hammer poisoning, first run); retry on the normal cooldown and shout.
+					Logging.Write(System.Drawing.Color.Orange,
+						"VibeParty: turn-in FAILED at {0} — the quest did not leave the log; will retry.", npc.Name);
+				}
+				else
+				{
+					// The frames were the Lua truth and offered nothing for us either way — latch that
+					// verdict for the CURRENT completed set so we never orbit this NPC again until our
+					// quest state changes (the DB's quest-giver flag alone proved untrustworthy).
+					_turnInNothingHere[npc.Guid] = _completedFp;
+					Logging.WriteDebug("VibeParty: nothing to do at {0} — skipping until quest state changes.", npc.Name);
+				}
 			}
 			SetTurnInCooldown(npc.Guid);
 		}
 
 		private static bool CompleteShownQuest(uint questId)
 		{
+			// PROGRESS panel first ("Continue" — the Lua CompleteQuest() advances it): reward choices are
+			// only CLICKABLE on the REWARD panel. The old order selected the reward first — the quest
+			// CACHE made the choice look selectable (ActionSelectReward logged "Choosing …"), but its
+			// QuestInfoItem click no-ops on the progress panel — then raced the panel flip, so every
+			// reward-CHOICE quest silently failed to hand in (Militia Hammer at Deputy Willem, first run).
+			if (Lua.GetReturnVal<int>("return (QuestFrameProgressPanel and QuestFrameProgressPanel:IsShown()) and 1 or 0", 0U) == 1)
+			{
+				Lua.DoString("CompleteQuest()");
+				WaitFrame(() => Lua.GetReturnVal<int>(
+					"return (QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()) and 1 or 0", 0U) == 1, 2000);
+			}
 			if (Lua.GetReturnVal<int>("return GetNumQuestChoices()", 0U) >= 1)
 			{
 				try
@@ -1864,7 +1903,8 @@ namespace VibeParty
 				catch { QuestFrame.Instance.SelectQuestReward(0); }
 				StyxWoW.Sleep(300);
 			}
-			QuestFrame.Instance.CompleteQuest();
+			// The reward-panel button routes GetQuestReward(itemChoice) with the selection made above.
+			Lua.DoString("if QuestFrameCompleteQuestButton and QuestFrameCompleteQuestButton:IsVisible() then QuestFrameCompleteQuestButton:Click() end");
 			return WaitFrame(() => !StyxWoW.Me.QuestLog.ContainsQuest(questId), 2500);
 		}
 
@@ -1922,7 +1962,8 @@ namespace VibeParty
 		private static readonly WaitTimer _waitTimer1 = new WaitTimer(TimeSpan.FromMinutes(3.0));
 		private static readonly Dictionary<ulong, DateTime> _turnInCooldown = new Dictionary<ulong, DateTime>();
 		private static readonly Dictionary<ulong, int> _turnInNothingHere = new Dictionary<ulong, int>();   // guid → completed-set fingerprint at verdict time
-		private static readonly Dictionary<ulong, int> _turnInFrameFails = new Dictionary<ulong, int>();    // guid → consecutive no-frame interacts
+		private static readonly Dictionary<ulong, int> _turnInFrameFails = new Dictionary<ulong, int>();    // guid → no-frame interacts (reset only on a frame opening)
+		private static readonly HashSet<ulong> _turnInDeadNpc = new HashSet<ulong>();                       // 4+ silent visits → dead for the session
 		private static int _completedFp;                          // fingerprint of our completed quest ids (per tick, WantTurnIn)
 		private static WoWUnit? _turnInNpc;                       // resolved once per tick by WantTurnIn(), committed while usable
 		private const float TurnInVicinity = 40f;                 // hub radius for the nearest-giver fallback
