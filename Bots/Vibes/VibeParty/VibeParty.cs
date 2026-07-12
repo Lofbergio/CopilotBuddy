@@ -1428,18 +1428,15 @@ namespace VibeParty
 
 		private Composite CreateWaterServiceBehavior()
 		{
-			// Mage only, out of combat, and someone actually asked. Top up our own conjured stock first, then
-			// carry a stack to the nearest requester and trade it. Requesters hold still (AwaitingWater) so the
+			// Mage only, out of combat, and someone actually asked. Serve waiting requesters with whatever we can
+			// spare FIRST, top the stock up in the quiet ticks. Requesters hold still (AwaitingWater) so the
 			// handoff is a stationary trade. Sits low in the tree → downtime only, never preempts combat/loot.
 			return new Decorator(
 				ctx => _partyWater != null && StyxWoW.Me.Class == WoWClass.Mage
 					&& !StyxWoW.Me.Combat && _partyWater.HasRequests,
 				new PrioritySelector(
-					// 1. Stock up (non-blocking cast; each conjure makes a stack).
-					new Decorator(
-						ctx => PartyWater.ConjuredWaterCount() < MageWaterStock && !StyxWoW.Me.IsCasting && FirstConjureSpell() != null,
-						new TreeSharp.Action(ctx => { SpellManager.Cast(FirstConjureSpell()); return RunStatus.Success; })),
-					// 2. Deliver to the nearest requester.
+					// 1. Deliver to the nearest requester (any surplus above the reserve is deliverable — the
+					//    trade splits stacks, so even a fresh rank's 2-per-cast trickle reaches the thirsty).
 					new Decorator(ctx => WantDeliverWater(),
 						new PrioritySelector(
 							new Decorator(ctx => _waterTarget!.Distance > WaterTradeRange,
@@ -1448,7 +1445,16 @@ namespace VibeParty
 									new NavigationAction(ctx => _waterTarget!.Location))),
 							new Decorator(ctx => !_waterTarget!.IsMoving,
 								new TreeSharp.Action(ctx => { TryDeliverWater(_waterTarget!); return RunStatus.Success; }))
-						))
+						)),
+					// 2. Stock up. A fresh conjure rank yields only 2/cast (+2 per character level), so filling
+					//    the stock legitimately takes MANY casts — pace it, don't force it: a 3s conjure can never
+					//    start while moving (retrying it every tick was a 12Hz busy-loop, Marge 2026-07-12_1237)
+					//    and must not cancel our own drink; the throttle bounds any other silently-failing cast.
+					new Decorator(
+						ctx => PartyWater.ConjuredWaterCount() < MageWaterStock
+							&& !StyxWoW.Me.IsCasting && !StyxWoW.Me.IsMoving && !StyxWoW.Me.HasAura("Drink")
+							&& DateTime.UtcNow >= _nextConjureTry && FirstConjureSpell() != null,
+						new TreeSharp.Action(ctx => { _nextConjureTry = DateTime.UtcNow.AddSeconds(2); SpellManager.Cast(FirstConjureSpell()); return RunStatus.Success; }))
 				));
 		}
 
@@ -1471,7 +1477,7 @@ namespace VibeParty
 		private static bool TradeOpen()
 			=> Lua.GetReturnVal<int>("return (TradeFrame and TradeFrame:IsShown()) and 1 or 0", 0) == 1;
 
-		// Synchronous trade: open with the requester, drop one conjured stack, accept. The requester auto-accepts
+		// Synchronous trade: open with the requester, place water, accept. The requester auto-accepts
 		// (OnTradeShouldAccept, party-member gate) and re-accepts when our item lands. Per-requester cooldown after.
 		private void TryDeliverWater(WoWPlayer requester)
 		{
@@ -1483,21 +1489,35 @@ namespace VibeParty
 			{
 				requester.Target();
 				Lua.DoString("InitiateTrade('target')");
-				if (!WaitFrame(TradeOpen, 2500)) { _partyWater.Served(requester.Guid); return; }
+				if (!WaitFrame(TradeOpen, 2500))
+				{
+					_partyWater.Served(requester.Guid);   // cooldown, then retry — never a silent drop
+					Logging.Write(System.Drawing.Color.Aqua, "[VibeParty] trade with {0} never opened — will retry after cooldown.", requester.Name);
+					return;
+				}
 			}
 
-			// Give conjured water by COUNT (a conjure doesn't always make a stack), keeping a 5-water self-reserve
-			// and handing over up to ~10. All conjured drinks in bag are current rank (stale ones were deleted).
-			Lua.DoString(
+			// Give min(10, total-5) by COUNT, splitting stacks as needed — a fresh conjure rank makes only
+			// 2/cast, so the whole stock can sit in ONE small stack that a whole-stack give could never hand
+			// over while keeping the reserve. All conjured drinks in bag count (stale ranks get purged lazily).
+			int given = Lua.GetReturnVal<int>(
 				"local reserve=5 local giveMax=10 local total=0 " +
 				"for b=0,4 do for s=1,GetContainerNumSlots(b) do local l=GetContainerItemLink(b,s) if l and string.find(l,'Conjured') and string.find(l,'Water') then local _,c=GetContainerItemInfo(b,s) total=total+(c or 1) end end end " +
-				"local given=0 " +
-				"for b=0,4 do for s=1,GetContainerNumSlots(b) do local l=GetContainerItemLink(b,s) if l and string.find(l,'Conjured') and string.find(l,'Water') then local _,c=GetContainerItemInfo(b,s) c=c or 1 if given<giveMax and total-c>=reserve then UseContainerItem(b,s) given=given+c total=total-c end end end end");
+				"local give=math.min(giveMax,total-reserve) local given=0 local slot=1 " +
+				"if give>0 then for b=0,4 do for s=1,GetContainerNumSlots(b) do if given<give and slot<=6 then local l=GetContainerItemLink(b,s) if l and string.find(l,'Conjured') and string.find(l,'Water') then local _,c=GetContainerItemInfo(b,s) c=c or 1 local take=math.min(c,give-given) if take==c then PickupContainerItem(b,s) else SplitContainerItem(b,s,take) end ClickTradeButton(slot) slot=slot+1 given=given+take end end end end end " +
+				"return given", 0);
+			if (given <= 0)
+			{
+				Lua.DoString("CloseTrade()");
+				_partyWater.Served(requester.Guid);
+				Logging.Write(System.Drawing.Color.Aqua, "[VibeParty] nothing to spare for {0} (holding reserve) — will retry after cooldown.", requester.Name);
+				return;
+			}
 			StyxWoW.Sleep(300);
 			Lua.DoString("AcceptTrade()");
 			WaitFrame(() => !TradeOpen(), 3000);
 			_partyWater.Served(requester.Guid);
-			Logging.Write(System.Drawing.Color.Aqua, "[VibeParty] handed water to {0}.", requester.Name);
+			Logging.Write(System.Drawing.Color.Aqua, "[VibeParty] handed {0} water to {1}.", given, requester.Name);
 		}
 
 		// Live, DB-free mirror of VibeGrinder's aggro-bubble danger model (WoWUnit.GetAggroRange): true if any
@@ -2076,6 +2096,7 @@ namespace VibeParty
 		private WoWPlayer? _waterTarget;
 		private const int MageWaterStock = 25;    // mage conjures until it holds this (~5 reserve + a couple handouts)
 		private const float WaterTradeRange = 8f;
+		private static DateTime _nextConjureTry = DateTime.MinValue;   // paces the stock-up cast (see CreateWaterServiceBehavior)
 		private static readonly System.Text.Json.JsonSerializerOptions _cmdJson = new System.Text.Json.JsonSerializerOptions { IncludeFields = true };
 		private static readonly ConcurrentDictionary<ulong, MemberProgress> _partyProgress = new ConcurrentDictionary<ulong, MemberProgress>();
 		private static readonly Dictionary<uint, string> _lastBehind = new Dictionary<uint, string>();

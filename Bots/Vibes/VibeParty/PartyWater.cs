@@ -65,13 +65,15 @@ namespace VibeParty
 			LocalPlayer me = StyxWoW.Me;
 			if (me.MaxMana <= 0 || !me.IsInParty || me.Combat) return;
 
-			// Drop stale lower-rank conjured drinks the mage has since out-ranked.
-			if (_currentWaterId > 0) DeleteStaleWater(_currentWaterId);
+			// Drop stale lower-rank drinks only once we hold a serviceable amount of the CURRENT rank — the
+			// mage's fresh rank arrives 2/cast and deleting on announcement would leave the whole party dry.
+			if (_currentWaterId > 0 && CountOfItem(_currentWaterId) >= LowWater) DeleteStaleWater(_currentWaterId);
 
 			if ((DateTime.UtcNow - _lastRequest).TotalSeconds < RequestEvery) return;
 			if (!MageInParty()) return;
-			// Low on the CURRENT water (or on any conjured drink if we haven't heard the mage's kind yet).
-			int have = _currentWaterId > 0 ? CountOfItem(_currentWaterId) : ConjuredWaterCount();
+			// Low on ANY conjured drink — old-rank stock still restores mana, so we don't nag the mage for the
+			// new rank while we can drink what we have; the purge above converges us to the current rank.
+			int have = ConjuredWaterCount();
 			if (have >= LowWater) return;
 			_lastRequest = DateTime.UtcNow;
 			_bus.Publish("WaterRequest", _self.ToString());
@@ -86,10 +88,15 @@ namespace VibeParty
 		}
 
 		// The mage: advertise the best conjured water id it holds, and delete its own out-ranked drinks.
+		// A fresh rank trickles in at 2/cast (+2 per level) — switching the party over (and purging old stock)
+		// the moment the first new stack appears would spike demand exactly when production is slowest. Hold the
+		// announcement until we actually hold a serviceable amount of the new rank; until then everyone (us
+		// included) keeps drinking the old one.
 		private void MageAdvertise()
 		{
 			int best = BestConjuredId();
 			if (best <= 0) return;
+			if (best != _currentWaterId && CountOfItem(best) < ReserveForSelf) return;
 			_currentWaterId = best;
 			DeleteStaleWater(best);
 			if (best != _advertised)
