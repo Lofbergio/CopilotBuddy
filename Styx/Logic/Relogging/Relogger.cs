@@ -46,6 +46,23 @@ namespace Styx.Logic.Relogging
         private static DateTime _loginSentUtc = DateTime.MinValue;
         private static readonly Random _jitter = new Random();
 
+        // World-entry attempt tracking. An EnterWorld that lands back at character select is a
+        // SERVER REJECTION (classically "character already logged in" for ~1-2 min after an
+        // unclean disconnect) — but the bounce goes CharSelect → Unknown(loading) → CharSelect,
+        // and the screen-transition handler read each leg as "progress" and reset the backoff
+        // ladder. Net effect: full-speed EnterWorld retries every ~6s forever, silently
+        // (observed live 2026-07-10 11:47, warband-19440.log). These fields tie the attempt to
+        // its outcome so a bounce fails the attempt and climbs the ladder like any other failure.
+        private static DateTime _enterWorldSentUtc = DateTime.MinValue;
+        private static int _worldEntryBounces;
+        private static string _worldEntryDialog = "";
+
+        // Diagnostic: the last observed glue+world summary and when we last logged it, so we
+        // report exactly what CB sees on every change (and periodically while stuck) instead
+        // of leaving a 120s "Unknown" span as an opaque black box.
+        private static string _lastSeen = "";
+        private static DateTime _lastSeenLogUtc = DateTime.MinValue;
+
         // Watch on the which=CANCEL (connection-progress) dialog: waiting on it is right, waiting FOREVER
         // is not — a half-up server left "Connecting…" on screen for 3.5 HOURS while the wait refreshed the
         // dwell clock every tick, so neither the dwell nor the give-up window (both FailAttempt-driven)
@@ -64,13 +81,12 @@ namespace Styx.Logic.Relogging
         private const int WorldStableSeconds = 5;
 
         /// <summary>
-        /// How long to let character select settle before sending EnterWorld.
-        ///
-        /// The client reaches CharSelect the instant it receives the character list, but the enumeration is
-        /// still being processed; an EnterWorld fired immediately is rejected and the client drops back here.
-        /// Costs one relogger tick on the happy path and saves a full bounce-and-retry cycle.
+        /// Short settle after reaching character select (or after a SelectCharacter) before we press
+        /// Enter, so the list has populated and the target is the current selection. Kept small — we
+        /// enter via a keypress (the human path), which needs only a beat, not the long wait the old
+        /// injected EnterWorld() needed to outlast the char-list enumeration.
         /// </summary>
-        private const int CharSelectSettleSeconds = 2;
+        private const int CharSelectSettleMs = 300;
 
         // Dialog text classification (English client — same caveat as UI_ERROR_MESSAGE matching).
         // Fatal: never retried. In-progress: the connecting/queue status dialog — wait, don't dismiss.
@@ -126,10 +142,36 @@ namespace Styx.Logic.Relogging
             WantsClientRestart = false;
         }
 
+        private static bool _lastInWorldLogged;
+
+        /// <summary>
+        /// Logs the in-world edge on every 2s timer tick, independent of the recovery driver —
+        /// so the "character enters the world then logs straight back out" symptom is captured
+        /// as an explicit OUT-OF-WORLD edge (with a note when it follows an EnterWorld), rather
+        /// than only showing up as an unexplained bounce back to a glue screen.
+        /// </summary>
+        private static void LogWorldEdges()
+        {
+            if (ObjectManager.Wow == null)
+                return;
+            bool inWorld = StyxWoW.IsInWorld;
+            if (inWorld == _lastInWorldLogged)
+                return;
+            _lastInWorldLogged = inWorld;
+            if (inWorld)
+                Logging.Write(Colors.Lime, "[Relogger] World state → IN WORLD (inGame={0}).", StyxWoW.IsInGame);
+            else
+                Logging.Write(Colors.Orange, "[Relogger] World state → OUT OF WORLD{0}.",
+                    _enterWorldSentUtc != DateTime.MinValue
+                        ? " — dropped shortly after an EnterWorld (the 'enter then logout' symptom)"
+                        : "");
+        }
+
         private static void TimerTick()
         {
             try
             {
+                LogWorldEdges();
                 WatchWorldStability();
 
                 // While the bot runs, TreeRoot's InGame_Check is the driver — don't double-drive.
@@ -210,6 +252,9 @@ namespace Styx.Logic.Relogging
                     _state = RelogState.Idle;
                     _failedAttempts = 0;
                     _backoffUntilUtc = DateTime.MinValue;
+                    _enterWorldSentUtc = DateTime.MinValue;
+                    _worldEntryBounces = 0;
+                    _worldEntryDialog = "";
                     WantsClientRestart = false;
                 }
                 return;
@@ -226,6 +271,10 @@ namespace Styx.Logic.Relogging
                 _screenEnteredUtc = DateTime.UtcNow;
                 _loginSentUtc = DateTime.MinValue;
                 _cancelDialogSinceUtc = DateTime.MinValue;
+                _enterWorldSentUtc = DateTime.MinValue;
+                _worldEntryBounces = 0;
+                _worldEntryDialog = "";
+                _lastSeen = "";
                 WantsClientRestart = false;
                 Logging.Write(Colors.Orange, "[Relogger] Not in world — relogger engaged.");
             }
@@ -260,16 +309,63 @@ namespace Styx.Logic.Relogging
 
             var snap = GlueSession.Query();
 
-            // Screen transition = progress: reset the backoff ladder, restart the dwell clock.
+            // Ground truth: report exactly what CB observes — the real screen, any dialog text
+            // (this is where "Character already logged in" / "Disconnected" would surface), the
+            // selected character, and the in-game/in-world flags — on every change and at least
+            // every 20s while nothing changes. This is what turns an opaque "stuck at Unknown"
+            // into a readable trace.
+            string seen = string.Format("{0} | inGame={1} inWorld={2}",
+                snap.Describe(), StyxWoW.IsInGame, StyxWoW.IsInWorld);
+            if (seen != _lastSeen || (DateTime.UtcNow - _lastSeenLogUtc).TotalSeconds >= 20)
+            {
+                Logging.Write("[Relogger] Sees: {0}", seen);
+                _lastSeen = seen;
+                _lastSeenLogUtc = DateTime.UtcNow;
+            }
+
+            // A dialog seen while a world-entry attempt is in flight is very likely the server's
+            // rejection reason — keep its text so the eventual bounce report can quote it.
+            // CANCEL dialogs are the connection-progress box, not a reason.
+            if (snap.DialogShown && _enterWorldSentUtc != DateTime.MinValue && snap.DialogWhich != "CANCEL")
+                _worldEntryDialog = snap.DialogText;
+
+            // Screen transition handling. A transition is only "progress" (ladder reset) when no
+            // world-entry attempt is in flight: the rejection bounce goes CharSelect → Unknown
+            // (loading) → CharSelect, and treating each leg as progress is what kept the ladder
+            // at zero and produced silent full-speed retries, forever.
             if (snap.Screen != _lastScreen)
             {
+                bool bounce = snap.Screen == GlueScreen.CharSelect && _enterWorldSentUtc != DateTime.MinValue;
                 if (_lastScreen != GlueScreen.Unknown || snap.Screen != GlueScreen.Unknown)
                     Logging.WriteDebug("[Relogger] Glue screen: {0} → {1}", _lastScreen, snap.Screen);
                 _lastScreen = snap.Screen;
                 _screenEnteredUtc = DateTime.UtcNow;
-                _failedAttempts = 0;
                 if (snap.Screen == GlueScreen.Login)
+                {
+                    // A fall all the way back to login is a new session — world-entry bookkeeping resets.
                     _loginSentUtc = DateTime.MinValue;
+                    _enterWorldSentUtc = DateTime.MinValue;
+                    _worldEntryBounces = 0;
+                    _worldEntryDialog = "";
+                }
+                if (bounce)
+                {
+                    // The server refused the world entry and threw us back to character select.
+                    _enterWorldSentUtc = DateTime.MinValue;
+                    _worldEntryBounces++;
+                    string said = _worldEntryDialog.Length > 0
+                        ? string.Format(" — server said: \"{0}\"", _worldEntryDialog)
+                        : "";
+                    _worldEntryDialog = "";
+                    if (_worldEntryBounces == 3)
+                        Logging.Write(Colors.Orange,
+                            "[Relogger] The server keeps refusing world entry — commonly \"character already logged in\" for a minute or two after an unclean disconnect. Backing off between attempts.");
+                    FailAttempt(string.Format("world entry rejected, bounced back to character select ({0} in a row){1}",
+                        _worldEntryBounces, said));
+                    return; // backoff engaged; retry when it expires
+                }
+                if (_enterWorldSentUtc == DateTime.MinValue)
+                    _failedAttempts = 0; // genuine progress only
             }
 
             if (snap.DialogShown && HandleDialog(snap))
@@ -296,7 +392,7 @@ namespace Styx.Logic.Relogging
                 case GlueScreen.CharSelect:
                     // Let the character list settle first. Bouncing back off a rejected EnterWorld also
                     // resets _screenEnteredUtc, so every retry gets the same grace.
-                    if ((DateTime.UtcNow - _screenEnteredUtc).TotalSeconds < CharSelectSettleSeconds)
+                    if ((DateTime.UtcNow - _screenEnteredUtc).TotalMilliseconds < CharSelectSettleMs)
                         break;
 
                     switch (GlueSession.EnterWorld(RelogSettings.Instance.CharacterName))
@@ -315,7 +411,11 @@ namespace Styx.Logic.Relogging
                             Logging.Write("[Relogger] Selecting character '{0}'...", RelogSettings.Instance.CharacterName);
                             break;
                         default:
-                            Logging.Write("[Relogger] Entering world...");
+                            // Arm the attempt tracker: if this lands us back at character select
+                            // instead of the world, the transition handler fails the attempt.
+                            _enterWorldSentUtc = DateTime.UtcNow;
+                            Logging.Write("[Relogger] Entering world{0}...",
+                                _worldEntryBounces > 0 ? string.Format(" (attempt {0})", _worldEntryBounces + 1) : "");
                             break;
                     }
                     break;

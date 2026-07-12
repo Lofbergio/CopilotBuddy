@@ -394,7 +394,45 @@ namespace Styx.Helpers
             ? Path.Combine(ApplicationPath, "Logs", $"warband-{Process.GetCurrentProcess().Id}.log")
             : null;
 
-        private static readonly object _wbLock = new object();
+        // The mirror writes EVERY line (all levels), and it is called on whatever thread logged —
+        // INCLUDING CB's hooks on the client's render thread. A synchronous File.AppendAllText
+        // (open/write/close) per line there stalled the client mid-zone-in: the world loaded but
+        // the object-stream phase never finished and the server kicked the character back to
+        // charselect (only under /relog=; manual CB has no mirror). So the file I/O now happens on
+        // a dedicated background thread — the log call only enqueues, never touches the disk.
+        private static readonly System.Collections.Concurrent.ConcurrentQueue<string> _wbQueue = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        private static int _wbWriterStarted;
+
+        private static void EnsureWarbandWriter()
+        {
+            if (System.Threading.Interlocked.Exchange(ref _wbWriterStarted, 1) == 1)
+                return;
+            var t = new System.Threading.Thread(WarbandWriterLoop) { IsBackground = true, Name = "WarbandLogWriter" };
+            t.Start();
+        }
+
+        private static void WarbandWriterLoop()
+        {
+            var sb = new System.Text.StringBuilder();
+            while (true)
+            {
+                try
+                {
+                    sb.Clear();
+                    int n = 0;
+                    while (n < 500 && _wbQueue.TryDequeue(out var line)) { sb.Append(line).Append(Environment.NewLine); n++; }
+                    if (n > 0)
+                    {
+                        var dir = Path.GetDirectoryName(WarbandLogPath);
+                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                            Directory.CreateDirectory(dir);
+                        File.AppendAllText(WarbandLogPath, sb.ToString());
+                    }
+                }
+                catch { /* never let hub-logging IO affect the bot */ }
+                System.Threading.Thread.Sleep(100);
+            }
+        }
 
         // Map CB's (level, color, prefix) scheme onto the hub's four buckets.
         private static string WarbandSeverity(LogLevel level, WpfColor color, string message)
@@ -414,13 +452,10 @@ namespace Styx.Helpers
             {
                 string line = string.Format(CultureInfo.InvariantCulture, "[{0:HH:mm:ss.fff}] [{1}] {2}",
                     DateTime.Now, WarbandSeverity(level, color, message), message);
-                lock (_wbLock)
-                {
-                    var dir = Path.GetDirectoryName(WarbandLogPath);
-                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                        Directory.CreateDirectory(dir);
-                    File.AppendAllText(WarbandLogPath, line + Environment.NewLine);
-                }
+                // Enqueue only — the background writer does the disk I/O so no log call (least of
+                // all one on the render thread) ever blocks on a file open/write/close.
+                _wbQueue.Enqueue(line);
+                EnsureWarbandWriter();
             }
             catch
             {

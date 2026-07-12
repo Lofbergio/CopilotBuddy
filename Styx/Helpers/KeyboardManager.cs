@@ -48,6 +48,21 @@ namespace Styx.Helpers
         }
 
         /// <summary>
+        /// Presses Enter on the WoW window (VK_RETURN, scan code 0x1C). At character select this
+        /// fires the client's own CharacterSelect_EnterWorld() on its input path — the HUMAN path —
+        /// instead of the relogger injecting EnterWorld() via the executor. The injected call runs
+        /// world-entry at a frame this server rejects mid-zone-in (the world loads but objects never
+        /// stream and the client bounces to charselect); a synthesized keypress is what a manual
+        /// login does, and that enters every time. Mirrors HBRelog's SendBackgroundKey(hWnd, '\r').
+        /// </summary>
+        public static void PressEnter()
+        {
+            const uint VK_RETURN = 0x0D;
+            SendMessage(WM_KEYDOWN, VK_RETURN, 0x001C0001);
+            SendMessage(WM_KEYUP, VK_RETURN, 0xC01C0001);
+        }
+
+        /// <summary>
         /// Simulates pressing a key down.
         /// </summary>
         public static void PressKey(char key)
