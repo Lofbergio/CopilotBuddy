@@ -123,6 +123,7 @@ namespace VibeParty
 					Lua.Events.AttachEvent("QUEST_ACCEPTED", new LuaEventHandlerDelegate(OnQuestAcceptedShare));
 					// Abandon sync: diff our log on every change (turn-in vs abandon resolved in Pulse).
 					Lua.Events.AttachEvent("QUEST_LOG_UPDATE", new LuaEventHandlerDelegate(OnLeaderQuestLogUpdate));
+					Lua.Events.AttachEvent("QUEST_COMPLETE", new LuaEventHandlerDelegate(OnLeaderQuestComplete));
 					// Water arrives by trade — the leader gets the WATER-ONLY auto-accept (see OnTradeShouldAccept).
 					Lua.Events.AttachEvent("TRADE_SHOW",                new LuaEventHandlerDelegate(OnTradeShouldAccept));
 					Lua.Events.AttachEvent("TRADE_ACCEPT_UPDATE",       new LuaEventHandlerDelegate(OnTradeShouldAccept));
@@ -149,7 +150,8 @@ namespace VibeParty
 				_bus.Subscribe("Command", OnCommandReceived);
 				_bus.Subscribe("LeaderPickup", OnLeaderPickup);   // durable "I took a quest HERE" records
 				_bus.Subscribe("QuestAbandon", OnQuestAbandonMsg);   // leader dropped a quest — drop + block it
-				_bus.Subscribe("QuestAccept", OnQuestAcceptMsg);     // leader re-accepted — lift the block
+				_bus.Subscribe("QuestAccept", OnQuestAcceptMsg);     // leader accepted/re-accepted — whitelist + lift block
+				_bus.Subscribe("LeaderQuests", OnLeaderQuestsMsg);   // leader's log snapshot — seed the accept whitelist
 				AttachLuaEvents();
 				Vendors.OnVendorItems += OnVendorSweep;   // disposition: only true junk sells
 				Vendors.OnMailItems += OnMailSweep;       // disposition: valuables queue for the bank
@@ -170,6 +172,7 @@ namespace VibeParty
 			{
 				Lua.Events.DetachEvent("QUEST_ACCEPTED", new LuaEventHandlerDelegate(OnQuestAcceptedShare));
 				Lua.Events.DetachEvent("QUEST_LOG_UPDATE", new LuaEventHandlerDelegate(OnLeaderQuestLogUpdate));
+				Lua.Events.DetachEvent("QUEST_COMPLETE", new LuaEventHandlerDelegate(OnLeaderQuestComplete));
 				Lua.Events.DetachEvent("TRADE_SHOW",                new LuaEventHandlerDelegate(OnTradeShouldAccept));
 				Lua.Events.DetachEvent("TRADE_ACCEPT_UPDATE",       new LuaEventHandlerDelegate(OnTradeShouldAccept));
 				Lua.Events.DetachEvent("TRADE_TARGET_ITEM_CHANGED", new LuaEventHandlerDelegate(OnTradeShouldAccept));
@@ -789,6 +792,22 @@ namespace VibeParty
 		private static bool _leaderLogDirty = true;   // seed on the first tick
 		private static readonly Dictionary<uint, DateTime> _pendingAbandonCheck = new Dictionary<uint, DateTime>();
 
+		// Turn-in detection (leader). A human turn-in ALWAYS opens the reward panel (QUEST_COMPLETE);
+		// a human abandon never does. Snapshot the log when the panel opens — the id that leaves it within
+		// the window handed in, so it is NOT an abandon. Robust where IsQuestFlaggedCompleted lags the
+		// removal event (that lag misfired real turn-ins as abandons — mage run 2026-07-13).
+		private static volatile HashSet<uint> _turnInSnapshot = new HashSet<uint>();
+		private static DateTime _turnInSnapshotAt = DateTime.MinValue;
+		// Leader quest-set broadcast throttle (seeds late-joining followers' accept whitelist).
+		private static string _lastLeaderQuestsCsv = "";
+		private static DateTime _lastLeaderQuestsAt = DateTime.MinValue;
+
+		private void OnLeaderQuestComplete(object sender, LuaEventArgs e)
+		{
+			_turnInSnapshot = new HashSet<uint>(ReadOwnQuestLogIds());
+			_turnInSnapshotAt = DateTime.UtcNow;
+		}
+
 		private void OnLeaderQuestLogUpdate(object sender, LuaEventArgs e)
 		{
 			_leaderLogDirty = true;
@@ -805,11 +824,22 @@ namespace VibeParty
 					_pendingAbandonCheck.Remove(id);
 					if (_leaderLogIds.Contains(id))
 						continue;   // re-accepted inside the window
+					HashSet<uint> snap = _turnInSnapshot;
+					if ((DateTime.UtcNow - _turnInSnapshotAt).TotalSeconds < 30 && snap.Contains(id))
+						continue;   // the reward panel was open for it → handed in, not abandoned
 					if (Lua.GetReturnVal<int>("return IsQuestFlaggedCompleted(" + id + ") and 1 or 0", 0U) == 1)
 						continue;   // turned in — never an abandon
 					Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] leader abandoned quest {0} — the party follows.", id);
 					bus.Publish("QuestAbandon", id.ToString());
 				}
+			}
+
+			// Re-broadcast the leader quest set for any follower that joined during a quiet spell.
+			if (_leaderLogSeeded && (DateTime.UtcNow - _lastLeaderQuestsAt).TotalSeconds > 15)
+			{
+				_lastLeaderQuestsAt = DateTime.UtcNow;
+				_lastLeaderQuestsCsv = string.Join(",", _leaderLogIds);
+				bus.Publish("LeaderQuests", _lastLeaderQuestsCsv);
 			}
 
 			if (!_leaderLogDirty) return;
@@ -823,6 +853,13 @@ namespace VibeParty
 			_leaderLogSeeded = true;
 			_leaderLogIds.Clear();
 			foreach (uint id in current) _leaderLogIds.Add(id);
+			string csv = string.Join(",", current);
+			if (csv != _lastLeaderQuestsCsv)   // publish the whitelist snapshot on any change
+			{
+				_lastLeaderQuestsCsv = csv;
+				_lastLeaderQuestsAt = DateTime.UtcNow;
+				bus.Publish("LeaderQuests", csv);
+			}
 		}
 
 		private static HashSet<uint> ReadOwnQuestLogIds()
@@ -845,18 +882,41 @@ namespace VibeParty
 		private static readonly ConcurrentQueue<uint> _abandonQueue = new ConcurrentQueue<uint>();
 		private static readonly TimeSpan AbandonBlockTtl = TimeSpan.FromMinutes(30);
 
+		// The party does the LEADER's quests, nothing else (user directive 2026-07-13). This is the set of
+		// quest ids the leader has picked up this session — the ONLY quests a follower may ACCEPT (turn-in /
+		// completion of anything already held stays ungated). Fed by the leader's per-accept `QuestAccept`
+		// and its periodic `LeaderQuests` log snapshot (covers a follower that joined mid-session). Ids are
+		// KEPT after the leader turns them in — a follower may still need to walk a prerequisite chain the
+		// leader already finished (accept X → turn in X → X unlocks Y). Removed only on a real abandon.
+		private static readonly ConcurrentDictionary<uint, byte> _leaderQuests = new ConcurrentDictionary<uint, byte>();
+
+		private static bool IsLeaderQuest(uint id) => id != 0 && _leaderQuests.ContainsKey(id);
+
 		private static void OnQuestAbandonMsg(PartyMessage m)
 		{
 			if (!uint.TryParse(m.Payload, out uint id) || id == 0) return;
 			_abandonBlock[id] = DateTime.UtcNow + AbandonBlockTtl;
 			_abandonQueue.Enqueue(id);
+			_leaderQuests.TryRemove(id, out _);   // leader gave it up → drop from the accept whitelist
 		}
 
-		// Leader re-accepted a quest → lift the block so the share/pickup paths work again.
+		// Leader re-accepted a quest → lift the block so the share/pickup paths work again, and (re)admit it
+		// to the accept whitelist.
 		private static void OnQuestAcceptMsg(PartyMessage m)
 		{
-			if (uint.TryParse(m.Payload, out uint id))
-				_abandonBlock.TryRemove(id, out _);
+			if (!uint.TryParse(m.Payload, out uint id) || id == 0) return;
+			_abandonBlock.TryRemove(id, out _);
+			_leaderQuests[id] = 1;
+		}
+
+		// Leader's current quest-log snapshot (csv) — UNION into the whitelist (never replace: turned-in ids
+		// must persist for chain prereqs). Seeds a follower that connected after the leader took its quests.
+		private static void OnLeaderQuestsMsg(PartyMessage m)
+		{
+			if (string.IsNullOrEmpty(m.Payload)) return;
+			foreach (string tok in m.Payload.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+				if (uint.TryParse(tok, out uint id) && id != 0 && !QuestBlocked(id))
+					_leaderQuests[id] = 1;
 		}
 
 		private static bool QuestBlocked(uint id)
@@ -1853,8 +1913,18 @@ namespace VibeParty
 							}
 							else
 							{
-								Logging.Write("VibeParty: Accepting shared quest");
-								Lua.DoString("AcceptQuest()");
+								if (shown != 0 && !IsLeaderQuest(shown))
+								{
+									// Not one of the leader's quests — a random "!" the follower stumbled onto. The
+									// party only does the leader's quests (completing anything already held is fine).
+									Logging.Write("VibeParty: declining quest {0} - not one of the leader's quests.", shown);
+									Lua.DoString("DeclineQuest()");
+								}
+								else
+								{
+									Logging.Write("VibeParty: Accepting shared quest");
+									Lua.DoString("AcceptQuest()");
+								}
 							}
 							return RunStatus.Success;
 						}),
@@ -2031,6 +2101,7 @@ namespace VibeParty
 				int qid = item.ItemInfo.BeginQuestId;
 				if (qid <= 0) continue;
 				if (QuestBlocked((uint)qid)) continue;   // leader abandoned it — don't restart it from the item
+				if (!IsLeaderQuest((uint)qid)) continue;   // only start quests the leader is doing (accept whitelist)
 				if (me.QuestLog.ContainsQuest((uint)qid)) continue;
 				if (completed != null && completed.Contains((uint)qid)) continue;
 				if (_starterCooldown.TryGetValue((uint)qid, out DateTime until) && DateTime.UtcNow < until) continue;
@@ -2180,7 +2251,8 @@ namespace VibeParty
 						continue;
 					}
 					if (shown != 0 && !me.QuestLog.ContainsQuest(shown)
-						&& (doneBefore == null || !doneBefore.Contains(shown)))
+						&& (doneBefore == null || !doneBefore.Contains(shown))
+						&& IsLeaderQuest(shown))
 					{
 						TiDebug("detail panel offers quest {0} — accepting.", shown);
 						QuestFrame.Instance.AcceptQuest();
