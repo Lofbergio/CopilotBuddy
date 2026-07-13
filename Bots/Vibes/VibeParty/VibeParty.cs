@@ -1375,42 +1375,28 @@ namespace VibeParty
 				: "CloseAllBags()");
 		}
 
-		// Instance follow: mesh-nav holds FollowDistance spacing — never the native-/follow glue, which drags
-		// everyone to ~2yd behind the tank (body-pull range, exactly where healer/ranged must not stand). Set
-		// the healer's FollowDistance wider and it holds that gap. SAFEGUARD: if the mesh can't reach the
-		// leader (path failure, or the gap stops closing — a hole in the dungeon mmap), native follow IS the
-		// rescue — the leader just walked that path, so the client glue can always retrace it. Windowed so the
-		// spacing model resumes as soon as nav recovers.
-		private static DateTime _instFollowUntil = DateTime.MinValue;
-		private static double _instGapBest = double.MaxValue;
-		private static DateTime _instGapImprovedAt = DateTime.MinValue;
+		// Dungeon follow: native /follow is the PRIMARY. Instance mmaps are holey (missing tiles, and doors
+		// that open on approach are not baked into the mesh), so mesh-nav strands followers ("general pathing /
+		// missing navmesh", user 2026-07-13). Native /follow retraces the leader's ACTUAL walked path — through
+		// the same doors and geometry — so it is mesh-FREE and cannot hit a hole the mesh has. Mesh-nav is only
+		// the last resort when we have fallen out of follow range. We give up FollowDistance spacing during
+		// travel (native /follow has a fixed ~2-3yd distance in 3.3.5a, not tunable), but only during travel:
+		// the combat-entry MoveStop kills the glue on engage and the routine positions us for the fight, so
+		// healer/ranged spacing is recovered exactly where it matters. (Superseded the 2026-07-12 mesh-first
+		// InstanceFollow — its spacing win was not worth the dungeon-nav failures.)
+		private const float InstanceFollowRange = 40f;   // native /follow range; beyond it, mesh-nav to catch up
 
 		private static void InstanceFollow(WoWPlayer leader, bool ctmActive)
 		{
-			if (DateTime.UtcNow < _instFollowUntil)
+			if (leader.Distance <= InstanceFollowRange)
 			{
+				// No LoS gate: native /follow paths toward the unit around corners the mesh cannot cover.
 				if (!ctmActive)
 					Lua.DoString(string.Format("FollowUnit('{0}', true)", leader.Name));
-				return;
 			}
-			if (leader.Distance < VibePartySettings.Instance.FollowDistance)
+			else
 			{
-				_instGapBest = double.MaxValue;   // in position — re-arm the progress watchdog
-				_instGapImprovedAt = DateTime.MinValue;
-				return;
-			}
-
-			MoveResult mr = Navigator.MoveTo(LeaderLocation);
-			if (leader.Distance + 1 < _instGapBest) { _instGapBest = leader.Distance; _instGapImprovedAt = DateTime.UtcNow; }
-			bool navDead = mr == MoveResult.Failed || mr == MoveResult.PathGenerationFailed
-				|| (_instGapImprovedAt != DateTime.MinValue && (DateTime.UtcNow - _instGapImprovedAt).TotalSeconds > 5);
-			if (navDead)
-			{
-				_instFollowUntil = DateTime.UtcNow.AddSeconds(12);
-				_instGapBest = double.MaxValue;
-				_instGapImprovedAt = DateTime.MinValue;
-				Logging.Write(System.Drawing.Color.Orange,
-					"[VibeParty] can't navigate to the leader ({0}) — native follow for 12s.", mr);
+				Navigator.MoveTo(LeaderLocation);   // fell out of follow range — mesh-nav to catch up, then follow resumes
 			}
 		}
 
