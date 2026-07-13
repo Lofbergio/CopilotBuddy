@@ -507,7 +507,27 @@ namespace Styx.Logic.Pathing
 					float waypointPrecision = isFinalPoint ? precision : PathPrecision;
 					float distance2DSqr = me.Location.Distance2DSqr(nextPoint);
 					float zDiff = Math.Abs(me.Location.Z - nextPoint.Z);
-					bool reachedWaypoint = distance2DSqr <= waypointPrecision * waypointPrecision && zDiff < 4.5f;
+					bool reachedWaypoint;
+					if (!isFinalPoint && IsSharpCorner(_currentPathIndex))
+					{
+						// Sharp corner: reaching within PathPrecision (2yd) here cuts the inside edge into the wall.
+						// Advance only when close (CornerReach) OR level-with/past the node along the incoming heading
+						// (the plane cross also stops a momentum overshoot from circling back). Aimed AT the node by
+						// ComputeClickPoint, so lateral drift stays small.
+						WoWPoint prevWp = _currentPath[_currentPathIndex - 1];
+						float inx = nextPoint.X - prevWp.X, iny = nextPoint.Y - prevWp.Y;
+						float inl = (float)Math.Sqrt(inx * inx + iny * iny);
+						float along = inl > 0.01f
+							? ((me.Location.X - nextPoint.X) * inx + (me.Location.Y - nextPoint.Y) * iny) / inl
+							: 0f;   // signed distance past the node along the incoming heading (>= 0 = level/past)
+						reachedWaypoint = zDiff < 4.5f
+							&& (distance2DSqr <= CornerReach * CornerReach
+							    || (along >= 0f && distance2DSqr <= PathPrecision * PathPrecision));
+					}
+					else
+					{
+						reachedWaypoint = distance2DSqr <= waypointPrecision * waypointPrecision && zDiff < 4.5f;
+					}
 
 					if (!reachedWaypoint)
 						break;
@@ -772,7 +792,28 @@ namespace Styx.Logic.Pathing
 		// legal for the mesh, too tight for a large model (Tauren, mounted) to steer through. The skip and
 		// push-ahead SHORTCUT lines bypass the MoveAwayFromEdges-processed corners, so they must prove
 		// actual wall clearance, not just visibility ("visible ≠ fits").
-		private const float FollowClearance = 1.25f;   // large-model collision radius + CTM steering slop
+		private const float FollowClearance = 2.0f;   // sized for a MOUNTED TAUREN box + CTM slop (see the corner-following note)
+
+		// A path node is a "sharp corner" when the travel heading changes by more than CornerAngleDeg there
+		// (e.g. the Goldshire Inn L-doorway). At such nodes the follower must ROUND the corner, not cut its
+		// inside edge into a wall — so we (a) aim the CTM AT the node (no push-ahead past it) and (b) advance
+		// only once we've reached it (CornerReach) or drawn level with it (crossed its plane), never on the
+		// loose PathPrecision radius. Straight-ish nodes are untouched. See the corner-following note in
+		// Styx/Logic/CLAUDE.md before changing these.
+		private const float CornerAngleCos = 0.766f;   // cos 40deg — heading change > 40deg = sharp corner
+		private const float CornerReach = 1.0f;        // "reached the corner" radius (tighter than PathPrecision)
+
+		private bool IsSharpCorner(int index)
+		{
+			if (index <= 0 || index >= _currentPath.Count - 1)
+				return false;
+			WoWPoint a = _currentPath[index - 1], b = _currentPath[index], c = _currentPath[index + 1];
+			float ix = b.X - a.X, iy = b.Y - a.Y, ox = c.X - b.X, oy = c.Y - b.Y;
+			float il = (float)Math.Sqrt(ix * ix + iy * iy), ol = (float)Math.Sqrt(ox * ox + oy * oy);
+			if (il < 0.01f || ol < 0.01f)
+				return false;
+			return (ix * ox + iy * oy) / (il * ol) < CornerAngleCos;   // 2D heading-change cosine
+		}
 
 		private bool HasWallClearance(uint mapId, Vector3 from, Vector3 to)
 		{
@@ -809,6 +850,10 @@ namespace Styx.Logic.Pathing
 
 			// HB 6.2.3 method_25: Index > 0 && Index < Path.Points.Length - 1
 			if (_currentPathIndex == 0 || _currentPathIndex >= _currentPath.Count - 1)
+				return waypoint;
+
+			// Never extend the click past a sharp corner — that is exactly the inside-edge cut we avoid.
+			if (IsSharpCorner(_currentPathIndex))
 				return waypoint;
 
 			// Forward = direction from player TO waypoint (HB: vector2 = vector3_0 - activeMover.Location)
