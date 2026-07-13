@@ -16,7 +16,7 @@
         WindowStartupLocation="CenterScreen"
         TitleCharacterCasing="Normal"
         Background="{DynamicResource WindowBackgroundBrush}"
-        GlowBrush="{DynamicResource MahApps.Brushes.Accent}"
+        GlowBrush="{x:Null}"
         Closing="Window_Closing"
         Loaded="Window_Loaded">
     <Grid x:Name="LayoutRoot">
