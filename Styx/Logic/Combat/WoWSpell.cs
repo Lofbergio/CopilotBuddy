@@ -97,21 +97,22 @@ namespace Styx.Logic.Combat
         }
 
         /// <summary>
-        /// Returns true if this spell is channeled.
-        /// Checks AttributesEx for channeled flag (0x44).
+        /// Returns true if this spell is channeled (AttributesEx Channeled1|Channeled2 = 0x44).
         /// </summary>
         public bool IsChanneled
         {
-            get
-            {
-                // BUG-01 fix: Was checking Attributes, must check AttributesEx
-                return (_spellEntry.AttributesEx & 0x44) != 0;
-            }
+            get { return (AttributesEx & 0x44) != 0; }
         }
 
+        /// <summary>
+        /// Real Spell.dbc AttributesEx, joined offline into Spells.bin (SPDB v3) — NOT _spellEntry,
+        /// whose in-memory AttributesEx is garbage (see the "BROKEN" note below). Sourcing it here
+        /// fixes IsChanneled and the combo-point remap in SpellManager.Cast, which used to read the
+        /// garbage value and hijack every friendly party buff onto the caster's current target.
+        /// </summary>
         public uint AttributesEx
         {
-            get { return _spellEntry.AttributesEx; }
+            get { return SpellDb.GetSpell(_id)?.AttributesEx ?? 0u; }
         }
 
         public int Id
@@ -130,9 +131,10 @@ namespace Styx.Logic.Combat
         // columns should be — see the AuraScanDebug plugin findings). Any _spellEntry-backed property is
         // garbage: Category, MaxStackCount, baseLevel, DurationIndex, rangeIndex, the effect arrays…
         // Properties that WORK use other paths: GetSpellInfo cache (CastTime/MaxRange/PowerCost),
-        // Spells.bin (Name/Rank — and since SPDB v2: School/DispelType/Mechanic, joined offline from the
-        // real Spell.dbc by Tools/gen_spells_bin.py), ASM (Cooldown), Lua (CanCast). Fixing _spellEntry
-        // properly means reverse-engineering the client's real in-memory SpellRec layout.
+        // Spells.bin (Name/Rank — and since SPDB v2: School/DispelType/Mechanic; SPDB v3: AttributesEx —
+        // joined offline from the real Spell.dbc by Tools/gen_spells_bin.py), ASM (Cooldown), Lua
+        // (CanCast). Fixing _spellEntry properly means reverse-engineering the client's real in-memory
+        // SpellRec layout; until then, add a real field to Spells.bin rather than consume _spellEntry.
         public WoWDispelType DispelType
         {
             get { return (WoWDispelType)(SpellDb.GetSpell(_id)?.Dispel ?? 0); }

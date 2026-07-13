@@ -26,12 +26,13 @@ namespace Styx.WoWInternals
             public int Id { get; set; }
             public string Name { get; set; } = "";
             public string Rank { get; set; } = "";
-            // SPDB v2 fields, joined from the 3.3.5a Spell.dbc by Tools/gen_spells_bin.py. These exist
+            // SPDB v2/v3 fields, joined from the 3.3.5a Spell.dbc by Tools/gen_spells_bin.py. These exist
             // because the client's in-memory Spell row is NOT the flat dbc record (see WoWSpell.cs) —
-            // static file data is the only trustworthy source for them. 0 on a v1 file.
+            // static file data is the only trustworthy source for them. 0 on an older file.
             public int SchoolMask { get; set; }
             public int Dispel { get; set; }
             public int Mechanic { get; set; }
+            public uint AttributesEx { get; set; } // SPDB v3+ (0 on v1/v2)
         }
 
         /// <summary>
@@ -81,13 +82,14 @@ namespace Styx.WoWInternals
                     throw new Exception("Spells.bin is not in correct format (expected SPDB header)");
                 }
 
-                // v1 = id/name/rank; v2 appends schoolMask/dispel/mechanic per spell.
+                // v1 = id/name/rank; v2 appends schoolMask/dispel/mechanic; v3 appends attributesEx.
                 float version = reader.ReadSingle();
-                if (version != 1f && version != 2f)
+                if (version != 1f && version != 2f && version != 3f)
                 {
                     Logging.Write("[SpellDb] Warning: Unknown Spells.bin version: {0}", version);
                 }
                 bool v2 = version >= 2f;
+                bool v3 = version >= 3f;
 
                 // Read spell count
                 int spellCount = reader.ReadInt32();
@@ -109,6 +111,10 @@ namespace Styx.WoWInternals
                         spell.SchoolMask = reader.ReadInt32();
                         spell.Dispel = reader.ReadInt32();
                         spell.Mechanic = reader.ReadInt32();
+                    }
+                    if (v3)
+                    {
+                        spell.AttributesEx = reader.ReadUInt32();
                     }
 
                     if (_spells != null && !_spells.ContainsKey(spell.Id))

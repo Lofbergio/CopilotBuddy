@@ -460,14 +460,18 @@ namespace Styx.Logic.Combat
 
 			ulong castTargetGuid = target?.Guid ?? 0UL;
 
-			// WotLK combo finisher: SPELL_ATTR1_REQ_COMBO_POINTS1|2 = 0x10|0x20 of AttributesEx.
-			// Confirmed from live memory: SnD (5171) AttributesEx=0x5000010.
-			// BuffSelf passes Me.Guid → sub_72BDB0 @ 0x80D661 calls CanAttack(player, self) = false
-			// → silent drop. Remap to CurrentTarget so CanAttack passes.
-			// ⚠ Mask must be EXACTLY the combo bits: the old 0x50 included 0x40, which ordinary BUFFS
-			// carry (Blessing of Might, Arcane Intellect…) — every party buff got remapped to the
-			// caster's CURRENT TARGET (a paladin buffed Marshal McBride→self all night, live 2026-07-12).
-			if ((spell.AttributesEx & 0x30u) != 0)
+			// WotLK combo finisher: a self-cast finisher (BuffSelf → Me.Guid) hits CanAttack(player,self)
+			// = false @ sub_72BDB0 → silent drop; remap to CurrentTarget so CanAttack passes. Enemy-cast
+			// finishers already carry the right target, so the remap is a harmless no-op for them.
+			// Keyed off the REAL AttributesEx combo bits (ReqTargetComboPoints|ReqComboPoints = 0x500000),
+			// now sourced from Spell.dbc via Spells.bin (WoWSpell.AttributesEx). The old mask read the
+			// garbage in-memory _spellEntry value and hijacked ordinary friendly party buffs (Arcane
+			// Intellect, Blessings, Fortitude — real AttrEx 0x0) onto the caster's current target
+			// (paladin 2026-07-12, mage 2026-07-13). Verified separation: SnD 0x400420 / Savage Roar
+			// 0x400400 / Eviscerate 0x100200 all set 0x500000; AI/Blessing/Fortitude set none.
+			const uint ComboPointBits = (uint)SpellAttributesEx.ReqTargetComboPoints
+			                          | (uint)SpellAttributesEx.ReqComboPoints; // 0x500000
+			if ((spell.AttributesEx & ComboPointBits) != 0)
 			{
 				WoWUnit? comboTarget = StyxWoW.Me?.CurrentTarget;
 				if (comboTarget != null)
