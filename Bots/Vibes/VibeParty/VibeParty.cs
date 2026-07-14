@@ -468,6 +468,13 @@ namespace VibeParty
 				// Party-rez death bookkeeping: stamp death time; clear the wait latches on revive.
 				if (StyxWoW.Me.Dead || StyxWoW.Me.IsGhost) { if (_deadSince == DateTime.MinValue) _deadSince = DateTime.UtcNow; }
 				else { _deadSince = DateTime.MinValue; _rezReleaseOrdered = false; _resurrectPending = false; _rezGiveUpWhispered = false; _rezHoldLogged = false; }
+				// Healer OOM beacon: whisper the leader once when we drop below 10% mana; re-arm above 30%.
+				if (MyRole() == "Healer" && StyxWoW.Me.MaxMana > 0)
+				{
+					double manaPct = StyxWoW.Me.ManaPercent;
+					if (manaPct < 10 && !_oomWhispered) { _oomWhispered = true; WhisperLeader("OOM"); Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] healer OOM — whispered leader."); }
+					else if (manaPct > 30) _oomWhispered = false;
+				}
 				// Re-arm the per-fight movement one-shots the moment we drop out of combat state.
 				if (!IsInCombatState()) { _combatEntryStopDone = false; _posApproaching = false; }
 			}
@@ -622,6 +629,7 @@ namespace VibeParty
 		private static DateTime _myRezStartedAt;
 		private static bool _myRezWhispered;
 		private static volatile bool _rezReleaseOrdered; // follower death path: leader said release (no rezzer)
+		private static bool _oomWhispered;               // healer OOM beacon debounce (re-armed above 30% mana)
 
 		private static int RolePriority(string role) => role == "Tank" ? 0 : role == "Healer" ? 1 : 2;
 
