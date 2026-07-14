@@ -23,6 +23,11 @@ namespace Styx.Logic.Combat
 		private static int _lastKnownSpellCount;
 		private static readonly Dictionary<string, WoWSpell> _knownSpells = new Dictionary<string, WoWSpell>(StringComparer.OrdinalIgnoreCase);
 
+		// Debounce for the LEARNED_SPELL_IN_TAB burst fired at login/zone-in (see OnSpellBookChanged).
+		private static bool _spellbookDirty;
+		private static DateTime _spellbookDirtyStamp = DateTime.MinValue;
+		private const int SpellbookDebounceMs = 250;
+
 		public static Dictionary<string, WoWSpell> KnownSpells => _knownSpells;
 
 		// HB 4.3.4 compatibility aliases
@@ -100,6 +105,21 @@ namespace Styx.Logic.Combat
 				_lastKnownSpellCount = NumKnownSpells;
 				Logging.Write("Spell book built");
 			}
+		}
+
+		// Debounced spellbook rebuild: once the LEARNED_SPELL_IN_TAB burst has been quiet for
+		// SpellbookDebounceMs, do a single FORCED rebuild (bypasses the count guard so a same-count rank
+		// upgrade is still caught). Called from the read accessors, so it lands the moment the routine next
+		// queries spell data after the burst settles — no per-event rebuild, no timer/pulse hook needed.
+		private static void RefreshIfDirty()
+		{
+			if (!_spellbookDirty)
+				return;
+			if ((DateTime.Now - _spellbookDirtyStamp).TotalMilliseconds < SpellbookDebounceMs)
+				return;
+			_spellbookDirty = false;
+			_lastKnownSpellCount = 0;   // force the rebuild branch in Refresh()
+			Refresh();
 		}
 
 		public static bool CastBarVisible
@@ -251,11 +271,13 @@ namespace Styx.Logic.Combat
 
 		public static bool HasSpell(string name)
 		{
+			RefreshIfDirty();
 			return _knownSpells.ContainsKey(name);
 		}
 
 		public static bool HasSpell(int id)
 		{
+			RefreshIfDirty();
 			foreach (var spell in _knownSpells.Values)
 			{
 				if (spell.Id == id)
@@ -271,6 +293,7 @@ namespace Styx.Logic.Combat
 
 		public static WoWSpell? GetSpellByName(string name)
 		{
+			RefreshIfDirty();
 			if (_knownSpells.TryGetValue(name, out WoWSpell? spell))
 			{
 				return spell;
@@ -968,9 +991,15 @@ namespace Styx.Logic.Combat
 		/// </summary>
 		private static void OnSpellBookChanged(object sender, LuaEventArgs e)
 		{
-			Logging.Write("[SpellManager] Spellbook change detected ({0}) \u2014 rebuilding", e.EventName);
-			_lastKnownSpellCount = 0;
-			Refresh();
+			// Login/zone-in fires a BURST of LEARNED_SPELL_IN_TAB (one per spell as the book populates). The old
+			// code did a full FORCED rebuild per event \u2014 ~25 "Building spell book" rebuilds in a second plus log
+			// spam. Coalesce: mark dirty + stamp, and let the debounced RefreshIfDirty() (called from the read
+			// accessors) do ONE forced rebuild once the burst goes quiet. Still forced (not count-gated) so a
+			// same-count change \u2014 training a higher RANK at a trainer \u2014 is picked up (the reason the force exists).
+			if (!_spellbookDirty)
+				Logging.WriteDebug("[SpellManager] Spellbook change ({0}) \u2014 rebuild pending (debounced)", e.EventName);
+			_spellbookDirty = true;
+			_spellbookDirtyStamp = DateTime.Now;
 		}
 
 		#endregion
