@@ -59,8 +59,10 @@ namespace Bots.Vibes.VibeQuester2.Execution
         private const int UseItemPaceMs = 2500;
         private const float FriendlyNpcDetectRange = 100f;   // divert to a friendly objective NPC within this
         private const float NpcApproachRange = 2.75f;        // stop solidly INSIDE interact range, not on its edge
+        private const float FollowRange = 6f;                // stay this close while the NPC walks its lure/escort script
         private const int ProvokeWaitSeconds = 45;           // a scripted talk/provoke can run many seconds
         private const int ProvokeReInteractMs = 1500;        // re-open FAST — multi-step gossips advance one line per interact
+        private const int FollowExtendSeconds = 20;          // keep extending patience while the NPC is actively moving
         private const float ObjectiveAreaRadius = 250f;   // spawns near the task anchor that form the work area
         private const int GoBlacklistMinutes = 3;
 
@@ -321,32 +323,43 @@ namespace Bots.Vibes.VibeQuester2.Execution
         }
 
         /// <summary>
-        /// The objective mob is standing there friendly — resolve it patiently. Interact ONCE (after a
-        /// use-item-on-target pass), click a lone plain gossip option, then WAIT: a gossip-provoke is a
-        /// scripted taunt that can run many seconds before the NPC flips hostile, and a talk-to-complete
-        /// credits after its dialogue — so we do NOT re-interact on a short timer (that interrupts the
-        /// script) and do NOT count quick attempts. Progress = objective credit (use/talk) or the mob
-        /// turning attackable (provoke → the grind kills it next tick). Only after a full
-        /// <see cref="ProvokeWaitSeconds"/> with no change do we blacklist + abandon.
+        /// The objective mob is standing there friendly — resolve it patiently, covering four shapes:
+        /// use-item-on-target (a held quest item used on it), talk-to-complete (gossip → credit),
+        /// gossip-provoke (a multi-step taunt → turns hostile → the grind kills it), and FOLLOW-provoke
+        /// (talk → the NPC walks a scripted path you follow → turns hostile; the dwarf-up-the-spire /
+        /// Blood Elf traitor pattern). Rules that made it work live: SURVIVAL FIRST — the instant we're
+        /// in combat or it flips hostile, close the gossip frame (an open frame blocks casting) and yield
+        /// (Failure) so the shell's combat/rest branches (above the activity) engage/heal, and NEVER
+        /// abandon mid-fight (the quest must stay in the log for the kill to credit). While the NPC is
+        /// moving we FOLLOW and don't re-interact (that interrupts the walk), extending the patience
+        /// window. Only after <see cref="ProvokeWaitSeconds"/> stationary with no credit/flip do we
+        /// blacklist + abandon.
         /// </summary>
         private RunStatus TickFriendlyNpc(QuestTask task, LocalPlayer me, WoWUnit npc)
         {
-            // Stop solidly INSIDE interact range — CTM halts on the edge, where Interact() is flaky.
-            if (!TravelTo(npc.Location, NpcApproachRange, string.Format("friendly NPC q{0}", task.QuestId)))
-                return RunStatus.Running;
-            if (me.IsMoving) WoWMovement.MoveStop();
-
-            // Progress check every tick (whether or not we've interacted yet).
-            if (me.GetReactionTowards(npc) < WoWUnitReaction.Friendly)
+            // SURVIVAL FIRST: the moment we're in combat (provoke worked / an add) or the mob flips
+            // hostile, STOP gossiping — close the frame (an open gossip window blocks casting) and yield
+            // the tick (return Failure) so the shell's combat + rest branches, which sit ABOVE the quest
+            // activity, engage/heal. The quest stays in the log so the kill credits; never abandon here.
+            if (me.Combat || me.GetReactionTowards(npc) < WoWUnitReaction.Friendly)
             {
-                Logging.Write("[VQ2-Task] q{0}: {1} turned hostile — handing to the kill grind.", task.QuestId, npc.Name);
-                return RunStatus.Running;   // next tick: not friendly → grind installs → chassis kills + loots
+                if (GossipFrame.Instance.IsVisible) GossipFrame.Instance.Close();
+                Logging.WriteDebug("[VQ2-Task] q{0}: {1} provoked/aggro — yielding to combat.", task.QuestId, npc.Name);
+                return RunStatus.Failure;
             }
             if (_npcInteracted && ObjectiveCount(task, me) > _npcBefore)
             {
                 Logging.Write("[VQ2-Task] q{0}: {1} — objective credit.", task.QuestId, npc.Name);
                 return RunStatus.Running;
             }
+
+            // Approach / FOLLOW: the NPC may walk a scripted path (talk → "follow me" → turns hostile).
+            // Stay close while it moves (follow range); only plant solidly inside interact range once it's
+            // standing still, since interacting needs us stopped.
+            float approach = npc.IsMoving ? FollowRange : NpcApproachRange;
+            if (!TravelTo(npc.Location, approach, string.Format("friendly NPC q{0}", task.QuestId)))
+                return RunStatus.Running;
+            if (!npc.IsMoving && me.IsMoving) WoWMovement.MoveStop();
 
             // First contact: use-item-on-target if we hold a candidate, else interact to open gossip.
             if (!_npcInteracted)
@@ -371,32 +384,39 @@ namespace Bots.Vibes.VibeQuester2.Execution
                     Logging.Write("[VQ2-Task] q{0}: interacting with friendly {1} (waiting up to {2}s for talk/provoke).",
                         task.QuestId, npc.Name, ProvokeWaitSeconds);
                     npc.Interact();
-                    StyxWoW.Sleep(700);
+                    StyxWoW.Sleep(400);
                     SelectLoneGossipOption();
                 }
                 return RunStatus.Running;
             }
 
-            // Waiting for the scripted talk/provoke to resolve. Advance multi-step gossip; re-open on a
-            // short throttle (each interact advances one dialogue line).
-            if (GossipFrame.Instance.IsVisible)
+            // Waiting for the scripted talk/provoke to resolve.
+            if (npc.IsMoving)
+            {
+                // The NPC is walking its lure/escort script — FOLLOW (the travel above does) and stay
+                // patient; re-interacting would interrupt it. Keep extending the window while it moves.
+                DateTime moveFloor = DateTime.UtcNow.AddSeconds(FollowExtendSeconds);
+                if (_npcProvokeDeadline < moveFloor) _npcProvokeDeadline = moveFloor;
+            }
+            else if (GossipFrame.Instance.IsVisible)
                 SelectLoneGossipOption();
             else if (DateTime.UtcNow >= _nextInteractAt)
             {
                 npc.Target();
                 npc.Interact();
-                StyxWoW.Sleep(700);
+                StyxWoW.Sleep(400);
                 SelectLoneGossipOption();
                 _nextInteractAt = DateTime.UtcNow.AddMilliseconds(ProvokeReInteractMs);
             }
 
-            // Re-check AFTER the click — the flip/credit lands ON the provoking line, so checking only at
-            // the top of the tick raced the deadline (the NPC turned hostile during the interact's sleep
-            // and we abandoned him the same tick). Combat = provoked; hand to the grind, never abandon.
+            // Re-check AFTER the click — the flip lands ON the provoking line, so checking only at the top
+            // of the tick raced the deadline (the NPC turned hostile during the interact and we abandoned
+            // him the same tick). Provoked/in-combat → close the frame and yield; never abandon.
             if (me.Combat || me.GetReactionTowards(npc) < WoWUnitReaction.Friendly)
             {
-                Logging.Write("[VQ2-Task] q{0}: {1} provoked — handing to the kill grind.", task.QuestId, npc.Name);
-                return RunStatus.Running;
+                if (GossipFrame.Instance.IsVisible) GossipFrame.Instance.Close();
+                Logging.Write("[VQ2-Task] q{0}: {1} provoked — yielding to combat.", task.QuestId, npc.Name);
+                return RunStatus.Failure;
             }
             if (ObjectiveCount(task, me) > _npcBefore)
             {
