@@ -1943,12 +1943,29 @@ namespace Bots.Grind
                     validFactions.Add(faction);
             }
 
+            // MobIDs whitelist (HB semantics — <MobIDs> in a profile means "grind ONLY these"). VibeGrinder
+            // fills it with the exact cluster the SpotSelector validated (every species of the picked
+            // cluster, BuildSpot). The ported filter ignored it and fired at ANY faction+band match, so the
+            // PROACTIVE grind pool included off-cluster singletons that were never part of a selected cluster
+            // — e.g. an isolated custom Training Dummy 99yd off the travel path (faction-matched, unkillable).
+            // This only gates proactive grind targets; incidental ATTACKERS are surfaced separately by the
+            // governor's IncludeTargets, so self-defense against off-cluster mobs is unaffected. Empty MobIDs
+            // (faction-only HB profiles) → no restriction, behaviour unchanged.
+            HashSet<uint> whitelist = null;
+            if (grindArea?.MobIDs != null && grindArea.MobIDs.Count > 0)
+            {
+                whitelist = new HashSet<uint>();
+                foreach (int id in grindArea.MobIDs)
+                    whitelist.Add((uint)id);
+            }
+
             foreach (WoWObject obj in incomingUnits)
             {
                 if (obj is WoWUnit unit && !(obj is WoWPlayer))
                 {
                     if (!currentProfile.AvoidMobs.Contains(unit.Entry) &&
                         !IsTooNearBlackspot(currentProfile.Blackspots, unit.Location) &&
+                        (whitelist == null || whitelist.Contains(unit.Entry)) &&
                         validFactions.Contains(unit.FactionId) &&
                         unit.Level >= bandMin && unit.Level <= bandMax)
                     {

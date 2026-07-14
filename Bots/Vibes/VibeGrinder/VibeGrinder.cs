@@ -286,10 +286,6 @@ namespace Bots.VibeGrinder
             // Surface incidental hostiles (attackers + nearby level-safe hostiles) so the bot SEES the mobs
             // off its grind list — otherwise it body-pulls them blind.
             Targeting.Instance.IncludeTargetsFilter += _governor.IncludeTargets;
-            // Never target training/test dummies — attackable neutrals that never die (Lightning Bolt →
-            // 100% hp forever). Custom servers add their own (Entry 600010 near Exodar) so they're not in
-            // GrindMobs.db; the universal live tell is the name (every variant carries "Dummy").
-            Targeting.Instance.RemoveTargetsFilter += RemoveTrainingDummies;
 
             _onKill = args =>
             {
@@ -947,15 +943,6 @@ namespace Bots.VibeGrinder
         /// grind trek the normal Roam find-target + ApplyPullCommitment own the pull, and adding a second
         /// driver here thrashes the POI between targets (don't re-gate this to grind treks).
         /// </summary>
-        /// <summary>Strip training/test/practice dummies from any target list — attackable neutrals that
-        /// never die. Custom-server dummies (Entry 600010) aren't in GrindMobs.db, so match live by name;
-        /// every variant carries "Dummy". A real dummy-KILL objective is impossible anyway (they don't die).</summary>
-        private static void RemoveTrainingDummies(List<WoWObject> units)
-        {
-            units.RemoveAll(o => o is WoWUnit u && !string.IsNullOrEmpty(u.Name)
-                && u.Name.IndexOf("Dummy", StringComparison.OrdinalIgnoreCase) >= 0);
-        }
-
         private RunStatus TransitPeel()
         {
             var me = StyxWoW.Me;
@@ -1024,7 +1011,6 @@ namespace Bots.VibeGrinder
                 Targeting.Instance.WeighTargetsFilter -= _governor.WeighTargets;
                 Targeting.Instance.IncludeTargetsFilter -= _governor.IncludeTargets;
             }
-            Targeting.Instance.RemoveTargetsFilter -= RemoveTrainingDummies;
             if (_onKill != null)
             {
                 BotEvents.Player.OnMobKilled -= _onKill;
