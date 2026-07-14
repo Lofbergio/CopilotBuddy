@@ -60,6 +60,7 @@ namespace VibeParty
 							new ActionIdle()
 						)),
 					CreateDeathBehavior(),
+					CreateRezBehavior(),                              // assigned rezzer: position at the corpse, then the routine casts
 					CreateCombatBehavior(),                           // smethod_5
 					CreateEventBehavior(),                            // method_5
 					CreateLootBehavior(),                             // method_3
@@ -152,6 +153,8 @@ namespace VibeParty
 				_bus.Subscribe("QuestAbandon", OnQuestAbandonMsg);   // leader dropped a quest — drop + block it
 				_bus.Subscribe("QuestAccept", OnQuestAcceptMsg);     // leader accepted/re-accepted — whitelist + lift block
 				_bus.Subscribe("LeaderQuests", OnLeaderQuestsMsg);   // leader's log snapshot — seed the accept whitelist
+				_bus.Subscribe("RezAssign", OnRezAssign);            // leader assigned a rezzer to a corpse
+				_bus.Subscribe("RezRelease", OnRezRelease);          // no rezzer available — release + corpse-run
 				AttachLuaEvents();
 				Vendors.OnVendorItems += OnVendorSweep;   // disposition: only true junk sells
 				Vendors.OnMailItems += OnMailSweep;       // disposition: valuables queue for the bank
@@ -403,6 +406,12 @@ namespace VibeParty
 			foreach (string tok in (msg.Payload ?? "").Split(';'))
 			{
 				if (tok.Length == 0) continue;
+				if (tok.StartsWith("#rez:"))   // rez census header — "#rez:<0|1>:<role>"
+				{
+					string[] f = tok.Substring(5).Split(':');
+					if (f.Length >= 2) { mp.CanRez = f[0] == "1"; mp.Role = f[1]; }
+					continue;
+				}
 				int c = tok.IndexOf(':');
 				if (c <= 0) continue;
 				if (uint.TryParse(tok.Substring(0, c), out uint qid) && qid != 0)
@@ -440,6 +449,7 @@ namespace VibeParty
 				AutoInviteTick();   // party-form: invite every live bus member that isn't grouped yet
 				_partyWater?.WaterTick();   // requester side only: the leader asks for water when out
 				QuestAbandonSyncTick(bus);  // abandoned (NOT completed) quests propagate to the party
+				if ((DateTime.Now - _rezBrokerAt).TotalSeconds >= 2) { _rezBrokerAt = DateTime.Now; RezBrokerTick(bus); }  // party-rez broker (runs while dead)
 			}
 			else
 			{
@@ -455,6 +465,9 @@ namespace VibeParty
 				MirrorLeaderBagsTick();        // bag-visibility sync: leader's bags open ⇒ ours open
 				ProcessAbandonQueue();         // drop quests the leader abandoned (block set stops re-accepts)
 				RestEntryFollowBreak();        // one backward step on rest entry kills stationary follow glue
+				// Party-rez death bookkeeping: stamp death time; clear the wait latches on revive.
+				if (StyxWoW.Me.Dead || StyxWoW.Me.IsGhost) { if (_deadSince == DateTime.MinValue) _deadSince = DateTime.UtcNow; }
+				else { _deadSince = DateTime.MinValue; _rezReleaseOrdered = false; _resurrectPending = false; _rezGiveUpWhispered = false; _rezHoldLogged = false; }
 				// Re-arm the per-fight movement one-shots the moment we drop out of combat state.
 				if (!IsInCombatState()) { _combatEntryStopDone = false; _posApproaching = false; }
 			}
@@ -532,12 +545,232 @@ namespace VibeParty
 			if (quests == null) return;
 			var completed = CompletedQuestsLua();
 			System.Text.StringBuilder sb = new System.Text.StringBuilder();
+			sb.Append("#rez:").Append(ComputeCanRezNow() ? '1' : '0').Append(':').Append(MyRole()).Append(';');
 			foreach (PlayerQuest q in quests)
 			{
 				if (q == null || q.Id == 0) continue;
 				sb.Append(q.Id).Append(':').Append(completed.ContainsKey(q.Id) ? '1' : '0').Append(';');
 			}
 			bus.Publish("Progress", sb.ToString());
+		}
+
+		// ── Party-rez census helpers (each bot reports its own; the leader also computes its own locally,
+		//    since PartyBus.Publish never delivers to the sender) ──────────────────────────────────────
+		private const int RebirthReagentId = 17034;   // Maple Seed — druid Rebirth reagent (zero-consumable exception)
+		private const double RezMinManaPct = 15;
+
+		// The class's resurrection spell, or null for a class that can't rez. Druid's ONLY rez is Rebirth
+		// (a 2s battle-rez, castable in AND out of combat); the others are 10s OOC-only casts.
+		private static string MyResSpell()
+		{
+			switch (StyxWoW.Me.Class)
+			{
+				case WoWClass.Priest:  return "Resurrection";
+				case WoWClass.Paladin: return "Redemption";
+				case WoWClass.Shaman:  return "Ancestral Spirit";
+				case WoWClass.Druid:   return "Rebirth";
+				default:               return null;
+			}
+		}
+
+		// "Available to rez RIGHT NOW": alive, knows the res, and ready — mana for the 10s casters, or the
+		// reagent + off-cooldown for a druid's Rebirth (Lua truth, cheap at the 5s heartbeat cadence).
+		private static bool ComputeCanRezNow()
+		{
+			LocalPlayer me = StyxWoW.Me;
+			if (me == null || me.Dead || me.IsGhost) return false;
+			string res = MyResSpell();
+			if (res == null || !SpellManager.HasSpell(res)) return false;
+			if (me.Class == WoWClass.Druid)
+			{
+				return Lua.GetReturnVal<int>(
+					"local c = GetItemCount(" + RebirthReagentId + ") or 0 " +
+					"local _, d = GetSpellCooldown('Rebirth') " +
+					"if c > 0 and (not d or d <= 2) then return 1 else return 0 end", 0U) == 1;
+			}
+			return me.MaxMana <= 0 || me.ManaPercent >= RezMinManaPct;
+		}
+
+		// Reported role intent for rez target priority — the same three-tier resolve as AnswerRoleCheck
+		// (config → talent guess), minus the client-ticked LFD tier (no popup open outside a role check).
+		private static string MyRole()
+		{
+			string cfg = (VibePartySettings.Instance.LfgRole ?? "Auto").Trim();
+			if (cfg.Equals("Tank", StringComparison.OrdinalIgnoreCase)) return "Tank";
+			if (cfg.Equals("Healer", StringComparison.OrdinalIgnoreCase)) return "Healer";
+			if (cfg.Equals("Damage", StringComparison.OrdinalIgnoreCase) || cfg.Equals("DPS", StringComparison.OrdinalIgnoreCase)) return "Damage";
+			DeriveLfgRole(out bool tank, out bool heal);
+			return tank ? "Tank" : heal ? "Healer" : "Damage";
+		}
+
+		// ── Party resurrection ──────────────────────────────────────────────────────────────────────
+		// VibeParty owns the LOGIC (census/assignment/positioning/whispers); the routine owns the CAST via
+		// the neutral Styx.CommonBot.PartyRez static. The broker runs in the LEADER Pulse (even while the
+		// leader is dead — Pulse is ungated on alive); execution is a FOLLOWER tree branch (the leader is
+		// human-driven and never reaches it). Spec: docs/superpowers/specs/2026-07-14-party-rez-design.md.
+		private const float RezRange = 28f;              // just inside the ~30yd res range
+		private const double RezAttemptTimeoutSec = 25;  // one rezzer's patience on a target (10s cast + travel + accept)
+		private const double RezLatchTimeoutSec = 30;    // leader re-brokers a stuck assignment after this
+
+		private static ulong _brokerTargetGuid;          // the one outstanding assignment (sequential)
+		private static ulong _brokerRezzerGuid;
+		private static DateTime _brokerAssignedAt;
+		private static bool _rezReleaseSent;
+		private static DateTime _rezBrokerAt = DateTime.MinValue;
+
+		private static ulong _myRezMemberGuid;           // follower: the dead member I'm assigned to rez
+		private static DateTime _myRezStartedAt;
+		private static bool _myRezWhispered;
+		private static volatile bool _rezReleaseOrdered; // follower death path: leader said release (no rezzer)
+
+		private static int RolePriority(string role) => role == "Tank" ? 0 : role == "Healer" ? 1 : 2;
+
+		// Leader broker: order the dead by role (tank>healer>dps), pick one rezzer (followers first, leader
+		// last), assign the highest-priority corpse; in combat only a Rebirth-druid can act, OOC anyone. One
+		// assignment outstanding at a time (sequential), resolved when the member is alive or the latch times
+		// out. No alive rezzer anywhere → tell the party to release.
+		private static void RezBrokerTick(PartyBus bus)
+		{
+			LocalPlayer me = StyxWoW.Me;
+			if (me == null) return;
+
+			var guids = new HashSet<ulong> { me.Guid };
+			foreach (var g in me.GetPartyMemberGUIDs()) guids.Add(g);
+			foreach (var g in me.GetRaidMemberGUIDs()) guids.Add(g);
+
+			var dead = new List<(ulong Guid, string Role, WoWPoint Loc)>();
+			var rezzers = new List<(ulong Guid, WoWPlayer P, bool Druid)>();
+			bool anyRezzerAlive = false;
+			bool combat = me.Combat;
+
+			foreach (ulong g in guids)
+			{
+				bool self = g == me.Guid;
+				WoWPlayer p = self ? null : ObjectManager.GetObjectByGuid<WoWPlayer>(g);
+				bool canRez, alive, druid, inCombat; string role;
+				if (self)
+				{
+					canRez = ComputeCanRezNow(); role = MyRole();
+					alive = !me.Dead && !me.IsGhost; druid = me.Class == WoWClass.Druid; inCombat = me.Combat;
+				}
+				else
+				{
+					if (!_partyProgress.TryGetValue(g, out MemberProgress mp)) continue;
+					canRez = mp.CanRez; role = mp.Role;
+					alive = p != null && !p.Dead && !p.IsGhost;
+					druid = p != null && p.Class == WoWClass.Druid;
+					inCombat = p != null && p.Combat;
+				}
+				if (inCombat) combat = true;
+				if (self ? (me.Dead || me.IsGhost) : (p != null && (p.Dead || p.IsGhost)))
+					dead.Add((g, role, self ? me.Location : p.Location));
+				if (canRez && alive) { anyRezzerAlive = true; rezzers.Add((g, self ? null : p, druid)); }
+			}
+
+			// Resolve the outstanding assignment before making a new one.
+			if (_brokerTargetGuid != 0)
+			{
+				WoWPlayer t = ObjectManager.GetObjectByGuid<WoWPlayer>(_brokerTargetGuid);
+				bool doneOrStale = (t != null && !t.Dead && !t.IsGhost)
+					|| (DateTime.UtcNow - _brokerAssignedAt).TotalSeconds > RezLatchTimeoutSec;
+				if (!doneOrStale) return;
+				_brokerTargetGuid = 0; _brokerRezzerGuid = 0;
+			}
+
+			if (dead.Count == 0) { _rezReleaseSent = false; return; }
+			if (!anyRezzerAlive)
+			{
+				if (!_rezReleaseSent)
+				{
+					_rezReleaseSent = true;
+					bus.Publish("RezRelease", "");
+					Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] rez: no one available — party releasing.");
+				}
+				return;
+			}
+			_rezReleaseSent = false;
+
+			dead.Sort((a, b) => RolePriority(a.Role).CompareTo(RolePriority(b.Role)));
+			foreach (var d in dead)
+			{
+				var cands = rezzers.Where(r => r.Guid != d.Guid && (!combat || r.Druid)).ToList();
+				if (cands.Count == 0) continue;
+				var followers = cands.Where(r => r.Guid != me.Guid).ToList();
+				var pool = followers.Count > 0 ? followers : cands;
+				var rezzer = pool.OrderBy(r => r.P != null ? r.P.Location.Distance(d.Loc) : float.MaxValue).First();
+
+				_brokerTargetGuid = d.Guid; _brokerRezzerGuid = rezzer.Guid; _brokerAssignedAt = DateTime.UtcNow;
+				bus.Publish("RezAssign", rezzer.Guid + ":" + d.Guid);
+				WoWPlayer rp = ObjectManager.GetObjectByGuid<WoWPlayer>(rezzer.Guid);
+				WoWPlayer tp = ObjectManager.GetObjectByGuid<WoWPlayer>(d.Guid);
+				Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] rez: assign {0} -> {1} ({2}).",
+					rp?.Name ?? "?", tp?.Name ?? "?", combat ? "combat" : "ooc");
+				break;
+			}
+		}
+
+		// Bus (hub thread → pure data). If the assignment is mine, arm it; if it moved to someone else, stand down.
+		private void OnRezAssign(PartyMessage m)
+		{
+			string[] f = (m.Payload ?? "").Split(':');
+			if (f.Length != 2 || !ulong.TryParse(f[0], out ulong rezzer) || !ulong.TryParse(f[1], out ulong target)) return;
+			if (rezzer == StyxWoW.Me.Guid) { _myRezMemberGuid = target; _myRezStartedAt = DateTime.UtcNow; _myRezWhispered = false; }
+			else if (_myRezMemberGuid == target) ClearMyRez();
+		}
+
+		private void OnRezRelease(PartyMessage m) { _rezReleaseOrdered = true; ClearMyRez(); }
+
+		private static void ClearMyRez()
+		{
+			_myRezMemberGuid = 0; _myRezWhispered = false;
+			Styx.CommonBot.PartyRez.Target = 0;
+		}
+
+		// Follower execution: position at the corpse, then hand off to the routine to cast. Sits ABOVE
+		// CreateCombatBehavior — returns Success while travelling (consumes the tick), Failure once in range
+		// so the routine's Rest/combat path ticks and casts PartyRez.Target.
+		private static Composite CreateRezBehavior()
+		{
+			return new Decorator(ctx => _myRezMemberGuid != 0, new TreeSharp.Action(ctx => RezMoveAndCast()));
+		}
+
+		private static RunStatus RezMoveAndCast()
+		{
+			LocalPlayer me = StyxWoW.Me;
+			WoWPlayer member = ObjectManager.GetObjectByGuid<WoWPlayer>(_myRezMemberGuid);
+			if (member != null && !member.Dead && !member.IsGhost) { ClearMyRez(); return RunStatus.Failure; }   // rezzed
+			if ((DateTime.UtcNow - _myRezStartedAt).TotalSeconds > RezAttemptTimeoutSec) { ClearMyRez(); return RunStatus.Failure; }
+			if (me.Combat && me.Class != WoWClass.Druid) { Styx.CommonBot.PartyRez.Target = 0; return RunStatus.Failure; } // only Rebirth in combat
+
+			// Target the dead unit (unreleased) or the member's corpse (released) — both are first-class.
+			ulong castGuid; WoWPoint loc;
+			if (member != null && member.Dead && !member.IsGhost) { castGuid = member.Guid; loc = member.Location; }
+			else
+			{
+				WoWCorpse corpse = FindPartyCorpse(_myRezMemberGuid);
+				if (corpse == null) { Styx.CommonBot.PartyRez.Target = 0; return RunStatus.Failure; }
+				castGuid = corpse.Guid; loc = corpse.Location;
+			}
+
+			if (me.Location.Distance(loc) > RezRange) { Navigator.MoveTo(loc); return RunStatus.Success; }
+
+			if (!_myRezWhispered) { WhisperLeader("Rezzing " + (member?.Name ?? "ally")); _myRezWhispered = true; }
+			Styx.CommonBot.PartyRez.Target = castGuid;   // the routine casts in its Rest/combat path (cast-hold holds us still)
+			return RunStatus.Failure;
+		}
+
+		private static WoWCorpse FindPartyCorpse(ulong ownerGuid)
+		{
+			foreach (WoWCorpse c in ObjectManager.GetObjectsOfType<WoWCorpse>())
+				if (c != null && c.OwnerGuid == ownerGuid) return c;
+			return null;
+		}
+
+		private static void WhisperLeader(string msg)
+		{
+			string leader = _botMessage?.LeaderName;
+			if (string.IsNullOrEmpty(leader)) return;
+			Lua.DoString("SendChatMessage('" + msg.Replace("'", "") + "', 'WHISPER', nil, '" + leader.Replace("'", "") + "')");
 		}
 
 		// Leader (bot thread): invite every LIVE bus member not yet grouped. Roster = _partyProgress
@@ -618,6 +851,8 @@ namespace VibeParty
 		{
 			public string Name = "";
 			public long LastUtcTicks;
+			public bool CanRez;                 // reported: alive + knows its class res + ready (mana / druid reagent+CD)
+			public string Role = "Damage";      // reported LfgRole intent (Tank/Healer/Damage) — rez target priority
 			public readonly Dictionary<uint, bool> QuestComplete = new Dictionary<uint, bool>();
 		}
 
@@ -633,6 +868,7 @@ namespace VibeParty
 			Lua.Events.AttachEvent("PARTY_INVITE_REQUEST",new LuaEventHandlerDelegate(OnPartyInviteRequest));
 			Lua.Events.AttachEvent("QUEST_ACCEPT_CONFIRM", new LuaEventHandlerDelegate(OnQuestAcceptConfirm));
 			Lua.Events.AttachEvent("QUEST_DETAIL",         new LuaEventHandlerDelegate(OnQuestDetail));
+			Lua.Events.AttachEvent("RESURRECT_REQUEST",    new LuaEventHandlerDelegate(OnResurrectRequest));
 			Lua.Events.AttachEvent("TRADE_SHOW",                new LuaEventHandlerDelegate(OnTradeShouldAccept));
 			Lua.Events.AttachEvent("TRADE_ACCEPT_UPDATE",       new LuaEventHandlerDelegate(OnTradeShouldAccept));
 			Lua.Events.AttachEvent("TRADE_TARGET_ITEM_CHANGED", new LuaEventHandlerDelegate(OnTradeShouldAccept));
@@ -646,6 +882,7 @@ namespace VibeParty
 			Lua.Events.DetachEvent("LFG_ROLE_CHECK_SHOW", new LuaEventHandlerDelegate(OnLfgRoleCheckShow));
 			Lua.Events.DetachEvent("QUEST_ACCEPT_CONFIRM", new LuaEventHandlerDelegate(OnQuestAcceptConfirm));
 			Lua.Events.DetachEvent("QUEST_DETAIL",         new LuaEventHandlerDelegate(OnQuestDetail));
+			Lua.Events.DetachEvent("RESURRECT_REQUEST",    new LuaEventHandlerDelegate(OnResurrectRequest));
 			Lua.Events.DetachEvent("TRADE_SHOW",                new LuaEventHandlerDelegate(OnTradeShouldAccept));
 			Lua.Events.DetachEvent("TRADE_ACCEPT_UPDATE",       new LuaEventHandlerDelegate(OnTradeShouldAccept));
 			Lua.Events.DetachEvent("TRADE_TARGET_ITEM_CHANGED", new LuaEventHandlerDelegate(OnTradeShouldAccept));
@@ -1661,31 +1898,60 @@ namespace VibeParty
 		private static Composite CreateDeathBehavior()
 		{
 			return new PrioritySelector(
-				// In instance and dead with alive priest: wait for ress or release after 3 minutes — smethod_72
-				new Decorator(ctx => VibePartySettings.Instance.WaitForRessInDungeons
-									&& StyxWoW.Me.IsInInstance
-									&& StyxWoW.Me.Dead
-									&& StyxWoW.Me.PartyMembers.Any(p => p.Class == WoWClass.Priest && p.IsAlive),
+				// Accept an incoming rez the moment it lands — released or not (DungeonBuddy pattern).
+				new Decorator(ctx => _resurrectPending,
+					new TreeSharp.Action(ctx =>
+					{
+						_resurrectPending = false;
+						Lua.DoString("if StaticPopup1 and StaticPopup1:IsVisible() then StaticPopup1Button1:Click() else AcceptResurrect() end");
+						Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] accepted resurrect.");
+						return RunStatus.Success;
+					})),
+				// A rez may be coming (leader hasn't ordered release, still inside the wait window): HOLD — never
+				// run to the corpse or the spirit healer, just wait and accept. Covers dead OR ghost.
+				new Decorator(ctx => (StyxWoW.Me.Dead || StyxWoW.Me.IsGhost) && !RezGiveUp(),
 					new PrioritySelector(
-						// If 3 minutes elapsed: release — smethod_73 fixed (was incorrectly !IsFinished in original)
-						new Decorator(ctx => _waitTimer1.IsFinished,
-							new Sequence(
-								new TreeSharp.Action(ctx => Logging.Write("VibeParty: Waited 3 minutes and we got no ress. Releasing from corpse.")),
-								new TreeSharp.Action(ctx => Lua.DoString("RepopMe()"))
-							)
-						),
-						// Else: still waiting — log + keep timer running
-						new Sequence(
-							new TreeSharp.Action(ctx => Logging.Write("VibeParty: Waiting for ress.")),
-							new TreeSharp.Action(ctx => { if (_waitTimer1.IsFinished) _waitTimer1.Reset(); })
-						),
+						new TreeSharp.Action(ctx => { RezHoldLogOnce(); return RunStatus.Failure; }),
+						new ActionIdle()
+					)),
+				// Give up (leader said no rezzer, or the 120s watchdog expired): whisper the reason once, then let
+				// LevelBot's corpse-run own the release + ghost run.
+				new Decorator(ctx => StyxWoW.Me.Dead || StyxWoW.Me.IsGhost,
+					new PrioritySelector(
+						new TreeSharp.Action(ctx => { RezGiveUpWhisperOnce(); return RunStatus.Failure; }),
 						LevelBot.CreateDeathBehavior()
-					)
-				),
-				// Not in instance: normal death behavior
-				new Decorator(ctx => !StyxWoW.Me.IsInInstance,
-					LevelBot.CreateDeathBehavior())
+					))
 			);
+		}
+
+		private static volatile bool _resurrectPending;
+		private static DateTime _deadSince = DateTime.MinValue;
+		private static bool _rezGiveUpWhispered;
+		private static bool _rezHoldLogged;
+		private const double RezWaitWatchdogSec = 120;
+
+		private void OnResurrectRequest(object sender, LuaEventArgs e) { _resurrectPending = true; }
+
+		// A dead follower gives up waiting only when the leader says no rezzer is available, or the watchdog
+		// expires. Held state (deadSince / the log+whisper latches) is reset on revive in Pulse.
+		private static bool RezGiveUp()
+			=> _rezReleaseOrdered
+			   || (_deadSince != DateTime.MinValue && (DateTime.UtcNow - _deadSince).TotalSeconds > RezWaitWatchdogSec);
+
+		private static void RezHoldLogOnce()
+		{
+			if (_rezHoldLogged) return;
+			_rezHoldLogged = true;
+			Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] holding for rez.");
+		}
+
+		private static void RezGiveUpWhisperOnce()
+		{
+			if (_rezGiveUpWhispered) return;
+			_rezGiveUpWhispered = true;
+			string reason = _rezReleaseOrdered ? "no rezzer" : "waited " + (int)RezWaitWatchdogSec + "s";
+			WhisperLeader("Corpse-running (" + reason + ")");
+			Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] corpse-running ({0}).", reason);
 		}
 
 		// ──────────────────────────────────────────────────────────────────────
