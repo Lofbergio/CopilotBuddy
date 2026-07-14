@@ -548,6 +548,18 @@ namespace Bots.Vibes.VibeQuester2.Execution
 
             if (carried == null)
             {
+                // A REPORT-ONLY quest (all TurnInOnly) that's not ready and hands us no usable item has
+                // nothing VQ2 can do to complete it (needs a totem-interact / rescue / event we don't
+                // model). Advancing + replanning re-selects it every tick → a tight thrash (log
+                // 2026-07-14: 395 not-ready bounces between two such quests). TTL-blacklist it so the
+                // next plan skips it; it stays in the log and retries after the TTL in case a prereq we
+                // CAN do clears it. A quest with real objectives is just lagging — defer as before.
+                if (reportOnly)
+                {
+                    Logging.Write("[VQ2-Task] q{0} '{1}': turn-in not ready, report-only with no usable item — TTL-blacklisting to stop re-selection.",
+                        task.QuestId, task.QuestName);
+                    _planner.AutoBlacklist((uint)task.QuestId);
+                }
                 Advance("not ready to turn in yet");
                 _requestReplan();
                 return RunStatus.Running;
