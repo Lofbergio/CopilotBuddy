@@ -59,8 +59,8 @@ namespace Bots.Vibes.VibeQuester2.Execution
         private const int UseItemPaceMs = 2500;
         private const float FriendlyNpcDetectRange = 100f;   // divert to a friendly objective NPC within this
         private const float NpcApproachRange = 2.75f;        // stop solidly INSIDE interact range, not on its edge
-        private const int ProvokeWaitSeconds = 30;           // a scripted talk/provoke can run many seconds
-        private const int ProvokeReInteractMs = 6000;        // gentle re-open if the gossip never landed
+        private const int ProvokeWaitSeconds = 45;           // a scripted talk/provoke can run many seconds
+        private const int ProvokeReInteractMs = 1500;        // re-open FAST — multi-step gossips advance one line per interact
         private const float ObjectiveAreaRadius = 250f;   // spawns near the task anchor that form the work area
         private const int GoBlacklistMinutes = 3;
 
@@ -377,8 +377,8 @@ namespace Bots.Vibes.VibeQuester2.Execution
                 return RunStatus.Running;
             }
 
-            // Waiting for the scripted talk/provoke to resolve. Advance multi-step gossip; re-open only if
-            // it never landed (gentle throttle). Blacklist only when the whole patience window elapses.
+            // Waiting for the scripted talk/provoke to resolve. Advance multi-step gossip; re-open on a
+            // short throttle (each interact advances one dialogue line).
             if (GossipFrame.Instance.IsVisible)
                 SelectLoneGossipOption();
             else if (DateTime.UtcNow >= _nextInteractAt)
@@ -390,7 +390,21 @@ namespace Bots.Vibes.VibeQuester2.Execution
                 _nextInteractAt = DateTime.UtcNow.AddMilliseconds(ProvokeReInteractMs);
             }
 
-            if (DateTime.UtcNow > _npcProvokeDeadline)
+            // Re-check AFTER the click — the flip/credit lands ON the provoking line, so checking only at
+            // the top of the tick raced the deadline (the NPC turned hostile during the interact's sleep
+            // and we abandoned him the same tick). Combat = provoked; hand to the grind, never abandon.
+            if (me.Combat || me.GetReactionTowards(npc) < WoWUnitReaction.Friendly)
+            {
+                Logging.Write("[VQ2-Task] q{0}: {1} provoked — handing to the kill grind.", task.QuestId, npc.Name);
+                return RunStatus.Running;
+            }
+            if (ObjectiveCount(task, me) > _npcBefore)
+            {
+                Logging.Write("[VQ2-Task] q{0}: {1} — objective credit.", task.QuestId, npc.Name);
+                return RunStatus.Running;
+            }
+
+            if (DateTime.UtcNow > _npcProvokeDeadline && !me.Combat)
             {
                 _planner.RecordPermanentBlacklist(task.QuestId, "friendly-npc-interact", "friendly-npc-interact",
                     "Objective mob is friendly; use-item/talk/provoke via gossip did not credit it or turn it hostile within the patience window — a path v2 couldn't resolve (ambiguous/absent option or a mechanic we don't model).",
