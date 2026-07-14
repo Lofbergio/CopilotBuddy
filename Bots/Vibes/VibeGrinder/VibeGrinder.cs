@@ -179,6 +179,14 @@ namespace Bots.VibeGrinder
                         // (The survival flee now sits ABOVE vendor/rest — see the EmergencyRelocationCheck near the
                         // top of this selector; rest-ENTRY is additionally gated in UpdateRestingState.)
                         new Action(ctx => RestRoamBlock()),
+                        // QUEST-TRANSIT PEEL: while a subclass activity (VQ2) is travelling in quest mode
+                        // (!GrindEnabled), single-pull an in-range PATH hostile — set a Kill POI so the
+                        // CombatBehavior above engages it — instead of walking past into a body-pull and
+                        // dragging it (log 2026-07-14: ACQUIRE then "kept running", GIVE UP after 20s).
+                        // Same mechanism + exposure/trivial gating as the vendor-run peel (~line 147);
+                        // TransitPeel's doorstep check keeps it from peeling at the objective/NPC. Inert
+                        // for VibeGrinder itself (GrindEnabled is always true there).
+                        new Decorator(ctx => !GrindEnabled && !StyxWoW.Me.Combat, new Action(ctx => TransitPeel())),
                         // ACTIVITY SLOT (subclass seam): a foreign activity (VibeQuester v2's quest
                         // executor) owns the tick here — below vendor/rest/combat/loot (the shared
                         // shell), above the grind-only branches. Null for VibeGrinder itself: the

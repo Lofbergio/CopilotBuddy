@@ -60,8 +60,11 @@ namespace Bots.Vibes.VibeQuester2.Execution
             // show no marker at all. Fail fast into the strike path instead of interacting into a void.
             if (giver is WoWUnit gu && !gu.IsQuestGiver)
             {
-                Logging.Write("[VQ2-Task] pickup q{0} '{1}': {2} carries no questgiver flag — offers nothing here.",
+                Logging.Write("[VQ2-Task] pickup q{0} '{1}': {2} carries no questgiver flag — offers nothing here (blacklisting so we never walk back).",
                     task.QuestId, task.QuestName, task.EntityName);
+                planner.RecordPermanentBlacklist(task.QuestId, "no-questgiver-flag", "free-from-cage",
+                    "DB giver has no questgiver npcflag (captive/pre-trigger NPC — no '!' at all); it never offers this until a world action enables it, which VQ2 can't trigger.",
+                    string.Format("giver {0} ({1}) IsQuestGiver=false at its spawn", task.EntityName, task.EntityId));
                 return InteractionResult.NotOffered;
             }
 
@@ -135,8 +138,11 @@ namespace Bots.Vibes.VibeQuester2.Execution
             // absence means this NPC takes nothing here — fail fast rather than interact into a void.
             if (ender is WoWUnit eu && !eu.IsQuestGiver)
             {
-                Logging.Write("[VQ2-Task] turn-in q{0} '{1}': {2} carries no questgiver flag — takes nothing here.",
+                Logging.Write("[VQ2-Task] turn-in q{0} '{1}': {2} carries no questgiver flag — takes nothing here (blacklisting so we never walk back).",
                     task.QuestId, task.QuestName, task.EntityName);
+                planner.RecordPermanentBlacklist(task.QuestId, "no-questgiver-flag", "free-from-cage",
+                    "DB ender has no questgiver npcflag (captive/pre-trigger NPC); it never takes this until a world action enables it, which VQ2 can't trigger.",
+                    string.Format("ender {0} ({1}) IsQuestGiver=false at its spawn", task.EntityName, task.EntityId));
                 return InteractionResult.NotOffered;
             }
 
