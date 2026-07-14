@@ -38,6 +38,10 @@ namespace Bots.Vibes.VibeQuester2.Execution
     {
         private const int FrameOpenTimeoutMs = 3500;
         private const int LogUpdateTimeoutMs = 2500;
+        // A chained follow-up is pushed into the SAME window synchronously with the turn-in, so this is a
+        // short "is one coming?" bound — long enough to ride a lag spike, short enough not to stall every
+        // non-chained turn-in. The wait polls the frame state; only the give-up bound is a constant.
+        private const int ChainedOfferTimeoutMs = 1200;
         private const float EntityResolveRadius = 15f;   // OM entity must sit near the DB spawn coord
 
         public static InteractionResult TryPickUp(QuestTask task, QuestPlan plan, QuestPlanner planner)
@@ -64,7 +68,8 @@ namespace Bots.Vibes.VibeQuester2.Execution
                     task.QuestId, task.QuestName, task.EntityName);
                 planner.RecordPermanentBlacklist(task.QuestId, "no-questgiver-flag", "free-from-cage",
                     "DB giver has no questgiver npcflag (captive/pre-trigger NPC — no '!' at all); it never offers this until a world action enables it, which VQ2 can't trigger.",
-                    string.Format("giver {0} ({1}) IsQuestGiver=false at its spawn", task.EntityName, task.EntityId));
+                    string.Format("giver {0} ({1}) IsQuestGiver=false at its spawn", task.EntityName, task.EntityId),
+                    blockClass: "conditional");
                 return InteractionResult.NotOffered;
             }
 
@@ -142,7 +147,8 @@ namespace Bots.Vibes.VibeQuester2.Execution
                     task.QuestId, task.QuestName, task.EntityName);
                 planner.RecordPermanentBlacklist(task.QuestId, "no-questgiver-flag", "free-from-cage",
                     "DB ender has no questgiver npcflag (captive/pre-trigger NPC); it never takes this until a world action enables it, which VQ2 can't trigger.",
-                    string.Format("ender {0} ({1}) IsQuestGiver=false at its spawn", task.EntityName, task.EntityId));
+                    string.Format("ender {0} ({1}) IsQuestGiver=false at its spawn", task.EntityName, task.EntityId),
+                    blockClass: "conditional");
                 return InteractionResult.NotOffered;
             }
 
@@ -225,7 +231,7 @@ namespace Bots.Vibes.VibeQuester2.Execution
         /// </summary>
         private static void HandleChainedOffer(QuestTask completed, QuestPlanner planner, LocalPlayer me)
         {
-            if (!WaitState(() => QuestFrame.Instance.IsVisible, 800))
+            if (!WaitState(() => QuestFrame.Instance.IsVisible, ChainedOfferTimeoutMs))
                 return;   // nothing chained
             uint shown = ShownQuestId();
             if (shown == 0 || shown == (uint)completed.QuestId)
@@ -257,7 +263,11 @@ namespace Bots.Vibes.VibeQuester2.Execution
             }
             catch (Exception ex)
             {
-                Logging.WriteDebug("[VQ2-Task] reward selection failed ({0}) — taking slot 1.", ex.Message);
+                // We drive the Quest botbase's scorer Action out of its own tree — if that integration
+                // breaks (renamed/removed action, changed contract) it must be LOUD, not a WriteDebug that
+                // silently ships an arbitrary reward. Last-resort slot 0 keeps the turn-in moving; the real
+                // fix is a shared reward-scorer API instead of puppeteering a foreign Action (flagged).
+                Logging.Write("[VQ2-Task] reward scorer (ActionSelectReward) FAILED ({0}) — last-resort taking choice 1; needs a shared scorer API.", ex.Message);
                 QuestFrame.Instance.SelectQuestReward(0);
             }
             StyxWoW.Sleep(300);

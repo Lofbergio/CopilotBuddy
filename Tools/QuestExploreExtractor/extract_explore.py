@@ -34,13 +34,34 @@ def dump_rows():
     for line in out.stdout.splitlines():
         if not line.strip():
             continue
-        q, m, x, y, z, r = line.split("\t")
+        parts = line.split("\t")
+        if len(parts) != 6:   # loud, like the original extractor's introspection guard — AC renamed/dropped a column
+            sys.exit(f"unexpected column count {len(parts)} (expected 6: quest,map,x,y,z,radius) in row: {line!r} "
+                     f"— the areatrigger/areatrigger_involvedrelation schema changed; update QUERY.")
+        q, m, x, y, z, r = parts
         rows.append((int(q), int(m), float(x), float(y), float(z), float(r)))
     return rows
+
+def check_schema():
+    """Fail LOUD if areatrigger lost/renamed a column we SELECT — the original QuestDataExtractor had this
+    introspection guard; this bolt-on must not silently emit a broken/empty table on a core update."""
+    out = subprocess.run(
+        [MYSQL_EXE, "-u", DB_USER, f"-p{DB_PASS}", "-N", "-B", "-e",
+         f"SELECT COLUMN_NAME FROM information_schema.columns "
+         f"WHERE table_schema='{DB_NAME}' AND table_name='areatrigger'", DB_NAME],
+        capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit(f"mysql schema probe failed: {out.stderr.strip()}")
+    have = {c.strip().lower() for c in out.stdout.split()}
+    missing = {"entry", "map", "x", "y", "z", "radius"} - have
+    if missing:
+        sys.exit(f"areatrigger is missing expected column(s) {sorted(missing)} (has: {sorted(have)}) "
+                 f"— AC schema changed; update the extractor before regenerating.")
 
 def main():
     db_path = sys.argv[1] if len(sys.argv) > 1 else \
         r"E:\!Games\World of Warcraft\CopilotBuddy\Bots\VibeQuester\QuestData.db"
+    check_schema()
     rows = dump_rows()
     con = sqlite3.connect(db_path)
     cur = con.cursor()

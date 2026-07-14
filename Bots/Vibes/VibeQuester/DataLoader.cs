@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using Styx.Helpers;
 
 namespace VibeQuester
 {
@@ -15,6 +16,7 @@ namespace VibeQuester
     {
         private readonly string _dbFile;
         private QuestDatabase _database;
+        private static readonly HashSet<string> _warnedTypes = new HashSet<string>();   // warn-once per unknown objective type
 
         public QuestDatabase Database => _database;
 
@@ -121,9 +123,20 @@ namespace VibeQuester
         /// Tools/QuestExploreExtractor). Absent on older DBs — tolerated.</summary>
         private void LoadExplore(Dictionary<int, QuestEntry> byId)
         {
+            // Probe for the OPTIONAL table explicitly. A bare catch-all here swallowed a lock / malformed
+            // schema as "table absent" and silently produced 0 explore objectives; distinguish genuinely-
+            // absent (fine, older DB) from present-but-broken (loud) so a real data problem is visible.
+            var probe = Sqlite.Query(_dbFile,
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='quest_explore'");
+            if (probe == null || probe.Count == 0) return;   // table not in this DB version — expected
+
             List<object[]> rows;
             try { rows = Sqlite.Query(_dbFile, "SELECT quest_id,map,x,y,z,radius FROM quest_explore"); }
-            catch { return; }   // table not present on this DB version
+            catch (Exception ex)
+            {
+                Logging.Write("[VQ2] quest_explore present but unreadable ({0}) — explore quests disabled this run.", ex.Message);
+                return;
+            }
             foreach (var r in rows)
             {
                 if (!byId.TryGetValue(Sqlite.I(r[0]), out var q)) continue;
@@ -148,7 +161,12 @@ namespace VibeQuester
                 case "CollectItem": type = ObjectiveType.CollectItem; return true;
                 case "CollectFromGameObject": type = ObjectiveType.CollectFromGameObject; return true;
                 case "TurnInOnly": type = ObjectiveType.TurnInOnly; return true;
-                default: type = ObjectiveType.TurnInOnly; return false;
+                default:
+                    type = ObjectiveType.TurnInOnly;
+                    // Don't silently eat the objective: a 5th type string means extractor/schema drift.
+                    if (!string.IsNullOrEmpty(s) && _warnedTypes.Add(s))
+                        Logging.Write("[VQ2] unknown quest_objectives type '{0}' — objective dropped (extractor/schema drift?).", s);
+                    return false;
             }
         }
 

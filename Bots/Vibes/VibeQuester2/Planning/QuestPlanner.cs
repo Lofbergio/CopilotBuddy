@@ -28,7 +28,10 @@ namespace Bots.Vibes.VibeQuester2.Planning
 
         // Monotonic per session: server set (event-waited GetCompletedQuests) ∪ our own turn-in edges.
         private readonly HashSet<uint> _completed = new HashSet<uint>();
-        private readonly Dictionary<uint, DateTime> _autoBlacklist = new Dictionary<uint, DateTime>();
+        // TTL auto-blacklist, but the cycle count survives expiry so a quest that keeps failing at runtime
+        // ESCALATES to the persistent blacklist instead of re-walking forever (the not-ready thrash class).
+        private readonly Dictionary<uint, (DateTime until, int cycles)> _autoBlacklist = new();
+        private const int AutoBlacklistEscalateCycles = 3;   // N runtime failures ⇒ not transient ⇒ persist
         private int _scanThreshold;
         private FactionResolver _lastFactions;   // captured each scan for on-the-spot chained-offer screening
 
@@ -60,34 +63,102 @@ namespace Bots.Vibes.VibeQuester2.Planning
             if (db == null) return false;
             QuestEntry qe = db.Quests.FirstOrDefault(x => x.Id == questId);
             if (qe == null) return false;
-
-            var s = VibeQuester2Settings.Instance;
-            if (IsBlacklisted((uint)qe.Id) || _blacklist.IsBlocked(qe.Id)) return false;
-            if (_completed.Contains((uint)qe.Id)) return false;
-            if (me.QuestLog.ContainsQuest((uint)qe.Id)) return false;   // accept already landed it
-
-            if (me.Level < qe.MinLevel) return false;
-            int qMin = Math.Max(1, me.Level - 2);
-            int qMax = me.Level + Math.Max(3, s.MaxMobOverLevel);
-            if (qe.QuestLevel > 0 && (qe.QuestLevel < qMin || qe.QuestLevel > qMax)) return false;
-
-            if (qe.Objectives.Any(o => o.MobLevel > me.Level + s.MaxMobOverLevel)) return false;
-            if (!RaceAllowed(qe.AllowableRaces, me)) return false;
-            if (!ClassAllowed(qe.AllowableClasses, me)) return false;
-            if (!PrereqsMet(qe)) return false;
-            if (!SupportedType(qe)) return false;
-            if (!HasResolvableKillTargets(qe, db)) return false;
-            if (_lastFactions != null && _danger.Reject(qe, db, me, _lastFactions) != null) return false;
-            return true;
+            // SAME gate chain as a normal scan — but the giver is standing in front of us, so skip the
+            // distance gate (free pickup). Shared with BuildPlan via EvaluateGates so they never diverge.
+            return EvaluateGates(qe, db, me, _lastFactions, checkGiverDistance: false, out _) == GateReject.None;
         }
 
-        /// <summary>Runtime failure (deaths / no progress) — TTL'd so a transient failure retries later.</summary>
+        private enum GateReject
+        {
+            None, Blacklisted, Done, InLog, MinLevel, LevelWindow, MobLevel,
+            Race, Class, Prereq, Type, NoKill, GiverFar, Danger,
+        }
+
+        /// <summary>
+        /// The single quest-eligibility gate chain, in priority order — the ONE place selection rules
+        /// live. Returns the first gate a quest fails (or None = eligible). Used by BuildPlan (which maps
+        /// the reason to telemetry counters) and ScreenChainedOffer (which only needs pass/fail); the
+        /// level-window floor-of-3 and every threshold exist here once so the two paths can't drift.
+        /// <paramref name="checkGiverDistance"/> is false for a chained offer (giver is in interact range).
+        /// </summary>
+        private GateReject EvaluateGates(QuestEntry qe, QuestDatabase db, LocalPlayer me,
+                                         FactionResolver factions, bool checkGiverDistance, out double giverDist)
+        {
+            giverDist = double.MaxValue;
+            var s = VibeQuester2Settings.Instance;
+
+            if (IsBlacklisted((uint)qe.Id) || _blacklist.IsBlocked(qe.Id)) return GateReject.Blacklisted;
+            if (_completed.Contains((uint)qe.Id)) return GateReject.Done;
+            if (me.QuestLog.ContainsQuest((uint)qe.Id)) return GateReject.InLog;
+
+            if (me.Level < qe.MinLevel) return GateReject.MinLevel;
+            // QuestLevel window with the floor-of-3 upper bound (acceptance reach is not mob difficulty —
+            // see the legacy CLAUDE.md; the floor is load-bearing for fresh lvl-1s).
+            int qMin = Math.Max(1, me.Level - 2);
+            int qMax = me.Level + Math.Max(3, s.MaxMobOverLevel);
+            if (qe.QuestLevel > 0 && (qe.QuestLevel < qMin || qe.QuestLevel > qMax)) return GateReject.LevelWindow;
+
+            // Objective mob-level gate — the REAL difficulty guard (QuestLevel misses scaling quests).
+            if (qe.Objectives.Any(o => o.MobLevel > me.Level + s.MaxMobOverLevel)) return GateReject.MobLevel;
+            if (!RaceAllowed(qe.AllowableRaces, me)) return GateReject.Race;
+            if (!ClassAllowed(qe.AllowableClasses, me)) return GateReject.Class;
+            // Prereqs vs the COMPLETED set only — log state never satisfies a prereq.
+            if (!PrereqsMet(qe)) return GateReject.Prereq;
+            if (!SupportedType(qe)) return GateReject.Type;
+            if (!HasResolvableObjectives(qe, db, me)) return GateReject.NoKill;
+
+            giverDist = NearestGiverDistance(qe, db, me);
+            if (checkGiverDistance && giverDist > _scanThreshold) return GateReject.GiverFar;
+
+            if (factions != null)
+            {
+                string dangerReason = _danger.Reject(qe, db, me, factions);
+                if (dangerReason != null)
+                {
+                    Logging.WriteDebug("[VQ2-Plan] quest {0} skipped: danger({1})", qe.Id, dangerReason);
+                    return GateReject.Danger;
+                }
+            }
+            return GateReject.None;
+        }
+
+        /// <summary>Failing ONLY on level = tomorrow's quest — its giver is the hub grinding should drift
+        /// toward. Track the nearest such giver for the arbiter.</summary>
+        private void TrackFutureHub(QuestEntry qe, QuestDatabase db, LocalPlayer me, VibeQuester2Settings s,
+                                    ref WoWPoint futureHub, ref double futureHubDist)
+        {
+            double hd = NearestGiverDistance(qe, db, me);
+            if (hd < futureHubDist && hd <= s.MaxTravelDistance * 2)
+            {
+                WoWPoint hub = NearestGiverPoint(qe, db, me);
+                if (hub != WoWPoint.Empty) { futureHub = hub; futureHubDist = hd; }
+            }
+        }
+
+        /// <summary>Runtime failure (deaths / no progress / not-ready-stuck) — TTL'd so a transient failure
+        /// retries later, but the cycle count is kept: after <see cref="AutoBlacklistEscalateCycles"/>
+        /// failures it's clearly not transient, so it's promoted to the persistent blacklist instead of
+        /// re-selecting and re-failing forever.</summary>
         public void AutoBlacklist(uint questId)
         {
-            _autoBlacklist[questId] = DateTime.UtcNow.AddMinutes(
-                Math.Max(1, VibeQuester2Settings.Instance.AutoBlacklistMinutes));
-            Logging.Write("[VQ2-Plan] quest {0} auto-blacklisted for {1}m.",
-                questId, VibeQuester2Settings.Instance.AutoBlacklistMinutes);
+            var s = VibeQuester2Settings.Instance;
+            _autoBlacklist.TryGetValue(questId, out (DateTime until, int cycles) prev);
+            int cycles = prev.cycles + 1;
+
+            if (cycles >= AutoBlacklistEscalateCycles)
+            {
+                _autoBlacklist.Remove(questId);
+                RecordPermanentBlacklist((int)questId, "repeated-runtime-failure",
+                    QuestBlacklist.ManualReviewCapability,
+                    string.Format("Failed at runtime {0}× (deaths / stall / not-ready) — not transient.", cycles),
+                    "escalated from TTL auto-blacklist after repeated failures",
+                    blockClass: "conditional");
+                return;
+            }
+
+            _autoBlacklist[questId] = (DateTime.UtcNow.AddMinutes(Math.Max(1, s.AutoBlacklistMinutes)), cycles);
+            Logging.Write("[VQ2-Plan] quest {0} auto-blacklisted for {1}m (failure {2}/{3}).",
+                questId, s.AutoBlacklistMinutes, cycles, AutoBlacklistEscalateCycles);
         }
 
         /// <summary>
@@ -96,7 +167,8 @@ namespace Bots.Vibes.VibeQuester2.Planning
         /// <paramref name="capability"/> can auto-re-enable it. Snapshots the quest's shape so the entry
         /// is triageable offline without re-deriving from the DB.
         /// </summary>
-        public void RecordPermanentBlacklist(int questId, string category, string capability, string reason, string evidence)
+        public void RecordPermanentBlacklist(int questId, string category, string capability, string reason, string evidence,
+                                             string blockClass = "structural")
         {
             QuestDatabase db = _loader.Database;
             QuestEntry qe = db?.Quests.FirstOrDefault(x => x.Id == questId);
@@ -106,8 +178,7 @@ namespace Bots.Vibes.VibeQuester2.Planning
                 QuestName = qe?.Name,
                 Category = category,
                 RequiresCapability = capability,
-                BlockClass = "structural",
-                Action = "never-accept",
+                BlockClass = blockClass,
                 Reason = reason,
                 Evidence = evidence,
                 DetectedByVersion = DetectorVersion,
@@ -121,7 +192,10 @@ namespace Bots.Vibes.VibeQuester2.Planning
             });
         }
 
-        private const string DetectorVersion = "1.5.2";
+        // The VQ2 quest-CAPABILITY schema tag stamped on learned blacklist entries — deliberately its OWN
+        // version, NOT the app version (which it happened to match). Bump when the mechanics VQ2 can do
+        // change, so a stale entry's provenance shows which capability-era recorded it.
+        private const string DetectorVersion = "vq2-2026.07";
 
         private static string DescribeObjective(QuestObjective o)
         {
@@ -139,12 +213,9 @@ namespace Bots.Vibes.VibeQuester2.Planning
 
         private bool IsBlacklisted(uint id)
         {
-            if (_autoBlacklist.TryGetValue(id, out DateTime until))
-            {
-                if (DateTime.UtcNow < until) return true;
-                _autoBlacklist.Remove(id);
-            }
-            return false;
+            // Keep the entry after the TTL expires — the cycle count must survive to drive escalation
+            // (AutoBlacklist). Blocked only while the TTL is live.
+            return _autoBlacklist.TryGetValue(id, out (DateTime until, int cycles) e) && DateTime.UtcNow < e.until;
         }
 
         private void RefreshCompleted(LocalPlayer me)
@@ -175,60 +246,32 @@ namespace Bots.Vibes.VibeQuester2.Planning
 
             foreach (QuestEntry qe in db.Quests)
             {
-                if (IsBlacklisted((uint)qe.Id) || _blacklist.IsBlocked(qe.Id)) { rBlack++; continue; }
-                if (_completed.Contains((uint)qe.Id)) { rDone++; continue; }
-                if (me.QuestLog.ContainsQuest((uint)qe.Id)) { rInLog++; continue; }
-
-                bool levelGated = me.Level < qe.MinLevel;
-                if (!levelGated)
+                // ONE gate chain, shared with ScreenChainedOffer (EvaluateGates) so the two can't drift.
+                // BuildPlan owns only the per-reason telemetry + the future-hub side-effect on level gates.
+                switch (EvaluateGates(qe, db, me, factions, checkGiverDistance: true, out double giverDist))
                 {
-                    // QuestLevel window with the floor-of-3 upper bound (acceptance reach is not mob
-                    // difficulty — see the legacy CLAUDE.md; the floor is load-bearing for fresh lvl-1s).
-                    int qMin = Math.Max(1, me.Level - 2);
-                    int qMax = me.Level + Math.Max(3, s.MaxMobOverLevel);
-                    levelGated = qe.QuestLevel > 0 && (qe.QuestLevel < qMin || qe.QuestLevel > qMax);
-                    if (levelGated) rLvlWin++;
+                    case GateReject.None:       available.Add((qe, giverDist)); break;
+                    case GateReject.Blacklisted: rBlack++; break;
+                    case GateReject.Done:        rDone++; break;
+                    case GateReject.InLog:       rInLog++; break;
+                    case GateReject.MinLevel:    rMinLvl++; TrackFutureHub(qe, db, me, s, ref futureHub, ref futureHubDist); break;
+                    case GateReject.LevelWindow: rLvlWin++; TrackFutureHub(qe, db, me, s, ref futureHub, ref futureHubDist); break;
+                    case GateReject.MobLevel:    rMobLvl++; break;
+                    case GateReject.Race:        rRace++; break;
+                    case GateReject.Class:       rClass++; break;
+                    case GateReject.Prereq:      rPrereq++; break;
+                    case GateReject.Type:        rType++; break;
+                    case GateReject.NoKill:      rNoKill++; break;
+                    case GateReject.GiverFar:    rGiverFar++; break;
+                    case GateReject.Danger:      rDanger++; break;
                 }
-                else rMinLvl++;
-
-                if (levelGated)
-                {
-                    // Failing ONLY on level = tomorrow's quest — its giver is the hub grinding should
-                    // drift toward. Track the nearest such giver for the arbiter.
-                    double hd = NearestGiverDistance(qe, db, me);
-                    if (hd < futureHubDist && hd <= s.MaxTravelDistance * 2)
-                    {
-                        WoWPoint hub = NearestGiverPoint(qe, db, me);
-                        if (hub != WoWPoint.Empty) { futureHub = hub; futureHubDist = hd; }
-                    }
-                    continue;
-                }
-
-                // Objective mob-level gate — the REAL difficulty guard (QuestLevel misses scaling quests).
-                if (qe.Objectives.Any(o => o.MobLevel > me.Level + s.MaxMobOverLevel)) { rMobLvl++; continue; }
-                if (!RaceAllowed(qe.AllowableRaces, me)) { rRace++; continue; }
-                if (!ClassAllowed(qe.AllowableClasses, me)) { rClass++; continue; }
-                // Prereqs vs the COMPLETED set only — log state never satisfies a prereq.
-                if (!PrereqsMet(qe)) { rPrereq++; continue; }
-                if (!SupportedType(qe)) { rType++; continue; }
-                if (!HasResolvableKillTargets(qe, db)) { rNoKill++; continue; }
-
-                double giverDist = NearestGiverDistance(qe, db, me);
-                if (giverDist > _scanThreshold) { rGiverFar++; continue; }
-
-                string dangerReason = _danger.Reject(qe, db, me, factions);
-                if (dangerReason != null)
-                {
-                    rDanger++;
-                    Logging.WriteDebug("[VQ2-Plan] quest {0} skipped: danger({1})", qe.Id, dangerReason);
-                    continue;
-                }
-
-                available.Add((qe, giverDist));
             }
 
-            // --- log quests with workable objectives (danger-screened too: the area may have been
-            //     fine at pickup and lethal now — the runtime backstop still owns mid-task failures) ---
+            // --- log quests with workable objectives, screened for reachability + danger (NOT distance —
+            //     an accepted quest gets finished however far). A log quest that's unreachable or now
+            //     Dangerous must NOT count as doable supply: it would flip the arbiter into quest mode and
+            //     the tour would walk into it with no gate. (Was: this loop only checked blacklist+type and
+            //     the "danger-screened too" comment was aspirational — the screen is real now.) ---
             var logQuests = new List<QuestEntry>();
             foreach (var lq in me.QuestLog.GetAllQuests())
             {
@@ -236,6 +279,8 @@ namespace Bots.Vibes.VibeQuester2.Planning
                 if (qe == null || qe.Objectives.Count == 0) continue;
                 if (IsBlacklisted((uint)qe.Id) || _blacklist.IsBlocked(qe.Id)) continue;
                 if (!SupportedType(qe)) continue;
+                if (NearestWorkDistance(qe, db, me) >= double.MaxValue) continue;   // no resolvable work on this map
+                if (factions != null && _danger.Reject(qe, db, me, factions) != null) continue;   // area went lethal
                 logQuests.Add(qe);
             }
 
@@ -460,11 +505,29 @@ namespace Bots.Vibes.VibeQuester2.Planning
             return true;
         }
 
-        private static bool HasResolvableKillTargets(QuestEntry qe, QuestDatabase db)
+        /// <summary>Every ENTITY-bearing objective must have a resolvable location, not just KillMob:
+        /// a Collect-from-mob with no creature spawn, a CollectFromGameObject with no GO spawn, or an
+        /// Explore coord on another map is unrunnable and must be rejected HERE (bucketed as noKill),
+        /// not fall through to the giver-distance gate (miscategorized) or leak a positionless task.</summary>
+        private static bool HasResolvableObjectives(QuestEntry qe, QuestDatabase db, LocalPlayer me)
         {
-            var killMobs = qe.Objectives.Where(o => o.Type == ObjectiveType.KillMob && o.MobId > 0).ToList();
-            if (killMobs.Count == 0) return true;
-            return killMobs.Any(o => db.CreatureSpawns.ContainsKey(o.MobId.ToString()));
+            foreach (QuestObjective o in qe.Objectives)
+            {
+                switch (o.Type)
+                {
+                    case ObjectiveType.KillMob when o.MobId > 0:
+                    case ObjectiveType.CollectItem when o.MobId > 0:   // item sourced from a specific mob
+                        if (!db.CreatureSpawns.ContainsKey(o.MobId.ToString())) return false;
+                        break;
+                    case ObjectiveType.CollectFromGameObject when o.GameObjectId > 0:
+                        if (!db.GameObjectSpawns.ContainsKey(o.GameObjectId.ToString())) return false;
+                        break;
+                    case ObjectiveType.Explore:
+                        if (o.Map != (int)me.MapId) return false;   // areatrigger on another map — unreachable here
+                        break;
+                }
+            }
+            return true;
         }
 
         // --- distance helpers ---

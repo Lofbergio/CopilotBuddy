@@ -44,6 +44,11 @@ namespace Bots.Vibes.Shared
         private readonly Dictionary<uint, DateTime> _entryBanUntil = new Dictionary<uint, DateTime>();
         private static readonly Dictionary<uint, bool> _dbImmuneCache = new Dictionary<uint, bool>();
 
+        // "Same elevation" tolerance: a hostile more than this many yards above/below is on a different
+        // deck (a cliff/bridge) and can't reach us — verified real protection (Kenata Dabyrie, log). One
+        // const, six aggro/bubble checks; a retune must not drift between them.
+        private const float SameLevelZTolerance = 5f;
+
         // Pathability-REJECT strikes per guid (session-scoped): 3 no-path rejects of the same mob = a real
         // mesh hole, escalate past the 45s cycle. A successful path resets the guid.
         private readonly Dictionary<ulong, int> _pathRejects = new Dictionary<ulong, int>();
@@ -170,7 +175,7 @@ namespace Bots.Vibes.Shared
                              || (ulevel > 0 && ulevel < me.Level - s.LevelBandBelow);
             return outOfBand
                    && u.Distance <= u.MyAggroRange + s.PreemptAggroBuffer
-                   && Math.Abs(u.Location.Z - me.Location.Z) < 5f;
+                   && Math.Abs(u.Location.Z - me.Location.Z) < SameLevelZTolerance;
         }
 
         /// <summary>
@@ -189,7 +194,7 @@ namespace Bots.Vibes.Shared
                 if (h.Guid == x.Guid || h.IsTargetingMeOrPet) continue;
                 double bubble = h.MyAggroRange + s.ExposurePad;
                 bool joins = (h.Location.DistanceSqr(point) <= bubble * bubble
-                              && Math.Abs(h.Location.Z - point.Z) < 5f)
+                              && Math.Abs(h.Location.Z - point.Z) < SameLevelZTolerance)
                              || h.Location.DistanceSqr(x.Location) <= assistR2;
                 if (!joins) continue;
                 n++;
@@ -245,7 +250,7 @@ namespace Bots.Vibes.Shared
                         var p = new WoWPoint((float)(prev.X + (seg.X - prev.X) * t),
                                              (float)(prev.Y + (seg.Y - prev.Y) * t),
                                              (float)(prev.Z + (seg.Z - prev.Z) * t));
-                        if (h.Location.DistanceSqr(p) <= b2 && Math.Abs(h.Location.Z - p.Z) < 5f)
+                        if (h.Location.DistanceSqr(p) <= b2 && Math.Abs(h.Location.Z - p.Z) < SameLevelZTolerance)
                         {
                             crossed = true;
                             break;
@@ -477,7 +482,7 @@ namespace Bots.Vibes.Shared
                     if (s.EnableBubbleVeto && !neutral && !b.IsTargetingMeOrPet)
                     {
                         double br = b.MyAggroRange + s.ExposurePad;
-                        if (d2 <= br * br && Math.Abs(b.Location.Z - a.Location.Z) < 5f) bubbleRisk++;
+                        if (d2 <= br * br && Math.Abs(b.Location.Z - a.Location.Z) < SameLevelZTolerance) bubbleRisk++;
                     }
                 }
 
@@ -871,12 +876,12 @@ namespace Bots.Vibes.Shared
                 // invisible to BOTH safety systems otherwise (Kenata Dabyrie). Z ≥5yd = real protection.
                 bool inevitable = ulevel > safeLevel && ulevel <= inevitableLevel
                                   && u.Distance <= u.MyAggroRange + VibeGrinderSettings.Instance.PreemptAggroBuffer
-                                  && Math.Abs(u.Location.Z - me.Location.Z) < 5f;
+                                  && Math.Abs(u.Location.Z - me.Location.Z) < SameLevelZTolerance;
                 // Downward twin: a BELOW-band hostile on foot inside its bubble — the fight has already
                 // started, we just can't see it. Mounted stays invisible (outrun it).
                 bool unavoidable = !me.Mounted && ulevel > 0 && ulevel < floorLevel
                                    && u.Distance <= u.MyAggroRange + VibeGrinderSettings.Instance.PreemptAggroBuffer
-                                   && Math.Abs(u.Location.Z - me.Location.Z) < 5f;
+                                   && Math.Abs(u.Location.Z - me.Location.Z) < SameLevelZTolerance;
                 // Commitment hysteresis: the COMMITTED mob stays surfaced regardless of the radius (a mob
                 // wandering ON the 40yd boundary otherwise flaps candidate↔gone every pulse). Real
                 // cancellers stay real: death/blacklist still drop it; the give-up clock still expires it.

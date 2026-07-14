@@ -27,6 +27,11 @@ namespace Bots.Vibes.VibeQuester2.Planning
         private static readonly HashSet<string> SupportedCapabilities =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase) { };
 
+        // The explicit permanent/manual-only class: an entry that no shipped capability will ever clear
+        // (needs a human to review + delete). Distinct from a null capability, which used to slip past the
+        // re-enable engine and block forever silently — the roach motel this const closes.
+        public const string ManualReviewCapability = "manual-review";
+
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
             WriteIndented = true,
@@ -53,6 +58,10 @@ namespace Bots.Vibes.VibeQuester2.Planning
         public void Record(QuestBlacklistEntry entry)
         {
             if (entry == null || entry.QuestId <= 0) return;
+            // No roach motel: an entry with no capability would fail SupportedCapabilities forever AND
+            // never be a candidate for re-enable. Default it to the explicit manual-only class instead.
+            if (string.IsNullOrEmpty(entry.RequiresCapability))
+                entry.RequiresCapability = ManualReviewCapability;
             string now = DateTime.UtcNow.ToString("o");
             if (_entries.TryGetValue(entry.QuestId, out QuestBlacklistEntry existing))
             {
@@ -131,11 +140,12 @@ namespace Bots.Vibes.VibeQuester2.Planning
 
         // --- Classification (the re-enablement engine) ---
         public string Category { get; set; }            // use-item | use-item-location | scripted-event | escort | vehicle | gossip-multistep | no-questgiver-flag | unresolved-entity | unsupported-type
-        public string RequiresCapability { get; set; }  // named feature that would unblock it — THE re-enable key
-        public string BlockClass { get; set; }          // "structural" (never works until built) | "conditional" (state-dependent)
+        public string RequiresCapability { get; set; }  // named feature that would unblock it — THE re-enable key (never null; "manual-review" = explicit manual-only class)
+        public string BlockClass { get; set; }          // "structural" (never works until built) | "conditional" (state-dependent, may re-enable)
 
-        // --- Disposition (what a bot does when it sees this) ---
-        public string Action { get; set; }              // "never-accept" | "abandon-if-held" | "skip-turnin-defer"
+        // NOTE: the only enforced disposition is exclusion-from-selection (IsBlocked). There is no
+        // "abandon-if-held"/"skip-turnin-defer" behaviour — an Action field describing those was removed
+        // rather than left as schema that lies about what the code does. Add it back only WITH the behaviour.
 
         // --- Evidence (audit — was the classification even right?) ---
         public string Reason { get; set; }

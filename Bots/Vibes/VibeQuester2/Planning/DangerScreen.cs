@@ -20,10 +20,12 @@ namespace Bots.Vibes.VibeQuester2.Planning
     /// </summary>
     public class DangerScreen
     {
-        private const float ClusterRadius = 90f;   // GrindRadius-scale grouping of objective spawns
-        private const int MaxClustersPerObjective = 4;   // bound the DB queries per quest
-
         private static VibeGrinderSettings S => VibeGrinderSettings.Instance;
+
+        // The SAME knob VibeGrinder groups spawns by — reference it, don't duplicate the literal (the
+        // class header's "one tuning surface" promise was false while this was a hardcoded 90f).
+        private static float ClusterRadius => S.GrindRadius;
+        private const int MaxClustersPerObjective = 4;   // bound the DB queries per quest
 
         /// <summary>Null = doable; else a short reject reason for the [VQ2-Plan] log.</summary>
         public string Reject(QuestEntry q, QuestDatabase db, LocalPlayer me, FactionResolver factions)
@@ -59,6 +61,11 @@ namespace Bots.Vibes.VibeQuester2.Planning
                     obj.Type == ObjectiveType.CollectFromGameObject);
                 if (spawns.Count == 0) continue;   // resolvability is the noKill gate's job, not danger's
 
+                // Nearest-first so the MaxClustersPerObjective cap keeps the clusters the player would
+                // actually work in — not whatever order the DB returned rows (a safe near cluster could be
+                // #5 and never examined, wrongly rejecting a workable quest).
+                WoWPoint here = me.Location;
+                spawns.Sort((a, b) => here.Distance2D(a).CompareTo(here.Distance2D(b)));
                 var clusters = GreedyCluster(spawns);
                 bool anySafe = false;
                 string worst = null;

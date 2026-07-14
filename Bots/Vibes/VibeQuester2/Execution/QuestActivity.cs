@@ -49,11 +49,15 @@ namespace Bots.Vibes.VibeQuester2.Execution
         private bool _npcInteracted;
         private int _npcBefore;
         private DateTime _npcProvokeDeadline;
+        private string _lastGossipSummary;   // the friendly NPC's dialogue options, captured for teachable blacklist evidence
         private readonly Dictionary<string, DateTime> _goBlacklist = new Dictionary<string, DateTime>();   // key: rounded position
 
         private const float InteractRange = 4.5f;
         private const float GoInteractRange = 4.0f;
         private const int InteractRetryMs = 2000;
+        private const int ExploreCreditTimeoutMs = 3000;   // server credits an areatrigger near-instantly; a miss = bad DB coord/radius
+        private const int GossipOpenTimeoutMs = 1500;      // bound for a gossip frame to open after Interact()
+        private const int GoCreditTimeoutMs = 1500;        // bound for a use-for-credit GO's descriptor tick
         private const int NotOfferedAbandonStrikes = 2;
         private const int MaxUseItemAttempts = 3;
         private const int UseItemPaceMs = 2500;
@@ -64,6 +68,10 @@ namespace Bots.Vibes.VibeQuester2.Execution
         private const int ProvokeReInteractMs = 1500;        // re-open FAST — multi-step gossips advance one line per interact
         private const int FollowExtendSeconds = 20;          // keep extending patience while the NPC is actively moving
         private const float ObjectiveAreaRadius = 250f;   // spawns near the task anchor that form the work area
+        // Per-node cooldown after we touch a GO: ~a typical WotLK object respawn, and also long enough
+        // that a contested/despawned node clears before we circle back. One value covers looted (respawn
+        // wait) and failed (retry-later) alike — both want "don't hammer this exact node now", and we have
+        // no per-GO respawn data to differentiate; the reason is logged so a real pattern is visible.
         private const int GoBlacklistMinutes = 3;
 
         public QuestActivity(QuestPlanner planner, Func<GrindAreaSynthesizer> synth, Func<FactionResolver> factions,
@@ -207,18 +215,38 @@ namespace Bots.Vibes.VibeQuester2.Execution
             if (task.Objective.Type == ObjectiveType.CollectFromGameObject)
                 return TickGameObjectCollect(task, me);
 
-            // Explore: walk into the areatrigger radius — the server fires the discovery credit on entry.
-            // Advance on arrival (not on descriptor) so mixed explore+kill quests don't deadlock; the
-            // real completion is verified downstream by the turn-in readiness / quest-complete check.
+            // Explore: walk into the areatrigger radius; the server fires the discovery credit on entry.
             if (task.Objective.Type == ObjectiveType.Explore)
             {
                 if (task.Position == WoWPoint.Empty) { Advance("explore area not on this map"); return RunStatus.Running; }
                 float arrive = Math.Max((float)(task.Objective.Radius * 0.9), 5f);
-                if (TravelTo(task.Position, arrive, string.Format("explore q{0}", task.QuestId)))
+                if (!TravelTo(task.Position, arrive, string.Format("explore q{0}", task.QuestId)))
+                    return RunStatus.Running;
+
+                // VERIFY on real state, not a blind dwell: wait (bounded) for the objective descriptor to
+                // tick OR the quest to complete (pure-explore quests). Server credit on entering a trigger
+                // is near-instant, so a no-credit timeout means a bad DB radius/coord — say so LOUD and
+                // advance anyway (turn-in readiness is the final backstop; we don't wedge on it).
+                if (me.IsMoving) WoWMovement.MoveStop();
+                int before = ObjectiveCount(task, me);
+                bool credited = false;
+                DateTime deadline = DateTime.UtcNow.AddMilliseconds(ExploreCreditTimeoutMs);
+                while (DateTime.UtcNow < deadline)
                 {
-                    StyxWoW.Sleep(600);   // dwell inside the trigger so it fires server-side
-                    Logging.Write("[VQ2-Task] q{0}: reached explore area.", task.QuestId);
-                    Advance("explore area reached");
+                    if (ObjectiveCount(task, me) > before || QuestLogTruth.IsCompleteInLog((uint)task.QuestId))
+                    { credited = true; break; }
+                    StyxWoW.Sleep(150);
+                }
+                if (credited)
+                {
+                    Logging.Write("[VQ2-Task] q{0}: explore area credited.", task.QuestId);
+                    Advance("explore credited");
+                }
+                else
+                {
+                    Logging.Write("[VQ2-Task] q{0}: reached explore area at {1} but no credit in {2}ms — check quest_explore radius/coord (advancing; turn-in verifies).",
+                        task.QuestId, task.Position, ExploreCreditTimeoutMs);
+                    Advance("explore area reached (uncredited)");
                 }
                 return RunStatus.Running;
             }
@@ -286,9 +314,9 @@ namespace Bots.Vibes.VibeQuester2.Execution
                 if (!lootWait.Wait(4000))
                 {
                     // No loot window. Many GOs give objective CREDIT on use (douse the fire, ring the
-                    // bell, free the prisoner) rather than loot — check the descriptor before calling it a dud.
-                    StyxWoW.Sleep(400);
-                    if (ObjectiveCount(task, me) > before)
+                    // bell, free the prisoner) rather than loot — WAIT (bounded) on the descriptor ticking,
+                    // don't race a fixed sleep, before calling it a dud.
+                    if (WaitState(() => ObjectiveCount(task, me) > before, GoCreditTimeoutMs))
                     {
                         Logging.Write("[VQ2-Task] q{0}: used {1} for objective credit (no loot).",
                             task.QuestId, task.Objective.GameObjectName ?? "GO");
@@ -383,9 +411,7 @@ namespace Bots.Vibes.VibeQuester2.Execution
                 {
                     Logging.Write("[VQ2-Task] q{0}: interacting with friendly {1} (waiting up to {2}s for talk/provoke).",
                         task.QuestId, npc.Name, ProvokeWaitSeconds);
-                    npc.Interact();
-                    StyxWoW.Sleep(400);
-                    SelectLoneGossipOption();
+                    InteractAndSelectGossip(npc, task);
                 }
                 return RunStatus.Running;
             }
@@ -399,13 +425,10 @@ namespace Bots.Vibes.VibeQuester2.Execution
                 if (_npcProvokeDeadline < moveFloor) _npcProvokeDeadline = moveFloor;
             }
             else if (GossipFrame.Instance.IsVisible)
-                SelectLoneGossipOption();
+                SelectGossipForObjective(task);
             else if (DateTime.UtcNow >= _nextInteractAt)
             {
-                npc.Target();
-                npc.Interact();
-                StyxWoW.Sleep(400);
-                SelectLoneGossipOption();
+                InteractAndSelectGossip(npc, task);
                 _nextInteractAt = DateTime.UtcNow.AddMilliseconds(ProvokeReInteractMs);
             }
 
@@ -428,21 +451,55 @@ namespace Bots.Vibes.VibeQuester2.Execution
             {
                 _planner.RecordPermanentBlacklist(task.QuestId, "friendly-npc-interact", "friendly-npc-interact",
                     "Objective mob is friendly; use-item/talk/provoke via gossip did not credit it or turn it hostile within the patience window — a path v2 couldn't resolve (ambiguous/absent option or a mechanic we don't model).",
-                    string.Format("mob {0} friendly; waited {1}s after interact; no credit, no reaction flip", task.Objective.MobId, ProvokeWaitSeconds));
+                    string.Format("mob {0} friendly; waited {1}s; no credit/flip; gossip options seen: [{2}]",
+                        task.Objective.MobId, ProvokeWaitSeconds, _lastGossipSummary ?? "(none)"));
                 AbandonQuest(task, "unresolved friendly-npc interact");
             }
             return RunStatus.Running;
         }
 
-        /// <summary>Click a lone plain dialogue option in the open gossip frame (the provoke/talk line).
-        /// Conservative: only an unambiguous single Gossip-type option is selected.</summary>
-        private static void SelectLoneGossipOption()
+        /// <summary>Interact, then — once the gossip frame actually OPENS (bounded state-wait, not a
+        /// blind fixed sleep that races frame-open latency) — pick the dialogue option. If the NPC
+        /// provokes without a frame, the wait times out harmlessly and the caller catches the flip.</summary>
+        private void InteractAndSelectGossip(WoWUnit npc, QuestTask task)
+        {
+            npc.Target();
+            npc.Interact();
+            WaitState(() => GossipFrame.Instance.IsVisible, GossipOpenTimeoutMs);
+            SelectGossipForObjective(task);
+        }
+
+        /// <summary>Pick the dialogue option that provokes/advances a friendly objective NPC — and always
+        /// CAPTURE the full option list (into _lastGossipSummary, logged + carried into the blacklist
+        /// evidence) so a stuck NPC is diagnosable and teachable, not a silent no-op. One plain Gossip
+        /// option → take it; several → take the best word-overlap with the quest name (a provoke/talk line
+        /// usually echoes it); no clear pick → leave it, but the options are now recorded for a human rule.</summary>
+        private void SelectGossipForObjective(QuestTask task)
         {
             if (!GossipFrame.Instance.IsVisible) return;
             var opts = GossipFrame.Instance.GossipOptionEntries?
                 .Where(e => e.Type == GossipEntry.GossipEntryType.Gossip).ToList();
-            if (opts != null && opts.Count == 1)
-                GossipFrame.Instance.SelectGossipOption(opts[0].Index);
+            if (opts == null || opts.Count == 0) { _lastGossipSummary = "(no dialogue options)"; return; }
+
+            _lastGossipSummary = string.Join(" | ", opts.Select(o => o.Text));
+            Logging.WriteDebug("[VQ2-Task] q{0}: {1} gossip option(s): {2}", task.QuestId, opts.Count, _lastGossipSummary);
+
+            if (opts.Count == 1) { GossipFrame.Instance.SelectGossipOption(opts[0].Index); return; }
+
+            var qWords = new HashSet<string>((task.QuestName ?? "").ToLowerInvariant().Split(' '));
+            int bestScore = 0, bestIndex = -1;
+            foreach (GossipEntry o in opts)
+            {
+                int score = (o.Text ?? "").ToLowerInvariant().Split(' ').Count(w => w.Length > 3 && qWords.Contains(w));
+                if (score > bestScore) { bestScore = score; bestIndex = o.Index; }
+            }
+            if (bestIndex >= 0)
+            {
+                Logging.WriteDebug("[VQ2-Task] q{0}: selecting the quest-name-matching gossip option (score {1}).", task.QuestId, bestScore);
+                GossipFrame.Instance.SelectGossipOption(bestIndex);
+            }
+            // else: several options, none matches the quest name — don't guess; _lastGossipSummary carries
+            // the list into the blacklist evidence so a human can add a rule or build the capability.
         }
 
         /// <summary>Quest-provided items worth trying ON a friendly objective mob: the start item and any
@@ -463,6 +520,19 @@ namespace Bots.Vibes.VibeQuester2.Execution
                 && task.ObjectiveIndex >= 0 && task.ObjectiveIndex < data.ObjectivesDone.Length)
                 return data.ObjectivesDone[task.ObjectiveIndex];
             return -1;
+        }
+
+        /// <summary>Bounded STATE poll — wait on a real condition (frame open, descriptor tick), never a
+        /// blind fixed sleep that races it (fluid-doctrine rule 2). Returns true if the condition held.</summary>
+        private static bool WaitState(Func<bool> condition, int timeoutMs)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (condition()) return true;
+                StyxWoW.Sleep(50);
+            }
+            return condition();
         }
 
         // --- helpers ---
@@ -573,8 +643,12 @@ namespace Bots.Vibes.VibeQuester2.Execution
                     task.QuestId, startItem, task.QuestName, _useItemAttempts + 1, MaxUseItemAttempts);
                 carried.Use();
                 _useItemAttempts++;
+                // Verify on STATE: a read-the-book use completes on the spot, so wait (bounded) for the
+                // quest to become ready rather than blindly pacing to the next tick. If it clears we're done
+                // immediately; if not, the next attempt is paced.
+                if (WaitState(() => QuestReadyToTurnIn(task, me), GoCreditTimeoutMs)) return RunStatus.Running;
                 _nextUseItemAt = DateTime.UtcNow.AddMilliseconds(UseItemPaceMs);
-                return RunStatus.Running;   // re-check readiness next tick
+                return RunStatus.Running;
             }
 
             _planner.RecordPermanentBlacklist(task.QuestId, "use-item-location", "use-item-location",
@@ -685,6 +759,7 @@ namespace Bots.Vibes.VibeQuester2.Execution
             _nextUseItemAt = DateTime.MinValue;
             _npcInteracted = false;
             _npcProvokeDeadline = DateTime.MinValue;
+            _lastGossipSummary = null;
             if (HasWork)
                 Logging.Write("[VQ2-Task] START {0} ({1}).", CurrentTask, why);
         }

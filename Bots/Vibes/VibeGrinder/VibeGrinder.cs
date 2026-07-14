@@ -935,13 +935,15 @@ namespace Bots.VibeGrinder
 
 
         /// <summary>
-        /// Transit peel: on a VENDOR RUN, before anything body-pulls us, deliberately single-pull the most
-        /// isolated hostile in pull range (TargetList is caution-ordered: FirstUnit == [0]) by handing it to
-        /// the existing CombatBehavior as a Kill POI. Returns Success once a POI is set (next tick pulls);
-        /// Failure (→ VendorBehavior resumes travel) when there's nothing to peel. Skips when essentially at
-        /// the vendor so it interacts instead of starting a fight on the doorstep. Vendor-run ONLY — on a
-        /// grind trek the normal Roam find-target + ApplyPullCommitment own the pull, and adding a second
-        /// driver here thrashes the POI between targets (don't re-gate this to grind treks).
+        /// Transit peel: while TRANSITING but NOT grinding — a vendor errand, or VQ2's quest travel:
+        /// anything that isn't the grind loop — before something body-pulls us, deliberately single-pull the
+        /// most isolated hostile in pull range (TargetList is caution-ordered: FirstUnit == [0]) by handing
+        /// it to the existing CombatBehavior as a Kill POI. Returns Success once a POI is set (next tick
+        /// pulls); Failure (→ caller resumes travel) when there's nothing to peel. Skips when essentially at
+        /// the destination (BotPoi doorstep) so it interacts instead of fighting on the doorstep. TWO call
+        /// sites: the vendor-run branch, and the quest-transit decorator above the activity slot (gated
+        /// !GrindEnabled). Do NOT add a third on a GRIND trek — there Roam's find-target + ApplyPullCommitment
+        /// own the pull, and a second driver thrashes the POI between targets.
         /// </summary>
         private RunStatus TransitPeel()
         {
