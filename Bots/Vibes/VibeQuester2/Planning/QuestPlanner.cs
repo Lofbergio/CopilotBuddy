@@ -249,8 +249,12 @@ namespace Bots.Vibes.VibeQuester2.Planning
                 .Take(s.MaxQuestsPerPlan)
                 .ToList();
 
-            LastDoableSupply = available.Count;
-            plan.DoableSupply = available.Count;
+            // Supply = ALL quest work on hand: new pickups + in-log quests with workable objectives.
+            // Counting only new pickups made the arbiter grind while sitting on a full, doable quest log
+            // (e.g. a quest already accepted, standing next to its objective NPC).
+            int supply = available.Count + logQuests.Count;
+            LastDoableSupply = supply;
+            plan.DoableSupply = supply;
             plan.NextFutureHub = futureHub;
             foreach (var q in selected) plan.QuestIds.Add(q.Id);
 
