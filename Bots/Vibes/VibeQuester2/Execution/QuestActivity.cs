@@ -46,8 +46,9 @@ namespace Bots.Vibes.VibeQuester2.Execution
         private WoWPoint _trekMarkedFrom = WoWPoint.Empty;
         private int _useItemAttempts;
         private DateTime _nextUseItemAt = DateTime.MinValue;
-        private int _npcInteractAttempts;
-        private bool _triedItemsOnNpc;
+        private bool _npcInteracted;
+        private int _npcBefore;
+        private DateTime _npcProvokeDeadline;
         private readonly Dictionary<string, DateTime> _goBlacklist = new Dictionary<string, DateTime>();   // key: rounded position
 
         private const float InteractRange = 4.5f;
@@ -56,8 +57,10 @@ namespace Bots.Vibes.VibeQuester2.Execution
         private const int NotOfferedAbandonStrikes = 2;
         private const int MaxUseItemAttempts = 3;
         private const int UseItemPaceMs = 2500;
-        private const int MaxNpcInteractAttempts = 3;
         private const float FriendlyNpcDetectRange = 100f;   // divert to a friendly objective NPC within this
+        private const float NpcApproachRange = 2.75f;        // stop solidly INSIDE interact range, not on its edge
+        private const int ProvokeWaitSeconds = 30;           // a scripted talk/provoke can run many seconds
+        private const int ProvokeReInteractMs = 6000;        // gentle re-open if the gossip never landed
         private const float ObjectiveAreaRadius = 250f;   // spawns near the task anchor that form the work area
         private const int GoBlacklistMinutes = 3;
 
@@ -318,96 +321,94 @@ namespace Bots.Vibes.VibeQuester2.Execution
         }
 
         /// <summary>
-        /// The objective mob is standing there friendly. Resolve it, reading the outcome each time:
-        /// objective credit ticked up → it was USE-ITEM-ON-TARGET or TALK-to-complete; it turned hostile
-        /// → GOSSIP-PROVOKE (hand back to the kill grind next tick). Attempt 1 uses any held quest item
-        /// ON the mob (net/brand/device — `Use(guid)`); later attempts open gossip and click a lone plain
-        /// dialogue option. Conservative — only an unambiguous single option is clicked; anything else
-        /// exhausts the attempt budget → durable `friendly-npc-interact` blacklist + abandon, so no run
-        /// loops on an NPC whose use/talk/provoke path we can't resolve.
+        /// The objective mob is standing there friendly — resolve it patiently. Interact ONCE (after a
+        /// use-item-on-target pass), click a lone plain gossip option, then WAIT: a gossip-provoke is a
+        /// scripted taunt that can run many seconds before the NPC flips hostile, and a talk-to-complete
+        /// credits after its dialogue — so we do NOT re-interact on a short timer (that interrupts the
+        /// script) and do NOT count quick attempts. Progress = objective credit (use/talk) or the mob
+        /// turning attackable (provoke → the grind kills it next tick). Only after a full
+        /// <see cref="ProvokeWaitSeconds"/> with no change do we blacklist + abandon.
         /// </summary>
         private RunStatus TickFriendlyNpc(QuestTask task, LocalPlayer me, WoWUnit npc)
         {
-            if (!TravelTo(npc.Location, InteractRange, string.Format("friendly NPC q{0}", task.QuestId)))
+            // Stop solidly INSIDE interact range — CTM halts on the edge, where Interact() is flaky.
+            if (!TravelTo(npc.Location, NpcApproachRange, string.Format("friendly NPC q{0}", task.QuestId)))
                 return RunStatus.Running;
-            if (DateTime.UtcNow < _nextInteractAt) return RunStatus.Running;
-            _nextInteractAt = DateTime.UtcNow.AddMilliseconds(InteractRetryMs);
+            if (me.IsMoving) WoWMovement.MoveStop();
 
-            if (_npcInteractAttempts >= MaxNpcInteractAttempts)
+            // Progress check every tick (whether or not we've interacted yet).
+            if (me.GetReactionTowards(npc) < WoWUnitReaction.Friendly)
+            {
+                Logging.Write("[VQ2-Task] q{0}: {1} turned hostile — handing to the kill grind.", task.QuestId, npc.Name);
+                return RunStatus.Running;   // next tick: not friendly → grind installs → chassis kills + loots
+            }
+            if (_npcInteracted && ObjectiveCount(task, me) > _npcBefore)
+            {
+                Logging.Write("[VQ2-Task] q{0}: {1} — objective credit.", task.QuestId, npc.Name);
+                return RunStatus.Running;
+            }
+
+            // First contact: use-item-on-target if we hold a candidate, else interact to open gossip.
+            if (!_npcInteracted)
+            {
+                _npcInteracted = true;
+                _npcBefore = ObjectiveCount(task, me);
+                _npcProvokeDeadline = DateTime.UtcNow.AddSeconds(ProvokeWaitSeconds);
+                _nextInteractAt = DateTime.UtcNow.AddMilliseconds(ProvokeReInteractMs);
+                npc.Target();
+
+                QuestEntry qe = _db()?.Quests.FirstOrDefault(x => x.Id == task.QuestId);
+                WoWItem item = CandidateQuestItems(qe)
+                    .Select(id => me.CarriedItems.FirstOrDefault(i => i != null && i.Entry == (uint)id))
+                    .FirstOrDefault(i => i != null);
+                if (item != null)
+                {
+                    Logging.Write("[VQ2-Task] q{0}: using quest item {1} on {2}.", task.QuestId, item.Entry, npc.Name);
+                    item.Use(npc.Guid);
+                }
+                else
+                {
+                    Logging.Write("[VQ2-Task] q{0}: interacting with friendly {1} (waiting up to {2}s for talk/provoke).",
+                        task.QuestId, npc.Name, ProvokeWaitSeconds);
+                    npc.Interact();
+                    StyxWoW.Sleep(700);
+                    SelectLoneGossipOption();
+                }
+                return RunStatus.Running;
+            }
+
+            // Waiting for the scripted talk/provoke to resolve. Advance multi-step gossip; re-open only if
+            // it never landed (gentle throttle). Blacklist only when the whole patience window elapses.
+            if (GossipFrame.Instance.IsVisible)
+                SelectLoneGossipOption();
+            else if (DateTime.UtcNow >= _nextInteractAt)
+            {
+                npc.Target();
+                npc.Interact();
+                StyxWoW.Sleep(700);
+                SelectLoneGossipOption();
+                _nextInteractAt = DateTime.UtcNow.AddMilliseconds(ProvokeReInteractMs);
+            }
+
+            if (DateTime.UtcNow > _npcProvokeDeadline)
             {
                 _planner.RecordPermanentBlacklist(task.QuestId, "friendly-npc-interact", "friendly-npc-interact",
-                    "Objective mob is friendly; using held quest items on it and interacting neither gave credit nor turned it hostile — a use/talk/provoke path v2 couldn't resolve.",
-                    string.Format("mob {0} friendly; {1} attempt(s); no credit, no reaction flip", task.Objective.MobId, _npcInteractAttempts));
+                    "Objective mob is friendly; use-item/talk/provoke via gossip did not credit it or turn it hostile within the patience window — a path v2 couldn't resolve (ambiguous/absent option or a mechanic we don't model).",
+                    string.Format("mob {0} friendly; waited {1}s after interact; no credit, no reaction flip", task.Objective.MobId, ProvokeWaitSeconds));
                 AbandonQuest(task, "unresolved friendly-npc interact");
-                return RunStatus.Running;
             }
-
-            int before = ObjectiveCount(task, me);
-            if (me.IsMoving) WoWMovement.MoveStop();
-            npc.Target();
-
-            // (1) use-item-on-target: a held quest item used ON the mob. Once per task, before gossip.
-            if (!_triedItemsOnNpc)
-            {
-                _triedItemsOnNpc = true;
-                QuestEntry qe = _db()?.Quests.FirstOrDefault(x => x.Id == task.QuestId);
-                foreach (int itemId in CandidateQuestItems(qe))
-                {
-                    WoWItem item = me.CarriedItems.FirstOrDefault(i => i != null && i.Entry == (uint)itemId);
-                    if (item == null) continue;
-                    Logging.Write("[VQ2-Task] q{0}: using quest item {1} on {2}.", task.QuestId, itemId, npc.Name);
-                    item.Use(npc.Guid);
-                    if (ObserveOutcome(task, me, npc, before, 1800, allowGossipSelect: false))
-                    { _npcInteractAttempts++; return RunStatus.Running; }
-                }
-                _npcInteractAttempts++;   // the whole item pass counts as one attempt
-                return RunStatus.Running;
-            }
-
-            // (2) gossip: talk-to-complete / gossip-provoke.
-            npc.Interact();
-            _npcInteractAttempts++;
-            ObserveOutcome(task, me, npc, before, 2500, allowGossipSelect: true);
             return RunStatus.Running;
         }
 
-        /// <summary>Poll after an interact/use for progress: objective credit (count &gt; before) or the
-        /// mob turning attackable. With allowGossipSelect, clicks a lone plain gossip option once and
-        /// keeps observing. Returns true if the objective progressed.</summary>
-        private bool ObserveOutcome(QuestTask task, LocalPlayer me, WoWUnit npc, int before, int timeoutMs, bool allowGossipSelect)
+        /// <summary>Click a lone plain dialogue option in the open gossip frame (the provoke/talk line).
+        /// Conservative: only an unambiguous single Gossip-type option is selected.</summary>
+        private static void SelectLoneGossipOption()
         {
-            bool clicked = false;
-            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-            while (DateTime.UtcNow < deadline)
-            {
-                if (ObjectiveCount(task, me) > before)
-                {
-                    Logging.Write("[VQ2-Task] q{0}: {1} — objective credit.", task.QuestId, npc.Name);
-                    return true;
-                }
-                if (me.GetReactionTowards(npc) < WoWUnitReaction.Friendly)
-                {
-                    Logging.Write("[VQ2-Task] q{0}: {1} turned hostile — handing to the kill grind.", task.QuestId, npc.Name);
-                    return true;   // next tick: not friendly → grind installs → chassis kills
-                }
-                if (allowGossipSelect && !clicked && GossipFrame.Instance.IsVisible)
-                {
-                    var opts = GossipFrame.Instance.GossipOptionEntries?
-                        .Where(e => e.Type == GossipEntry.GossipEntryType.Gossip).ToList();
-                    if (opts != null && opts.Count == 1)
-                    {
-                        GossipFrame.Instance.SelectGossipOption(opts[0].Index);
-                        clicked = true;   // let the select resolve (credit / hostility) on the next poll
-                    }
-                    else
-                    {
-                        if (GossipFrame.Instance.IsVisible) GossipFrame.Instance.Close();
-                        break;   // no option, or ambiguous multi-option — don't guess; retry/blacklist
-                    }
-                }
-                StyxWoW.Sleep(150);
-            }
-            return false;
+            if (!GossipFrame.Instance.IsVisible) return;
+            var opts = GossipFrame.Instance.GossipOptionEntries?
+                .Where(e => e.Type == GossipEntry.GossipEntryType.Gossip).ToList();
+            if (opts != null && opts.Count == 1)
+                GossipFrame.Instance.SelectGossipOption(opts[0].Index);
         }
 
         /// <summary>Quest-provided items worth trying ON a friendly objective mob: the start item and any
@@ -636,8 +637,8 @@ namespace Bots.Vibes.VibeQuester2.Execution
             _trekMarkedFrom = WoWPoint.Empty;
             _useItemAttempts = 0;
             _nextUseItemAt = DateTime.MinValue;
-            _npcInteractAttempts = 0;
-            _triedItemsOnNpc = false;
+            _npcInteracted = false;
+            _npcProvokeDeadline = DateTime.MinValue;
             if (HasWork)
                 Logging.Write("[VQ2-Task] START {0} ({1}).", CurrentTask, why);
         }
