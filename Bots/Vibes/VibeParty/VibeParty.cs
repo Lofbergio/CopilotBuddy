@@ -1298,6 +1298,13 @@ namespace VibeParty
 					case "interact":
 						leader.CurrentTarget?.Interact();
 						break;
+					case "follow":
+						// Manual "everyone follow me" — clear any wait-hold and snap to native /follow now.
+						Logging.Write("VibeParty: leader said follow — engaging follow.");
+						_waiting = false;
+						if (leader != null && !StyxWoW.Me.Combat)
+							Lua.DoString(string.Format("FollowUnit('{0}', true)", leader.Name));
+						break;
 				}
 			}
 		}
@@ -1506,7 +1513,12 @@ namespace VibeParty
 			}
 
 			WoWPlayer? leader = ObjectManager.GetObjectByGuid<WoWPlayer>(_botMessage.LeaderGuid);
-			if (leader != null && leader.Distance <= VibePartySettings.Instance.FollowDistance)
+			// In instances DON'T idle inside FollowDistance — native /follow must engage as soon as we're out of
+			// combat (cases 2/3 above still let us fight and rest), or the follower waits for a ~FollowDistance gap
+			// before it starts moving and loses the leader on dungeon stairs/tight corners (user 2026-07-14).
+			// Native /follow has its own ~few-yd stop distance, so staying engaged doesn't crowd the leader. Open
+			// world keeps the gate (FollowDistance spacing is the point there).
+			if (!StyxWoW.Me.IsInInstance && leader != null && leader.Distance <= VibePartySettings.Instance.FollowDistance)
 			{
 				if (!leader.Mounted)
 					Mount.Dismount("Leader is not mounted");
