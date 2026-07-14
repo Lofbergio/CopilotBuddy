@@ -24,11 +24,13 @@ namespace Bots.Vibes.VibeQuester2.Planning
     {
         private readonly DataLoader _loader;
         private readonly DangerScreen _danger = new DangerScreen();
+        private readonly QuestBlacklist _blacklist = new QuestBlacklist();   // persistent, learned "can't do it" set
 
         // Monotonic per session: server set (event-waited GetCompletedQuests) ∪ our own turn-in edges.
         private readonly HashSet<uint> _completed = new HashSet<uint>();
         private readonly Dictionary<uint, DateTime> _autoBlacklist = new Dictionary<uint, DateTime>();
         private int _scanThreshold;
+        private FactionResolver _lastFactions;   // captured each scan for on-the-spot chained-offer screening
 
         public QuestPlanner(DataLoader loader)
         {
@@ -41,6 +43,44 @@ namespace Bots.Vibes.VibeQuester2.Planning
         /// <summary>A turn-in landed (quest left the log) — completed NOW, don't wait out the cache.</summary>
         public void NotifyTurnedIn(uint questId) => _completed.Add(questId);
 
+        /// <summary>
+        /// A turn-in pushed the server's chained follow-up detail frame. Accept it if it clears the
+        /// SAME eligibility gates a normal scan applies (level window, mob-level, race/class, prereqs —
+        /// now satisfied since the predecessor was just unioned into <c>_completed</c> — type whitelist,
+        /// resolvable kill, danger); proximity is intentionally NOT gated because the giver is standing
+        /// in front of us (free pickup). This is why a valid next-in-chain quest that couldn't be in the
+        /// pre-computed plan (its prereq was still pending at scan time) is taken on the spot instead of
+        /// declined and walked back for. Screening — not blind accept — still refuses a follow-up that is
+        /// over-level, wrong-type (escort/script), or lands in a Dangerous area.
+        /// </summary>
+        public bool ScreenChainedOffer(int questId, LocalPlayer me)
+        {
+            if (me == null) return false;
+            QuestDatabase db = _loader.Database;
+            if (db == null) return false;
+            QuestEntry qe = db.Quests.FirstOrDefault(x => x.Id == questId);
+            if (qe == null) return false;
+
+            var s = VibeQuester2Settings.Instance;
+            if (IsBlacklisted((uint)qe.Id) || _blacklist.IsBlocked(qe.Id)) return false;
+            if (_completed.Contains((uint)qe.Id)) return false;
+            if (me.QuestLog.ContainsQuest((uint)qe.Id)) return false;   // accept already landed it
+
+            if (me.Level < qe.MinLevel) return false;
+            int qMin = Math.Max(1, me.Level - 2);
+            int qMax = me.Level + Math.Max(3, s.MaxMobOverLevel);
+            if (qe.QuestLevel > 0 && (qe.QuestLevel < qMin || qe.QuestLevel > qMax)) return false;
+
+            if (qe.Objectives.Any(o => o.MobLevel > me.Level + s.MaxMobOverLevel)) return false;
+            if (!RaceAllowed(qe.AllowableRaces, me)) return false;
+            if (!ClassAllowed(qe.AllowableClasses, me)) return false;
+            if (!PrereqsMet(qe)) return false;
+            if (!SupportedType(qe)) return false;
+            if (!HasResolvableKillTargets(qe, db)) return false;
+            if (_lastFactions != null && _danger.Reject(qe, db, me, _lastFactions) != null) return false;
+            return true;
+        }
+
         /// <summary>Runtime failure (deaths / no progress) — TTL'd so a transient failure retries later.</summary>
         public void AutoBlacklist(uint questId)
         {
@@ -48,6 +88,53 @@ namespace Bots.Vibes.VibeQuester2.Planning
                 Math.Max(1, VibeQuester2Settings.Instance.AutoBlacklistMinutes));
             Logging.Write("[VQ2-Plan] quest {0} auto-blacklisted for {1}m.",
                 questId, VibeQuester2Settings.Instance.AutoBlacklistMinutes);
+        }
+
+        /// <summary>
+        /// Structural failure (a mechanic v2 can't perform) — record durable, reasoned knowledge in the
+        /// persistent blacklist so no FUTURE run re-accepts it, and a future build that ships
+        /// <paramref name="capability"/> can auto-re-enable it. Snapshots the quest's shape so the entry
+        /// is triageable offline without re-deriving from the DB.
+        /// </summary>
+        public void RecordPermanentBlacklist(int questId, string category, string capability, string reason, string evidence)
+        {
+            QuestDatabase db = _loader.Database;
+            QuestEntry qe = db?.Quests.FirstOrDefault(x => x.Id == questId);
+            _blacklist.Record(new QuestBlacklistEntry
+            {
+                QuestId = questId,
+                QuestName = qe?.Name,
+                Category = category,
+                RequiresCapability = capability,
+                BlockClass = "structural",
+                Action = "never-accept",
+                Reason = reason,
+                Evidence = evidence,
+                DetectedByVersion = DetectorVersion,
+                Source = "learned",
+                StartItem = qe?.StartItem ?? 0,
+                GiverId = db?.QuestGivers.FirstOrDefault(g => g.QuestId == questId)?.GiverId ?? 0,
+                EnderId = db?.QuestEnders.FirstOrDefault(e => e.QuestId == questId)?.EnderId ?? 0,
+                ObjectiveSummary = qe != null ? string.Join(", ", qe.Objectives.Select(o => o.Type.ToString())) : null,
+                ObjectiveDetail = qe?.Objectives.Select(DescribeObjective).ToList(),
+                Map = StyxWoW.Me != null ? (int)StyxWoW.Me.MapId : 0,
+            });
+        }
+
+        private const string DetectorVersion = "1.5.2";
+
+        private static string DescribeObjective(QuestObjective o)
+        {
+            string what = o.Type switch
+            {
+                ObjectiveType.KillMob => "mob=" + o.MobId + (o.MobLevel > 0 ? " lvl" + o.MobLevel : ""),
+                ObjectiveType.CollectItem => "item=" + o.ItemId,
+                ObjectiveType.CollectFromGameObject => "go=" + o.GameObjectId,
+                _ => "",
+            };
+            int count = Math.Max(o.KillCount, o.CollectCount);
+            return string.Format("[{0}] {1}{2} {3}", o.Index, o.Type, string.IsNullOrEmpty(what) ? "" : " " + what,
+                count > 0 ? "x" + count : "").TrimEnd();
         }
 
         private bool IsBlacklisted(uint id)
@@ -76,6 +163,7 @@ namespace Bots.Vibes.VibeQuester2.Planning
             if (db == null || me == null)
                 return plan;
 
+            _lastFactions = factions;
             RefreshCompleted(me);
 
             // --- available (not-in-log) quests through the full gate chain ---
@@ -87,7 +175,7 @@ namespace Bots.Vibes.VibeQuester2.Planning
 
             foreach (QuestEntry qe in db.Quests)
             {
-                if (IsBlacklisted((uint)qe.Id)) { rBlack++; continue; }
+                if (IsBlacklisted((uint)qe.Id) || _blacklist.IsBlocked(qe.Id)) { rBlack++; continue; }
                 if (_completed.Contains((uint)qe.Id)) { rDone++; continue; }
                 if (me.QuestLog.ContainsQuest((uint)qe.Id)) { rInLog++; continue; }
 
@@ -146,7 +234,7 @@ namespace Bots.Vibes.VibeQuester2.Planning
             {
                 QuestEntry qe = db.Quests.FirstOrDefault(x => x.Id == (int)lq.Id);
                 if (qe == null || qe.Objectives.Count == 0) continue;
-                if (IsBlacklisted((uint)qe.Id)) continue;
+                if (IsBlacklisted((uint)qe.Id) || _blacklist.IsBlocked(qe.Id)) continue;
                 if (!SupportedType(qe)) continue;
                 logQuests.Add(qe);
             }
@@ -183,9 +271,12 @@ namespace Bots.Vibes.VibeQuester2.Planning
         }
 
         /// <summary>
-        /// Hub-batched phases with NN tours from the player: ready turn-ins first (drain), then
-        /// pickups, then objectives, then remaining turn-ins. Per-quest interleaving is deliberately
-        /// NOT done — batching is what makes hub-and-spoke questing efficient (carried rule).
+        /// One geography-first tour over per-quest DEPENDENCY CHAINS (pickup → objectives → turn-in;
+        /// a ready quest = just its turn-in). A single greedy NN walk over the chain HEADS, chained
+        /// from the player's real position, interleaves quests by actual distance while a quest's
+        /// turn-in can never precede its own pickup/objectives. Rigid phase batching (all ready
+        /// turn-ins first, each phase re-toured from the start point) sent the bot 500yd to drain a
+        /// lone completed quest, then 700yd back for pickups that were at its feet — geography wins.
         /// </summary>
         private void BuildTasks(QuestPlan plan, List<QuestEntry> selected, QuestDatabase db, LocalPlayer me)
         {
@@ -195,29 +286,30 @@ namespace Bots.Vibes.VibeQuester2.Planning
             var readyIds = new HashSet<uint>(QuestLogTruth.CompleteSet());
             var inLog = me.QuestLog.GetAllQuests().Select(q => (uint)q.Id).ToHashSet();
 
-            var turnInsReady = new List<QuestTask>();
-            var pickups = new List<QuestTask>();
-            var objectives = new List<QuestTask>();
-            var turnInsLater = new List<QuestTask>();
+            var chains = new List<Queue<QuestTask>>();
 
             foreach (QuestEntry q in selected)
             {
-                bool logQuest = inLog.Contains((uint)q.Id);
-                if (!logQuest)
-                {
-                    QuestTask pu = InteractionTask(QuestTaskKind.PickUp, q, db, me, givers: true);
-                    if (pu != null) pickups.Add(pu);
-                }
+                var chain = new Queue<QuestTask>();
+
                 if (readyIds.Contains((uint)q.Id))
                 {
+                    // Already complete in the log — the turn-in is the whole chain, no objective work.
                     QuestTask ti = InteractionTask(QuestTaskKind.TurnIn, q, db, me, givers: false);
-                    if (ti != null) turnInsReady.Add(ti);
-                    continue;   // ready quests need no objective work
+                    if (ti != null) chain.Enqueue(ti);
+                    if (chain.Count > 0) chains.Add(chain);
+                    continue;
+                }
+
+                if (!inLog.Contains((uint)q.Id))
+                {
+                    QuestTask pu = InteractionTask(QuestTaskKind.PickUp, q, db, me, givers: true);
+                    if (pu != null) chain.Enqueue(pu);
                 }
                 foreach (QuestObjective obj in q.Objectives)
                 {
                     if (obj.Type == ObjectiveType.TurnInOnly) continue;
-                    objectives.Add(new QuestTask
+                    chain.Enqueue(new QuestTask
                     {
                         Kind = QuestTaskKind.DoObjective,
                         QuestId = q.Id,
@@ -227,14 +319,13 @@ namespace Bots.Vibes.VibeQuester2.Planning
                         Position = NearestObjectivePoint(obj, db, me),
                     });
                 }
-                QuestTask later = InteractionTask(QuestTaskKind.TurnIn, q, db, me, givers: false);
-                if (later != null) turnInsLater.Add(later);
+                QuestTask turnIn = InteractionTask(QuestTaskKind.TurnIn, q, db, me, givers: false);
+                if (turnIn != null) chain.Enqueue(turnIn);
+
+                if (chain.Count > 0) chains.Add(chain);
             }
 
-            plan.Tasks.AddRange(NnTour(turnInsReady, me.Location));
-            plan.Tasks.AddRange(NnTour(pickups, me.Location));
-            plan.Tasks.AddRange(NnTour(objectives, me.Location));
-            plan.Tasks.AddRange(NnTour(turnInsLater, me.Location));
+            plan.Tasks.AddRange(GreedyChainTour(chains, me.Location));
         }
 
         private QuestTask InteractionTask(QuestTaskKind kind, QuestEntry q, QuestDatabase db, LocalPlayer me, bool givers)
@@ -286,26 +377,36 @@ namespace Bots.Vibes.VibeQuester2.Planning
             }
         }
 
-        private static List<QuestTask> NnTour(List<QuestTask> tasks, WoWPoint from)
+        /// <summary>
+        /// Greedy NN tour over dependency chains: the frontier is every chain's current head; the
+        /// nearest head to the cursor is emitted and its chain advances by one. Dependencies hold
+        /// (each quest's pickup/objectives precede its turn-in) while quests interleave by REAL
+        /// distance from where the character actually stands — spatially-close work still clusters
+        /// (NN locality), but no phase front-loads a far task ahead of near ones.
+        /// </summary>
+        private static List<QuestTask> GreedyChainTour(List<Queue<QuestTask>> chains, WoWPoint from)
         {
-            var result = new List<QuestTask>(tasks.Count);
-            var remaining = new List<QuestTask>(tasks);
+            var result = new List<QuestTask>();
+            var active = chains.Where(c => c.Count > 0).ToList();
             WoWPoint cur = from;
-            while (remaining.Count > 0)
+            while (active.Count > 0)
             {
                 int bestIdx = 0;
                 double best = double.MaxValue;
-                for (int i = 0; i < remaining.Count; i++)
+                for (int i = 0; i < active.Count; i++)
                 {
-                    double d = remaining[i].Position == WoWPoint.Empty
-                        ? double.MaxValue - 1   // positionless tasks go last, stable
-                        : cur.Distance2D(remaining[i].Position);
+                    QuestTask head = active[i].Peek();
+                    double d = head.Position == WoWPoint.Empty
+                        ? double.MaxValue - 1   // positionless heads go last, stable
+                        : cur.Distance2D(head.Position);
                     if (d < best) { best = d; bestIdx = i; }
                 }
-                result.Add(remaining[bestIdx]);
-                if (remaining[bestIdx].Position != WoWPoint.Empty)
-                    cur = remaining[bestIdx].Position;
-                remaining.RemoveAt(bestIdx);
+                QuestTask chosen = active[bestIdx].Dequeue();
+                result.Add(chosen);
+                if (chosen.Position != WoWPoint.Empty)
+                    cur = chosen.Position;
+                if (active[bestIdx].Count == 0)
+                    active.RemoveAt(bestIdx);
             }
             return result;
         }
@@ -348,6 +449,8 @@ namespace Bots.Vibes.VibeQuester2.Planning
                         return false;
                     case ObjectiveType.CollectItem when hasStartItem && obj.MobId == 0:
                         return false;   // provided-item collect with a start item = use-item quest in disguise
+                    case ObjectiveType.Explore when obj.X == 0 && obj.Y == 0 && obj.Z == 0:
+                        return false;   // explore objective with no coordinate is unrunnable
                 }
             }
             return true;
@@ -414,6 +517,8 @@ namespace Bots.Vibes.VibeQuester2.Planning
             {
                 if (obj.MobId > 0) best = Math.Min(best, NearestSpawnDistance(obj.MobId, db, me, gameObject: false));
                 if (obj.GameObjectId > 0) best = Math.Min(best, NearestSpawnDistance(obj.GameObjectId, db, me, gameObject: true));
+                if (obj.Type == ObjectiveType.Explore && obj.Map == (int)me.MapId)
+                    best = Math.Min(best, me.Location.Distance2D(new WoWPoint((float)obj.X, (float)obj.Y, (float)obj.Z)));
             }
             foreach (QuestEnderEntry e in db.QuestEnders)
                 if (e.QuestId == qe.Id)
@@ -423,6 +528,11 @@ namespace Bots.Vibes.VibeQuester2.Planning
 
         private static WoWPoint NearestObjectivePoint(QuestObjective obj, QuestDatabase db, LocalPlayer me)
         {
+            if (obj.Type == ObjectiveType.Explore)
+                return obj.Map == (int)me.MapId
+                    ? new WoWPoint((float)obj.X, (float)obj.Y, (float)obj.Z)
+                    : WoWPoint.Empty;
+
             WoWPoint best = WoWPoint.Empty;
             double bestDist = double.MaxValue;
             bool isGo = obj.Type == ObjectiveType.CollectFromGameObject;

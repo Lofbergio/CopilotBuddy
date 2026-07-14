@@ -55,6 +55,16 @@ namespace Bots.Vibes.VibeQuester2.Execution
                 return InteractionResult.Retry;
             }
 
+            // The questgiver npcflag is the server's own "!" decider (memory read, no interact). A giver
+            // that lacks it offers nothing here/now — captive/pre-trigger NPCs (Bristlelimb younglings)
+            // show no marker at all. Fail fast into the strike path instead of interacting into a void.
+            if (giver is WoWUnit gu && !gu.IsQuestGiver)
+            {
+                Logging.Write("[VQ2-Task] pickup q{0} '{1}': {2} carries no questgiver flag — offers nothing here.",
+                    task.QuestId, task.QuestName, task.EntityName);
+                return InteractionResult.NotOffered;
+            }
+
             if (!OpenInteraction(giver, task)) return InteractionResult.Retry;
 
             // Gossip list path: our quest must be among the AVAILABLE entries; a missing entry is the
@@ -119,6 +129,15 @@ namespace Bots.Vibes.VibeQuester2.Execution
                 Logging.WriteDebug("[VQ2-Task] turn-in q{0}: ender {1} ({2}) not loaded near {3} — retry.",
                     task.QuestId, task.EntityName, task.EntityId, task.Position);
                 return InteractionResult.Retry;
+            }
+
+            // A valid turn-in NPC always carries the questgiver npcflag (it drives the "?" marker); its
+            // absence means this NPC takes nothing here — fail fast rather than interact into a void.
+            if (ender is WoWUnit eu && !eu.IsQuestGiver)
+            {
+                Logging.Write("[VQ2-Task] turn-in q{0} '{1}': {2} carries no questgiver flag — takes nothing here.",
+                    task.QuestId, task.QuestName, task.EntityName);
+                return InteractionResult.NotOffered;
             }
 
             if (!OpenInteraction(ender, task)) return InteractionResult.Retry;
@@ -187,33 +206,34 @@ namespace Bots.Vibes.VibeQuester2.Execution
 
             planner.NotifyTurnedIn((uint)task.QuestId);
             Logging.Write("[VQ2-Task] TurnIn q{0} '{1}' OK.", task.QuestId, task.QuestName);
-            HandleChainedOffer(task, plan, me);
+            HandleChainedOffer(task, planner, me);
             return InteractionResult.Success;
         }
 
         /// <summary>
         /// After a turn-in lands the server often pushes the follow-up quest's DETAIL frame into the
-        /// same window (the flow that wedged ForcedQuestTurnIn on 2026-07-06). In our plan → accept it
-        /// on the spot (free pickup, no extra walk); otherwise decline cleanly so the frame can't
-        /// confuse the next task.
+        /// same window (the flow that wedged ForcedQuestTurnIn on 2026-07-06). Screen it through the
+        /// planner's full eligibility gates (prereq now met via the just-registered turn-in) → accept
+        /// on the spot (free pickup, no extra walk — the next scan tours its objectives in); otherwise
+        /// decline cleanly so the frame can't confuse the next task.
         /// </summary>
-        private static void HandleChainedOffer(QuestTask completed, QuestPlan plan, LocalPlayer me)
+        private static void HandleChainedOffer(QuestTask completed, QuestPlanner planner, LocalPlayer me)
         {
             if (!WaitState(() => QuestFrame.Instance.IsVisible, 800))
                 return;   // nothing chained
             uint shown = ShownQuestId();
             if (shown == 0 || shown == (uint)completed.QuestId)
                 return;
-            if (plan != null && plan.QuestIds.Contains((int)shown))
+            if (planner.ScreenChainedOffer((int)shown, me))
             {
                 QuestFrame.Instance.AcceptQuest();
                 bool accepted = WaitState(() => me.QuestLog.ContainsQuest(shown), LogUpdateTimeoutMs);
                 Logging.Write("[VQ2-Task] chained offer q{0} after q{1}: {2}.",
-                    shown, completed.QuestId, accepted ? "accepted (in plan)" : "accept did not land");
+                    shown, completed.QuestId, accepted ? "accepted (screened OK)" : "accept did not land");
             }
             else
             {
-                Logging.Write("[VQ2-Task] chained offer q{0} after q{1}: declined (not in plan).", shown, completed.QuestId);
+                Logging.Write("[VQ2-Task] chained offer q{0} after q{1}: declined (failed screen).", shown, completed.QuestId);
                 QuestFrame.Instance.DeclineQuest();
             }
         }

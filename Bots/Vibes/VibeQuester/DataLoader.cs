@@ -52,6 +52,7 @@ namespace VibeQuester
             var db = new QuestDatabase();
             var byId = LoadQuests(db);
             LoadObjectives(byId);
+            LoadExplore(byId);
             LoadGivers(db);
             LoadEnders(db);
             LoadGameObjectSpawns(db);
@@ -112,6 +113,29 @@ namespace VibeQuester
                     KillCount = count,
                     CollectCount = count,
                     MobLevel = Sqlite.I(r[7])
+                });
+            }
+        }
+
+        /// <summary>Areatrigger EXPLORE objectives (optional quest_explore table from
+        /// Tools/QuestExploreExtractor). Absent on older DBs — tolerated.</summary>
+        private void LoadExplore(Dictionary<int, QuestEntry> byId)
+        {
+            List<object[]> rows;
+            try { rows = Sqlite.Query(_dbFile, "SELECT quest_id,map,x,y,z,radius FROM quest_explore"); }
+            catch { return; }   // table not present on this DB version
+            foreach (var r in rows)
+            {
+                if (!byId.TryGetValue(Sqlite.I(r[0]), out var q)) continue;
+                q.Objectives.Add(new QuestObjective
+                {
+                    Index = q.Objectives.Count,
+                    Type = ObjectiveType.Explore,
+                    Map = Sqlite.I(r[1]),
+                    X = Sqlite.D(r[2]),
+                    Y = Sqlite.D(r[3]),
+                    Z = Sqlite.D(r[4]),
+                    Radius = Sqlite.D(r[5]),
                 });
             }
         }

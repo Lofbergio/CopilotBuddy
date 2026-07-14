@@ -82,6 +82,12 @@ namespace VibeQuester
         public int CollectCount { get; set; }
         public int Index { get; set; }
         public int MobLevel { get; set; }   // creature maxlevel of the objective mob (0 if none); for the level gate
+        // Explore only: the areatrigger centre + radius the character must enter (server fires credit).
+        public int Map { get; set; }
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Z { get; set; }
+        public double Radius { get; set; }
     }
 
     public enum ObjectiveType
@@ -89,7 +95,8 @@ namespace VibeQuester
         KillMob,
         CollectItem,
         CollectFromGameObject,
-        TurnInOnly
+        TurnInOnly,
+        Explore
     }
 
     public class QuestGiverEntry

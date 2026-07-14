@@ -9,6 +9,7 @@ using Styx;
 using Styx.Helpers;
 using Styx.Logic;
 using Styx.Logic.BehaviorTree;
+using Styx.Logic.Inventory.Frames.Gossip;
 using Styx.Logic.Pathing;
 using Styx.WoWInternals;
 using Styx.WoWInternals.WoWObjects;
@@ -43,12 +44,20 @@ namespace Bots.Vibes.VibeQuester2.Execution
         private int _deathsOnCurrentQuest;
         private bool _objectiveAreaInstalled;
         private WoWPoint _trekMarkedFrom = WoWPoint.Empty;
+        private int _useItemAttempts;
+        private DateTime _nextUseItemAt = DateTime.MinValue;
+        private int _npcInteractAttempts;
+        private bool _triedItemsOnNpc;
         private readonly Dictionary<string, DateTime> _goBlacklist = new Dictionary<string, DateTime>();   // key: rounded position
 
         private const float InteractRange = 4.5f;
         private const float GoInteractRange = 4.0f;
         private const int InteractRetryMs = 2000;
         private const int NotOfferedAbandonStrikes = 2;
+        private const int MaxUseItemAttempts = 3;
+        private const int UseItemPaceMs = 2500;
+        private const int MaxNpcInteractAttempts = 3;
+        private const float FriendlyNpcDetectRange = 100f;   // divert to a friendly objective NPC within this
         private const float ObjectiveAreaRadius = 250f;   // spawns near the task anchor that form the work area
         private const int GoBlacklistMinutes = 3;
 
@@ -148,14 +157,7 @@ namespace Bots.Vibes.VibeQuester2.Execution
                 return RunStatus.Running;
             }
             if (task.Kind == QuestTaskKind.TurnIn && !QuestReadyToTurnIn(task, me))
-            {
-                // Objectives not finished (plan ordering guarantees the objective tasks came first —
-                // this catches drop-rate stragglers): push the turn-in back by re-queueing after the
-                // objective work is done; simplest correct form: skip forward, replan restores order.
-                Advance("not ready to turn in yet");
-                _requestReplan();
-                return RunStatus.Running;
-            }
+                return TickNotReadyTurnIn(task, me);
 
             if (!TravelTo(task.Position, InteractRange, task.ToString()))
                 return RunStatus.Running;   // travelling owns the tick
@@ -199,6 +201,31 @@ namespace Bots.Vibes.VibeQuester2.Execution
 
             if (task.Objective.Type == ObjectiveType.CollectFromGameObject)
                 return TickGameObjectCollect(task, me);
+
+            // Explore: walk into the areatrigger radius — the server fires the discovery credit on entry.
+            // Advance on arrival (not on descriptor) so mixed explore+kill quests don't deadlock; the
+            // real completion is verified downstream by the turn-in readiness / quest-complete check.
+            if (task.Objective.Type == ObjectiveType.Explore)
+            {
+                if (task.Position == WoWPoint.Empty) { Advance("explore area not on this map"); return RunStatus.Running; }
+                float arrive = Math.Max((float)(task.Objective.Radius * 0.9), 5f);
+                if (TravelTo(task.Position, arrive, string.Format("explore q{0}", task.QuestId)))
+                {
+                    StyxWoW.Sleep(600);   // dwell inside the trigger so it fires server-side
+                    Logging.Write("[VQ2-Task] q{0}: reached explore area.", task.QuestId);
+                    Advance("explore area reached");
+                }
+                return RunStatus.Running;
+            }
+
+            // Friendly objective mob (runtime-observed: the kill target is present but not attackable)
+            // needs a talk (→ credit) or a gossip-provoke (→ turns hostile) before the grind can engage
+            // it. Once it flips hostile / gives credit, this returns null next tick and the grind runs.
+            if (task.Objective.MobId > 0)
+            {
+                WoWUnit friendly = FindFriendlyObjectiveUnit(task, me);
+                if (friendly != null) return TickFriendlyNpc(task, me, friendly);
+            }
 
             // Kill / collect-from-mob: install the objective-scoped grind area once; the inherited
             // chassis (roam → governor commit → LevelBot pull/combat/loot) does the actual killing —
@@ -247,11 +274,22 @@ namespace Bots.Vibes.VibeQuester2.Execution
             _nextInteractAt = DateTime.UtcNow.AddMilliseconds(InteractRetryMs);
 
             if (me.IsMoving) WoWMovement.MoveStop();
+            int before = ObjectiveCount(task, me);
             using (var lootWait = new LuaEventWait("LOOT_OPENED"))
             {
                 go.Interact();
                 if (!lootWait.Wait(4000))
                 {
+                    // No loot window. Many GOs give objective CREDIT on use (douse the fire, ring the
+                    // bell, free the prisoner) rather than loot — check the descriptor before calling it a dud.
+                    StyxWoW.Sleep(400);
+                    if (ObjectiveCount(task, me) > before)
+                    {
+                        Logging.Write("[VQ2-Task] q{0}: used {1} for objective credit (no loot).",
+                            task.QuestId, task.Objective.GameObjectName ?? "GO");
+                        BlacklistGoNode(node, null);   // consumed — let it respawn before revisiting
+                        return RunStatus.Running;
+                    }
                     BlacklistGoNode(node, "no loot window");
                     return RunStatus.Running;
                 }
@@ -261,6 +299,135 @@ namespace Bots.Vibes.VibeQuester2.Execution
             StyxWoW.Sleep(300);
             BlacklistGoNode(node, null);   // looted (or emptied) — let it respawn before revisiting
             return RunStatus.Running;
+        }
+
+        /// <summary>Nearest alive spawn of the objective mob that is NOT attackable (reaction ≥ Friendly)
+        /// within reach — i.e. one that must be talked to / provoked rather than grinded.</summary>
+        private WoWUnit FindFriendlyObjectiveUnit(QuestTask task, LocalPlayer me)
+        {
+            WoWUnit best = null;
+            double bestDist = double.MaxValue;
+            foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
+            {
+                if (u == null || u.Dead || u.Entry != (uint)task.Objective.MobId) continue;
+                if (me.GetReactionTowards(u) < WoWUnitReaction.Friendly) continue;   // attackable → normal grind
+                double d = me.Location.Distance(u.Location);
+                if (d <= FriendlyNpcDetectRange && d < bestDist) { bestDist = d; best = u; }
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// The objective mob is standing there friendly. Resolve it, reading the outcome each time:
+        /// objective credit ticked up → it was USE-ITEM-ON-TARGET or TALK-to-complete; it turned hostile
+        /// → GOSSIP-PROVOKE (hand back to the kill grind next tick). Attempt 1 uses any held quest item
+        /// ON the mob (net/brand/device — `Use(guid)`); later attempts open gossip and click a lone plain
+        /// dialogue option. Conservative — only an unambiguous single option is clicked; anything else
+        /// exhausts the attempt budget → durable `friendly-npc-interact` blacklist + abandon, so no run
+        /// loops on an NPC whose use/talk/provoke path we can't resolve.
+        /// </summary>
+        private RunStatus TickFriendlyNpc(QuestTask task, LocalPlayer me, WoWUnit npc)
+        {
+            if (!TravelTo(npc.Location, InteractRange, string.Format("friendly NPC q{0}", task.QuestId)))
+                return RunStatus.Running;
+            if (DateTime.UtcNow < _nextInteractAt) return RunStatus.Running;
+            _nextInteractAt = DateTime.UtcNow.AddMilliseconds(InteractRetryMs);
+
+            if (_npcInteractAttempts >= MaxNpcInteractAttempts)
+            {
+                _planner.RecordPermanentBlacklist(task.QuestId, "friendly-npc-interact", "friendly-npc-interact",
+                    "Objective mob is friendly; using held quest items on it and interacting neither gave credit nor turned it hostile — a use/talk/provoke path v2 couldn't resolve.",
+                    string.Format("mob {0} friendly; {1} attempt(s); no credit, no reaction flip", task.Objective.MobId, _npcInteractAttempts));
+                AbandonQuest(task, "unresolved friendly-npc interact");
+                return RunStatus.Running;
+            }
+
+            int before = ObjectiveCount(task, me);
+            if (me.IsMoving) WoWMovement.MoveStop();
+            npc.Target();
+
+            // (1) use-item-on-target: a held quest item used ON the mob. Once per task, before gossip.
+            if (!_triedItemsOnNpc)
+            {
+                _triedItemsOnNpc = true;
+                QuestEntry qe = _db()?.Quests.FirstOrDefault(x => x.Id == task.QuestId);
+                foreach (int itemId in CandidateQuestItems(qe))
+                {
+                    WoWItem item = me.CarriedItems.FirstOrDefault(i => i != null && i.Entry == (uint)itemId);
+                    if (item == null) continue;
+                    Logging.Write("[VQ2-Task] q{0}: using quest item {1} on {2}.", task.QuestId, itemId, npc.Name);
+                    item.Use(npc.Guid);
+                    if (ObserveOutcome(task, me, npc, before, 1800, allowGossipSelect: false))
+                    { _npcInteractAttempts++; return RunStatus.Running; }
+                }
+                _npcInteractAttempts++;   // the whole item pass counts as one attempt
+                return RunStatus.Running;
+            }
+
+            // (2) gossip: talk-to-complete / gossip-provoke.
+            npc.Interact();
+            _npcInteractAttempts++;
+            ObserveOutcome(task, me, npc, before, 2500, allowGossipSelect: true);
+            return RunStatus.Running;
+        }
+
+        /// <summary>Poll after an interact/use for progress: objective credit (count &gt; before) or the
+        /// mob turning attackable. With allowGossipSelect, clicks a lone plain gossip option once and
+        /// keeps observing. Returns true if the objective progressed.</summary>
+        private bool ObserveOutcome(QuestTask task, LocalPlayer me, WoWUnit npc, int before, int timeoutMs, bool allowGossipSelect)
+        {
+            bool clicked = false;
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (ObjectiveCount(task, me) > before)
+                {
+                    Logging.Write("[VQ2-Task] q{0}: {1} — objective credit.", task.QuestId, npc.Name);
+                    return true;
+                }
+                if (me.GetReactionTowards(npc) < WoWUnitReaction.Friendly)
+                {
+                    Logging.Write("[VQ2-Task] q{0}: {1} turned hostile — handing to the kill grind.", task.QuestId, npc.Name);
+                    return true;   // next tick: not friendly → grind installs → chassis kills
+                }
+                if (allowGossipSelect && !clicked && GossipFrame.Instance.IsVisible)
+                {
+                    var opts = GossipFrame.Instance.GossipOptionEntries?
+                        .Where(e => e.Type == GossipEntry.GossipEntryType.Gossip).ToList();
+                    if (opts != null && opts.Count == 1)
+                    {
+                        GossipFrame.Instance.SelectGossipOption(opts[0].Index);
+                        clicked = true;   // let the select resolve (credit / hostility) on the next poll
+                    }
+                    else
+                    {
+                        if (GossipFrame.Instance.IsVisible) GossipFrame.Instance.Close();
+                        break;   // no option, or ambiguous multi-option — don't guess; retry/blacklist
+                    }
+                }
+                StyxWoW.Sleep(150);
+            }
+            return false;
+        }
+
+        /// <summary>Quest-provided items worth trying ON a friendly objective mob: the start item and any
+        /// collect-item ids (only those actually in the bags are used).</summary>
+        private static IEnumerable<int> CandidateQuestItems(QuestEntry qe)
+        {
+            if (qe == null) yield break;
+            if (qe.StartItem > 0) yield return qe.StartItem;
+            foreach (QuestObjective o in qe.Objectives)
+                if (o.Type == ObjectiveType.CollectItem && o.ItemId > 0) yield return o.ItemId;
+        }
+
+        /// <summary>Raw per-objective credit count from the player descriptor (-1 if unreadable).</summary>
+        private static int ObjectiveCount(QuestTask task, LocalPlayer me)
+        {
+            var pq = me.QuestLog.GetAllQuests().FirstOrDefault(q => q.Id == (uint)task.QuestId);
+            if (pq != null && pq.GetData(out var data) && data.ObjectivesDone != null
+                && task.ObjectiveIndex >= 0 && task.ObjectiveIndex < data.ObjectivesDone.Length)
+                return data.ObjectivesDone[task.ObjectiveIndex];
+            return -1;
         }
 
         // --- helpers ---
@@ -322,6 +489,52 @@ namespace Bots.Vibes.VibeQuester2.Execution
             _objectiveAreaInstalled = true;
             Logging.Write("[VQ2-Task] objective area installed for q{0}/{1}: {2} spawn point(s), mob {3}.",
                 task.QuestId, task.ObjectiveIndex, spot.Hotspots.Count, task.Objective.MobId);
+        }
+
+        /// <summary>
+        /// At the turn-in NPC but the server says the quest isn't complete. If the quest handed us an
+        /// item on accept and every objective is report-only, it's a "use the provided item" quest (read
+        /// a book, blow a horn) — USE the item; a location-free use completes it on the spot and the
+        /// turn-in proceeds next tick. If it still won't complete after a few tries the mechanic needs
+        /// more than a bare use (a location/target/sequence v2 can't model) → record durable blacklist
+        /// knowledge and abandon so no run wastes the trip. Otherwise (no provided item, or a real
+        /// objective genuinely lagging) defer as before — the plan re-tours, the stall clock still bounds
+        /// a true wedge.
+        /// </summary>
+        private RunStatus TickNotReadyTurnIn(QuestTask task, LocalPlayer me)
+        {
+            QuestEntry qe = _db()?.Quests.FirstOrDefault(x => x.Id == task.QuestId);
+            bool reportOnly = qe != null && qe.Objectives.Count > 0
+                              && qe.Objectives.All(o => o.Type == ObjectiveType.TurnInOnly);
+            int startItem = qe?.StartItem ?? 0;
+            WoWItem carried = reportOnly && startItem > 0
+                ? me.CarriedItems.FirstOrDefault(i => i != null && i.Entry == (uint)startItem)
+                : null;
+
+            if (carried == null)
+            {
+                Advance("not ready to turn in yet");
+                _requestReplan();
+                return RunStatus.Running;
+            }
+
+            if (_useItemAttempts < MaxUseItemAttempts)
+            {
+                if (DateTime.UtcNow < _nextUseItemAt) return RunStatus.Running;   // pace attempts
+                if (me.IsMoving) WoWMovement.MoveStop();
+                Logging.Write("[VQ2-Task] q{0}: using provided item {1} to complete '{2}' (attempt {3}/{4}).",
+                    task.QuestId, startItem, task.QuestName, _useItemAttempts + 1, MaxUseItemAttempts);
+                carried.Use();
+                _useItemAttempts++;
+                _nextUseItemAt = DateTime.UtcNow.AddMilliseconds(UseItemPaceMs);
+                return RunStatus.Running;   // re-check readiness next tick
+            }
+
+            _planner.RecordPermanentBlacklist(task.QuestId, "use-item-location", "use-item-location",
+                "Provided item used at the turn-in but the quest stayed incomplete — needs a location/target/scripted use v2 can't model.",
+                string.Format("used item {0} x{1}; IsCompleteInLog stayed false", startItem, _useItemAttempts));
+            AbandonQuest(task, "unsupported use-item");
+            return RunStatus.Running;
         }
 
         private static bool QuestReadyToTurnIn(QuestTask task, LocalPlayer me)
@@ -421,6 +634,10 @@ namespace Bots.Vibes.VibeQuester2.Execution
             _deathsOnCurrentQuest = 0;
             _objectiveAreaInstalled = false;
             _trekMarkedFrom = WoWPoint.Empty;
+            _useItemAttempts = 0;
+            _nextUseItemAt = DateTime.MinValue;
+            _npcInteractAttempts = 0;
+            _triedItemsOnNpc = false;
             if (HasWork)
                 Logging.Write("[VQ2-Task] START {0} ({1}).", CurrentTask, why);
         }
