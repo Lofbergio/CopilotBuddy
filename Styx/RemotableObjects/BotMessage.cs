@@ -26,6 +26,7 @@ namespace Styx.RemotableObjects
 			LeaderInInstance = (bool)info.GetValue("LeaderInInstance", typeof(bool));
 			LeaderGhost = (bool)info.GetValue("LeaderGhost", typeof(bool));
 			LeaderBagsOpen = (bool)info.GetValue("LeaderBagsOpen", typeof(bool));
+			LeaderCastingSpellId = (int)info.GetValue("LeaderCastingSpellId", typeof(int));
 		}
 
 		public override string ToString()
@@ -49,6 +50,7 @@ namespace Styx.RemotableObjects
 			info.AddValue("LeaderInInstance", LeaderInInstance);
 			info.AddValue("LeaderGhost", LeaderGhost);
 			info.AddValue("LeaderBagsOpen", LeaderBagsOpen);
+			info.AddValue("LeaderCastingSpellId", LeaderCastingSpellId);
 		}
 
 		public void SetMessage(BotMessage message)
@@ -80,5 +82,8 @@ namespace Styx.RemotableObjects
 		public bool LeaderGhost;
 		// Bag-visibility sync: followers mirror the leader's open/closed bag UI.
 		public bool LeaderBagsOpen;
+		// Hearth sync: the leader's current (non-channeled) cast — followers hearth when it's a
+		// hearth-family spell, and cancel theirs if it disappears with the leader still standing there.
+		public int LeaderCastingSpellId;
 	}
 }

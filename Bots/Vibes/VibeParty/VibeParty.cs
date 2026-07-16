@@ -262,6 +262,78 @@ namespace VibeParty
 		}
 
 		// ──────────────────────────────────────────────────────────────────────
+		// Hearth sync — the leader hearthing means "the party goes home"
+		// ──────────────────────────────────────────────────────────────────────
+
+		private const int HearthstoneItemId = 6948;
+		// Hearthstone + Astral Recall (a shaman leader recalling still means "go home").
+		private static bool IsHearthCast(int spellId) => spellId == 8690 || spellId == 556;
+
+		private static bool _leaderWasHearthing;                              // edge detect on the leader's cast
+		private static DateTime _hearthPendingUntil = DateTime.MinValue;      // keep trying inside this window (combat/interrupt can defer a cast)
+		private static bool _hearthAttempted;                                 // this window used the stone (CD > 0 then = success, not "was already down")
+
+		// Edge-triggered on the leader's hearth cast, then a pending WINDOW rather than a one-shot:
+		// a follower mid-fight (or whose 10s cast gets interrupted) retries until the window closes.
+		// The stone's cooldown only starts on SUCCESS, so "attempted + now on cooldown" is the landed
+		// signal. ABORT MIRROR: our cast is up but the leader's is gone AND the leader still stands
+		// here (a real hearth removes it from the object manager) — cancel ours; hearthing without
+		// the leader strands the follower at the inn with no way back to the party.
+		private static void MirrorLeaderHearthTick()
+		{
+			if (_botMessage == null) return;
+			var me = StyxWoW.Me;
+			if (me == null || !me.IsValid) return;
+
+			bool leaderHearthing = IsHearthCast(_botMessage.LeaderCastingSpellId);
+			if (leaderHearthing && !_leaderWasHearthing)
+			{
+				_hearthPendingUntil = DateTime.UtcNow.AddSeconds(30);
+				_hearthAttempted = false;
+				Logging.Write("[VibeParty] leader is hearthing — following home.");
+			}
+			_leaderWasHearthing = leaderHearthing;
+
+			if (IsHearthCast(me.CastingSpellId))
+			{
+				if (!leaderHearthing)
+				{
+					WoWPlayer? leader = ObjectManager.GetObjectByGuid<WoWPlayer>(_botMessage.LeaderGuid);
+					if (leader != null && leader.Distance < 60)
+					{
+						Logging.Write("[VibeParty] leader cancelled its hearth — cancelling ours.");
+						Lua.DoString("SpellStopCasting()");
+						_hearthPendingUntil = DateTime.MinValue;
+					}
+				}
+				return;   // cast in flight — FollowLeader's cast-hold keeps us planted
+			}
+
+			if (DateTime.UtcNow >= _hearthPendingUntil) return;
+			if (me.Dead || me.IsGhost || me.Combat || me.IsCasting) return;   // window retries once these clear
+
+			WoWItem? hearth = me.BagItems?.FirstOrDefault(i => i != null && i.Entry == HearthstoneItemId);
+			if (hearth == null)
+			{
+				Logging.Write("[VibeParty] hearth sync: no Hearthstone in bags — staying put.");
+				_hearthPendingUntil = DateTime.MinValue;
+				return;
+			}
+			if (hearth.CooldownTimeLeft > TimeSpan.Zero)
+			{
+				if (!_hearthAttempted)
+					Logging.Write("[VibeParty] hearth sync: Hearthstone on cooldown ({0:F0}m) — staying put.",
+						hearth.CooldownTimeLeft.TotalMinutes);
+				_hearthPendingUntil = DateTime.MinValue;   // attempted + on CD = it landed; otherwise we can't go
+				return;
+			}
+			if (me.IsMoving) WoWMovement.MoveStop();
+			Logging.Write("[VibeParty] hearth sync: using Hearthstone.");
+			hearth.Use();
+			_hearthAttempted = true;
+		}
+
+		// ──────────────────────────────────────────────────────────────────────
 		// Synthetic profile — vendors/trainers resolve from data.bin
 		// ──────────────────────────────────────────────────────────────────────
 
@@ -464,6 +536,7 @@ namespace VibeParty
 				LoadMailboxesIfMapChanged();   // keep the synthetic profile's mailboxes on the current map
 				MirrorLeaderTeleportTick();    // LFG: match the leader's inside/outside-the-dungeon state
 				MirrorLeaderBagsTick();        // bag-visibility sync: leader's bags open ⇒ ours open
+				MirrorLeaderHearthTick();      // hearth sync: leader hearthing ⇒ we hearth (cancel if it cancels)
 				ProcessAbandonQueue();         // drop quests the leader abandoned (block set stops re-accepts)
 				PulseFollowBreak();            // executes queued /follow-break taps (press one pulse, release next)
 				if (StyxWoW.Me.Combat && !_wasInCombat) QueueFollowBreak();   // combat entry: break glue the moment WE are in combat
@@ -519,7 +592,8 @@ namespace VibeParty
 				Timestamp = DateTime.Now,
 				LeaderTargetGuid = me.CurrentTargetGuid,
 				LeaderInCombat = me.Combat,
-				LeaderBagsOpen = LeaderBagsOpenCached()
+				LeaderBagsOpen = LeaderBagsOpenCached(),
+				LeaderCastingSpellId = me.CastingSpellId
 			};
 		}
 
@@ -1296,6 +1370,15 @@ namespace VibeParty
 						break;
 					case "forcemail":
 						Logging.Write("VibeParty: Someone told me to mail.");
+						Vendors.ForceMail = true;
+						break;
+					case "vendor":
+						// The whole town errand in one word — the vendor tree resolves the rest
+						// (nearest sell/repair from data.bin, disposition sweeps, mail if a
+						// recipient is set; NeedToMail self-guards when it isn't).
+						Logging.Write("VibeParty: leader said vendor — forcing a sell/repair/mail run.");
+						Vendors.ForceSell = true;
+						Vendors.ForceRepair = true;
 						Vendors.ForceMail = true;
 						break;
 					case "dismount":
