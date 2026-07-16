@@ -1722,6 +1722,13 @@ namespace VibeParty
 		// neutral). Excludes the leader's friendly target (e.g. a healer-leader's heal target).
 		private static WoWUnit? LeaderAssistTarget()
 		{
+			// Tier 0 — "kill the runner!": a fleeing, execute-range mob on the party's threat table
+			// outranks even the leader's pull. The tank never retargets a runner while the pack hits
+			// him — peeling it is exactly the followers' job: it dies in a GCD or two, and left alone
+			// it comes back with friends.
+			WoWUnit? runner = PartyDefenseTarget(runnersOnly: true);
+			if (runner != null) return runner;
+
 			// Tier 1 — the leader's target, only while the leader is actually IN combat (pull is on),
 			// not while it's just targeting a mob to mark/inspect. This keeps organized pulls real.
 			if (_botMessage != null && _botMessage.LeaderInCombat && _botMessage.LeaderTargetGuid != 0)
@@ -1736,9 +1743,13 @@ namespace VibeParty
 		}
 
 		private const float DefenseEngageRange = 40f;   // assist-range norm; keeps stray far aggro from dragging the party
+		// Natural flee starts at ≤~25% hp; the gate keeps CC-feared healthy mobs (a priest's Psychic
+		// Scream peel carries the same unit flag) from being nuked back awake, while every genuine
+		// runner passes.
+		private const float RunnerHealthPct = 35f;
 		private static DateTime _defenseLogAt = DateTime.MinValue;
 
-		private static WoWUnit? PartyDefenseTarget()
+		private static WoWUnit? PartyDefenseTarget(bool runnersOnly = false)
 		{
 			LocalPlayer me = StyxWoW.Me;
 			bool inParty = me.IsInParty;
@@ -1754,6 +1765,7 @@ namespace VibeParty
 			{
 				if (u == null || u.Dead || !u.Combat || !u.Attackable) continue;
 				if (!u.IsHostile && !u.IsNeutral) continue;
+				if (runnersOnly && (!u.Fleeing || u.HealthPercent >= RunnerHealthPct)) continue;
 				double d = u.Distance;
 				if (d > DefenseEngageRange || d >= bestDist) continue;
 				bool onParty = guids.Contains(u.CurrentTargetGuid);
@@ -1767,8 +1779,13 @@ namespace VibeParty
 			if (best != null && DateTime.UtcNow > _defenseLogAt.AddSeconds(5))
 			{
 				_defenseLogAt = DateTime.UtcNow;
-				WoWUnit? victim = ObjectManager.GetObjectByGuid<WoWUnit>(best.CurrentTargetGuid);
-				Logging.Write("VibeParty: defending {0} — engaging {1}.", victim != null ? victim.Name : "the party", best.Name);
+				if (runnersOnly)
+					Logging.Write("VibeParty: killing the runner — {0} ({1:0}%).", best.Name, best.HealthPercent);
+				else
+				{
+					WoWUnit? victim = ObjectManager.GetObjectByGuid<WoWUnit>(best.CurrentTargetGuid);
+					Logging.Write("VibeParty: defending {0} — engaging {1}.", victim != null ? victim.Name : "the party", best.Name);
+				}
 			}
 			return best;
 		}
