@@ -1448,15 +1448,15 @@ namespace Bots.Grind
             );
         }
 
-        // Throttled decision-reasoning log: re-emits a given decision only when its message CHANGES or after 8s,
-        // so the per-tick Need*/vendor gates can show WHY they decided without spamming the log every frame.
-        private static readonly Dictionary<string, (string msg, DateTime when)> _decisionLast =
-            new Dictionary<string, (string, DateTime)>();
+        // Edge-triggered decision-reasoning log: a decision re-emits ONLY when its message changes.
+        // The messages embed the live numbers, so every real transition logs itself; an unchanged
+        // steady state ("no", all night) logs once and stays silent.
+        private static readonly Dictionary<string, string> _decisionLast = new Dictionary<string, string>();
         private static void LogDecision(string key, string msg)
         {
-            if (_decisionLast.TryGetValue(key, out var prev) && prev.msg == msg && (DateTime.Now - prev.when).TotalSeconds < 8.0)
+            if (_decisionLast.TryGetValue(key, out var prev) && prev == msg)
                 return;
-            _decisionLast[key] = (msg, DateTime.Now);
+            _decisionLast[key] = msg;
             Logging.WriteDebug(msg);
         }
 
@@ -2015,6 +2015,7 @@ namespace Bots.Grind
             _repairCostTimer.Reset();
             _lastRepairCost = 0;
             _lowDuraPolls = 0;
+            _decisionLast.Clear();   // each run's log re-states the initial Need* decisions
             ShouldUseSpiritHealer = false;
         }
 
