@@ -83,6 +83,23 @@ namespace Bots.Vibes.Shared
                 return QuestInteractOutcome.Retry;
             }
 
+            // Greeting panel (non-gossip multi-quest giver): select our quest by title (the greeting
+            // API has no ids on 3.3.5a) — the detail panel's shown-id check below verifies the pick.
+            if (GreetingShown())
+            {
+                int gi = FindGreetingIndex(actives: false, questName);
+                if (gi <= 0)
+                {
+                    Logging.Write("{0} pickup q{1} '{2}': {3} does not OFFER it (greeting has no matching entry).",
+                        logTag, questId, questName, giver.Name);
+                    QuestFrame.Instance.Close();
+                    return QuestInteractOutcome.NotOffered;
+                }
+                Lua.DoString("SelectAvailableQuest({0})", gi);
+                if (!WaitState(() => ShownQuestId() != 0 || !QuestFrame.Instance.IsVisible, FrameOpenTimeoutMs))
+                    return QuestInteractOutcome.Retry;
+            }
+
             uint shown = ShownQuestId();
             if (shown != 0 && shown != (uint)questId)
             {
@@ -149,6 +166,23 @@ namespace Bots.Vibes.Shared
 
                 if (!QuestFrame.Instance.IsVisible)
                     return QuestInteractOutcome.Retry;   // frame died without completion — re-approach
+
+                // Greeting panel (fresh window, or the window fell back to it after another quest):
+                // select our active entry by title; absence is the server's "not turn-in-able here".
+                if (GreetingShown() && ShownQuestId() == 0)
+                {
+                    int gi = FindGreetingIndex(actives: true, questName);
+                    if (gi <= 0)
+                    {
+                        Logging.Write("{0} turn-in q{1} '{2}': {3} does not TAKE it (greeting has no matching active entry).",
+                            logTag, questId, questName, ender.Name);
+                        QuestFrame.Instance.Close();
+                        return QuestInteractOutcome.NotOffered;
+                    }
+                    Lua.DoString("SelectActiveQuest({0})", gi);
+                    WaitState(() => ShownQuestId() != 0 || !QuestFrame.Instance.IsVisible, FrameOpenTimeoutMs);
+                    continue;
+                }
 
                 uint shown = ShownQuestId();
                 if (shown != 0 && shown != (uint)questId)
@@ -228,6 +262,23 @@ namespace Bots.Vibes.Shared
                 Logging.Write("{0} chained offer q{1} after q{2}: declined (failed screen).", logTag, shown, completedId);
                 QuestFrame.Instance.DeclineQuest();
             }
+        }
+
+        private static bool GreetingShown()
+            => Lua.GetReturnVal<int>("return (QuestFrameGreetingPanel and QuestFrameGreetingPanel:IsShown()) and 1 or 0", 0U) == 1;
+
+        /// <summary>1-based greeting-panel select index by title match — the greeting API exposes no
+        /// quest ids on 3.3.5a, so the caller must verify the resulting detail/progress panel's id.</summary>
+        private static int FindGreetingIndex(bool actives, string questTitle)
+        {
+            string fn = actives ? "Active" : "Available";
+            string list = Lua.GetReturnVal<string>(
+                "local r = '' for i = 1, GetNum" + fn + "Quests() do r = r .. (Get" + fn + "Title(i) or '') .. '\\2' end return r", 0U) ?? "";
+            string[] titles = list.Split(new[] { '\x02' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < titles.Length; i++)
+                if (string.Equals(titles[i], questTitle, StringComparison.OrdinalIgnoreCase))
+                    return i + 1;
+            return 0;
         }
 
         private static bool OpenInteraction(WoWObject entity, int questId, string logTag)
