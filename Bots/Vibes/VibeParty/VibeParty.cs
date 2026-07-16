@@ -1477,6 +1477,7 @@ namespace VibeParty
 			// (1) Cast-hold: moving cancels a hardcast (instants don't set IsCasting, so they never block).
 			if (StyxWoW.Me.IsCasting)
 			{
+				MoveMode("cast-hold");
 				if (StyxWoW.Me.IsMoving)
 					WoWMovement.MoveStop();
 				return;
@@ -1491,21 +1492,27 @@ namespace VibeParty
 			// moment combat starts. No assist target yet (leader lining up / friendly target) → close on the leader.
 			// Me.Combat too: a follower with its own aggro (leader already done) must never glue itself to the
 			// leader mid-fight — a ranged toon dragged sub-melee loses its whole kit (hunter dead zone).
-			if (_botMessage.LeaderInCombat || StyxWoW.Me.Combat)
+			// LIVE party combat too: LeaderInCombat is a bus message and lags the fight — in that stale window
+			// the glue below dragged a ranged follower to 2yd behind the fighting tank (melee of its mob).
+			if (_botMessage.LeaderInCombat || StyxWoW.Me.Combat || StyxWoW.Me.PartyMembers.Any(p => p.Combat))
 			{
 				WoWUnit? assist = LeaderAssistTarget();
 				WoWPoint dest = assist != null ? assist.Location : LeaderLocation;
-				double stopRange = assist != null ? Targeting.PullDistance : VibePartySettings.Instance.FollowDistance;
+				// Close-on-leader stops at PullDistance too: the leader is toe-to-toe with its mob, and
+				// FollowDistance (default 5) walks a ranged follower straight into the camp.
+				double stopRange = Targeting.PullDistance;
 				// Same hysteresis as AssistTargetBeyondRange — this stop is level-triggered, so without the
 				// latch a jittering tanked mob becomes a MoveTo/MoveStop-per-tick stutter.
 				if (_followClosing) stopRange -= PosSlack(stopRange);
 				if (dest.Distance(StyxWoW.Me.Location) > stopRange)
 				{
+					MoveMode("combat approach → " + (assist != null ? assist.Name : "leader"));
 					_followClosing = true;
 					Navigator.MoveTo(dest);
 				}
 				else
 				{
+					MoveMode(assist != null ? "combat hold (in range of " + assist.Name + ")" : "combat hold (near leader)");
 					_followClosing = false;
 					if (StyxWoW.Me.IsMoving)
 						WoWMovement.MoveStop();
@@ -1517,6 +1524,7 @@ namespace VibeParty
 			// the leader drifts. Downtime only — combat above already took priority. 2026-07-07 user directive.
 			if (RoutineManager.Current != null && RoutineManager.Current.NeedRest)
 			{
+				MoveMode("rest hold");
 				if (StyxWoW.Me.IsMoving)
 					WoWMovement.MoveStop();
 				return;
@@ -1525,6 +1533,7 @@ namespace VibeParty
 			// (4) Awaiting a water handoff → hold still so the party mage can reach and trade us.
 			if (_partyWater != null && _partyWater.AwaitingWater)
 			{
+				MoveMode("water-handoff hold");
 				if (StyxWoW.Me.IsMoving)
 					WoWMovement.MoveStop();
 				return;
@@ -1538,6 +1547,7 @@ namespace VibeParty
 			// world keeps the gate (FollowDistance spacing is the point there).
 			if (!StyxWoW.Me.IsInInstance && leader != null && leader.Distance <= VibePartySettings.Instance.FollowDistance)
 			{
+				MoveMode("idle near leader");
 				if (!leader.Mounted)
 					Mount.Dismount("Leader is not mounted");
 				if (leader.CastingSpell != null)
@@ -1570,25 +1580,30 @@ namespace VibeParty
 
 				if ((leader.IsFlying || leader.IsSwimming) && leader.InLineOfSight)
 				{
+					MoveMode("ctm chase (leader flying/swimming)");
 					WoWMovement.ClickToMove(LeaderLocation);
 				}
 				else if (StyxWoW.Me.IsInInstance)
 				{
+					MoveMode("instance follow");
 					InstanceFollow(leader, ctmActive);
 				}
 				else if (leader.Distance <= 20.0 && leader.InLineOfSight)
 				{
+					MoveMode("native /follow " + leader.Name);
 					if (!ctmActive)
 						Lua.DoString(string.Format("FollowUnit('{0}', true)", leader.Name));
 				}
 				else if (leader.Distance >= VibePartySettings.Instance.FollowDistance)
 				{
 					// Out of range or no LoS: mesh-nav to catch up; native follow resumes in range.
+					MoveMode("mesh catch-up to leader");
 					Navigator.MoveTo(LeaderLocation);
 				}
 			}
 			else
 			{
+				MoveMode("mesh catch-up to leader (no object)");
 				Navigator.MoveTo(LeaderLocation);
 			}
 		}
@@ -1870,7 +1885,15 @@ namespace VibeParty
 									new Decorator(ctx => AssistTargetBeyondRange(),
 										new Sequence(
 											new ActionSetActivity("Positioning"),
-											new TreeSharp.Action(ctx => { _posApproaching = true; }),
+											new TreeSharp.Action(ctx =>
+											{
+												if (!_posApproaching)
+												{
+													WoWUnit? t = LeaderAssistTarget();
+													MoveMode(string.Format("positioning → {0} ({1:0}yd)", t?.Name, t?.Distance ?? 0));
+												}
+												_posApproaching = true;
+											}),
 											new NavigationAction(ctx => LeaderAssistTargetLocation())
 										)
 									),
@@ -1879,7 +1902,7 @@ namespace VibeParty
 										{
 											_posApproaching = false;
 											WoWMovement.MoveStop();
-											Logging.WriteDebug("VibeParty: in position — stopping approach");
+											MoveMode("in position — stopping approach");
 											return RunStatus.Success;
 										})),
 									// Approach ended without coasting (nav stopped itself) — just clear the flag.
@@ -1891,7 +1914,11 @@ namespace VibeParty
 							// the target-relative positioning above owns movement in that case).
 							new Decorator(ctx => LeaderAssistTarget() == null && BotPoi.Current.AsObject != null && BotPoi.Current.AsObject.Distance > Targeting.PullDistance,
 								new Sequence(
-									new TreeSharp.Action(ctx => TreeRoot.StatusText = "Moving to target"),
+									new TreeSharp.Action(ctx =>
+									{
+										TreeRoot.StatusText = "Moving to target";
+										MoveMode("poi approach → " + BotPoi.Current.AsObject!.Name);
+									}),
 									new NavigationAction(ctx => BotPoi.Current.AsObject!.Location)
 								)
 							),
@@ -2804,6 +2831,17 @@ namespace VibeParty
 		private static BotMessage? _botMessage;
 		private static bool _combatEntryStopDone;   // one-shot follow-glue kill on combat entry (reset OOC)
 		private static bool _followClosing;         // FollowLeader combat approach latch (boundary-parking hysteresis)
+
+		// Movement narrator: one debug line per movement-mode CHANGE, never per tick — every movement
+		// decision must be attributable from the log, or stutter bugs are unfalsifiable. Two authorities
+		// fighting over the character shows up as this line flapping between two modes.
+		private static string _moveMode = "";
+		private static void MoveMode(string mode)
+		{
+			if (mode == _moveMode) return;
+			_moveMode = mode;
+			Logging.WriteDebug("VibeParty[move]: " + mode);
+		}
 		private static bool _posApproaching;        // our positioning approach is the active movement
 		private static readonly WaitTimer _waitTimer0 = WaitTimer.TenSeconds;
 		private static readonly WaitTimer _waitTimer1 = new WaitTimer(TimeSpan.FromMinutes(3.0));
