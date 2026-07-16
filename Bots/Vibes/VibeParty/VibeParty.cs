@@ -464,6 +464,9 @@ namespace VibeParty
 				MirrorLeaderTeleportTick();    // LFG: match the leader's inside/outside-the-dungeon state
 				MirrorLeaderBagsTick();        // bag-visibility sync: leader's bags open ⇒ ours open
 				ProcessAbandonQueue();         // drop quests the leader abandoned (block set stops re-accepts)
+				PulseFollowBreak();            // executes queued /follow-break taps (press one pulse, release next)
+				if (StyxWoW.Me.Combat && !_wasInCombat) QueueFollowBreak();   // combat entry: break glue the moment WE are in combat
+				_wasInCombat = StyxWoW.Me.Combat;
 				RestEntryFollowBreak();        // one backward step on rest entry kills stationary follow glue
 				// Party-rez death bookkeeping: stamp death time; clear the wait latches on revive.
 				if (StyxWoW.Me.Dead || StyxWoW.Me.IsGhost) { if (_deadSince == DateTime.MinValue) _deadSince = DateTime.UtcNow; }
@@ -475,8 +478,8 @@ namespace VibeParty
 					if (manaPct < 10 && !_oomWhispered) { _oomWhispered = true; WhisperLeader("OOM"); Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] healer OOM — whispered leader."); }
 					else if (manaPct > 30) _oomWhispered = false;
 				}
-				// Re-arm the per-fight movement one-shots the moment we drop out of combat state.
-				if (!IsInCombatState()) { _combatEntryStopDone = false; _posApproaching = false; }
+				// Re-arm the per-fight follow-break one-shot the moment we drop out of combat state.
+				if (!IsInCombatState()) _combatEntryStopDone = false;
 			}
 		}
 
@@ -1483,27 +1486,26 @@ namespace VibeParty
 				return;
 			}
 
-			// (2) Combat initiated → NEVER native-/follow. Native follow is a client-side persistent glue to
-			// the LEADER's position; it fights the routine's target-relative positioning, and a melee follower
-			// in the approach window (not yet in combat state) trails the tank right PAST its own target. Instead
-			// mesh-navigate toward the fight for LoS/range — bot-driven nav the combat branch's positioning takes
-			// over the instant we're in combat state (which the approach into pull-range of the leader triggers).
-			// Was ranged-only (a Charge/Intercept peel); 2026-07-07 user directive: stop follow for ALL roles the
-			// moment combat starts. No assist target yet (leader lining up / friendly target) → close on the leader.
-			// Me.Combat too: a follower with its own aggro (leader already done) must never glue itself to the
-			// leader mid-fight — a ranged toon dragged sub-melee loses its whole kit (hunter dead zone).
-			// The leader's LIVE combat too: LeaderInCombat is a bus message and lags the fight — in that
-			// stale window the glue below dragged a ranged follower to 2yd behind the fighting tank.
+			// (2) OWN combat → the ROUTINE owns all movement (user directive 2026-07-16); the combat-entry
+			// tap already broke any /follow glue. Hands off — no approach, no hold, no MoveStop.
+			if (StyxWoW.Me.Combat)
+			{
+				MoveMode("combat — routine owns movement");
+				return;
+			}
+			// (2b) Leader fighting, we're not → NEVER native-/follow (glue walks to 2yd behind the fighting
+			// tank = melee of its mob); mesh-navigate toward the fight instead, and the combat branch takes
+			// over on combat entry. LeaderInCombat is a bus message and lags the fight — read the leader's
+			// live OM combat too. No assist target yet (leader lining up / friendly target) → close on the
+			// leader at the user's FollowDistance (that knob is authoritative spacing intent).
 			WoWPlayer? leaderUnit = ObjectManager.GetObjectByGuid<WoWPlayer>(_botMessage.LeaderGuid);
-			if (_botMessage.LeaderInCombat || StyxWoW.Me.Combat || (leaderUnit != null && leaderUnit.Combat))
+			if (_botMessage.LeaderInCombat || (leaderUnit != null && leaderUnit.Combat))
 			{
 				WoWUnit? assist = LeaderAssistTarget();
 				WoWPoint dest = assist != null ? assist.Location : LeaderLocation;
-				// Mob-relative stop is PullDistance; leader-relative is the user's FollowDistance —
-				// that knob is authoritative spacing intent, combat must not override it.
 				double stopRange = assist != null ? Targeting.PullDistance : VibePartySettings.Instance.FollowDistance;
-				// Same hysteresis as AssistTargetBeyondRange — this stop is level-triggered, so without the
-				// latch a jittering tanked mob becomes a MoveTo/MoveStop-per-tick stutter.
+				// Hysteresis: this stop is level-triggered, so without the latch a jittering tanked mob
+				// becomes a MoveTo/MoveStop-per-tick stutter.
 				if (_followClosing) stopRange -= PosSlack(stopRange);
 				if (dest.Distance(StyxWoW.Me.Location) > stopRange)
 				{
@@ -1618,23 +1620,39 @@ namespace VibeParty
 		// Lives in Pulse, not the tree: a release inside a tree branch can be orphaned mid-step and leave
 		// the walk key held forever (the GVHunter run-7 moonwalk).
 		private static bool _restStepDone;
-		private static bool _restStepHeld;
 
 		private static void RestEntryFollowBreak()
 		{
-			if (_restStepHeld)
-			{
-				_restStepHeld = false;
-				WoWMovement.MoveStop(WoWMovement.MovementDirection.Backwards);
-				return;
-			}
 			bool needRest = RoutineManager.Current != null && RoutineManager.Current.NeedRest;
 			if (!needRest) { _restStepDone = false; return; }
 			if (_restStepDone) return;
 			var me = StyxWoW.Me;
 			if (me.Combat || me.IsCasting || me.Mounted || me.HasAura("Drink") || me.HasAura("Food")) return;
 			_restStepDone = true;
-			_restStepHeld = true;
+			QueueFollowBreak();
+		}
+
+		// The /follow break tap: /follow has no cancel API — only a movement INPUT breaks it (MoveStop
+		// does nothing for glue armed while stationary). Press Backwards one pulse, release the next;
+		// the release lives in Pulse so it can't be orphaned (the GVHunter run-7 moonwalk).
+		private static bool _followBreakQueued;
+		private static bool _followBreakHeld;
+
+		private static void QueueFollowBreak() => _followBreakQueued = true;
+
+		private static void PulseFollowBreak()
+		{
+			if (_followBreakHeld)
+			{
+				_followBreakHeld = false;
+				WoWMovement.MoveStop(WoWMovement.MovementDirection.Backwards);
+				return;
+			}
+			// Defer while casting — the tap is a movement input and would cancel a hardcast; a casting
+			// character is stationary, so the glue isn't dragging it anywhere meanwhile.
+			if (!_followBreakQueued || StyxWoW.Me.IsCasting) return;
+			_followBreakQueued = false;
+			_followBreakHeld = true;
 			WoWMovement.Move(WoWMovement.MovementDirection.Backwards);
 		}
 
@@ -1732,22 +1750,6 @@ namespace VibeParty
 		// tanked mob jitters ±1-2yd — every wiggle re-triggers a one-step approach (stutter-step). While
 		// approaching, close the slack inside; slack shrinks with the range so FollowDistance never hits 0.
 		private static double PosSlack(double range) => Math.Min(4.0, range * 0.4);
-
-		private static bool AssistTargetBeyondRange()
-		{
-			WoWUnit? t = LeaderAssistTarget();
-			if (t == null) return false;
-			double r = Targeting.PullDistance;
-			if (_posApproaching) r -= PosSlack(r);
-			return t.Distance > r;
-		}
-
-		// Location of the assist target, or our own spot (a no-op move) when there isn't one.
-		private static WoWPoint LeaderAssistTargetLocation()
-		{
-			WoWUnit? t = LeaderAssistTarget();
-			return t != null ? t.Location : StyxWoW.Me.Location;
-		}
 
 		// ──────────────────────────────────────────────────────────────────────
 		// Combat behavior — smethod_5
@@ -1851,19 +1853,16 @@ namespace VibeParty
 					// In combat — smethod_57
 					new Decorator(ctx => IsInCombatState(),
 						new PrioritySelector(
-							// Combat entry, ONE SHOT: kill any live native-/follow glue (it's client-persistent —
-							// left alive it drags us all fight and fights the routine's positioning). After this,
-							// movement belongs to the positioning below and to the ROUTINE (backpedal, AoE dodge,
-							// Blink) — nothing here may stop it again. Flag resets out of combat state (Pulse).
+							// Combat entry, ONE SHOT: break any /follow glue (client-persistent, no cancel API —
+							// only a movement INPUT breaks it; MoveStop does nothing for glue armed while
+							// stationary). In combat the ROUTINE owns all movement (user directive 2026-07-16) —
+							// nothing in this branch may move or stop the character.
 							new Decorator(ctx => !_combatEntryStopDone,
 								new TreeSharp.Action(ctx =>
 								{
 									_combatEntryStopDone = true;
-									if (StyxWoW.Me.IsMoving)
-									{
-										WoWMovement.MoveStop();
-										Logging.WriteDebug("VibeParty: combat entry — cancelling follow/movement");
-									}
+									QueueFollowBreak();
+									Logging.WriteDebug("VibeParty: combat entry — breaking follow");
 									return RunStatus.Failure;   // free action — never eats the pass
 								})),
 							// Assist the leader — focus-fire its target so the routine always has an
@@ -1873,46 +1872,8 @@ namespace VibeParty
 							// Dismount if needed
 							new Decorator(ctx => StyxWoW.Me.Mounted,
 								new TreeSharp.Action(ctx => Mount.Dismount("Combat"))),
-							// Combat positioning — hold at the routine's engagement range from the ASSIST
-							// TARGET (not the tank): ranged stay at spell range, melee close to melee, and
-							// nobody chases a Charge into the pack. Approach when beyond range; stop ONCE
-							// when OUR OWN approach crosses into range so ranged don't coast into melee.
-							// EDGE-triggered on _posApproaching: movement we didn't start (routine backpedal,
-							// AoE dodge, Blink reposition) is the routine's commitment — leave it alone; a
-							// level-triggered stop here pinned a hunter in its dead zone. Not while casting.
-							// In range + stopped, this falls through to Heal/Buff/Combat below.
-							new Decorator(ctx => LeaderAssistTarget() != null && !StyxWoW.Me.IsCasting,
-								new PrioritySelector(
-									new Decorator(ctx => AssistTargetBeyondRange(),
-										new Sequence(
-											new ActionSetActivity("Positioning"),
-											new TreeSharp.Action(ctx =>
-											{
-												if (!_posApproaching)
-												{
-													WoWUnit? t = LeaderAssistTarget();
-													MoveMode(string.Format("positioning → {0} ({1:0}yd)", t?.Name, t?.Distance ?? 0));
-												}
-												_posApproaching = true;
-											}),
-											new NavigationAction(ctx => LeaderAssistTargetLocation())
-										)
-									),
-									new Decorator(ctx => _posApproaching && StyxWoW.Me.IsMoving,
-										new TreeSharp.Action(ctx =>
-										{
-											_posApproaching = false;
-											WoWMovement.MoveStop();
-											MoveMode("in position — stopping approach");
-											return RunStatus.Success;
-										})),
-									// Approach ended without coasting (nav stopped itself) — just clear the flag.
-									new Decorator(ctx => _posApproaching,
-										new TreeSharp.Action(ctx => { _posApproaching = false; return RunStatus.Failure; }))
-								)
-							),
 							// Move to POI target if too far (grind-style; skipped when assisting a leader —
-							// the target-relative positioning above owns movement in that case).
+							// the routine's own approach owns movement in that case).
 							new Decorator(ctx => LeaderAssistTarget() == null && BotPoi.Current.AsObject != null && BotPoi.Current.AsObject.Distance > Targeting.PullDistance,
 								new Sequence(
 									new TreeSharp.Action(ctx =>
@@ -2843,7 +2804,7 @@ namespace VibeParty
 			_moveMode = mode;
 			Logging.WriteDebug("VibeParty[move]: " + mode);
 		}
-		private static bool _posApproaching;        // our positioning approach is the active movement
+		private static bool _wasInCombat;           // Pulse edge for the combat-entry follow-break tap
 		private static readonly WaitTimer _waitTimer0 = WaitTimer.TenSeconds;
 		private static readonly WaitTimer _waitTimer1 = new WaitTimer(TimeSpan.FromMinutes(3.0));
 		private static readonly Dictionary<ulong, DateTime> _turnInCooldown = new Dictionary<ulong, DateTime>();
