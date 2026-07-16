@@ -1496,10 +1496,20 @@ namespace VibeParty
 				WoWUnit? assist = LeaderAssistTarget();
 				WoWPoint dest = assist != null ? assist.Location : LeaderLocation;
 				double stopRange = assist != null ? Targeting.PullDistance : VibePartySettings.Instance.FollowDistance;
+				// Same hysteresis as AssistTargetBeyondRange — this stop is level-triggered, so without the
+				// latch a jittering tanked mob becomes a MoveTo/MoveStop-per-tick stutter.
+				if (_followClosing) stopRange -= PosSlack(stopRange);
 				if (dest.Distance(StyxWoW.Me.Location) > stopRange)
+				{
+					_followClosing = true;
 					Navigator.MoveTo(dest);
-				else if (StyxWoW.Me.IsMoving)
-					WoWMovement.MoveStop();
+				}
+				else
+				{
+					_followClosing = false;
+					if (StyxWoW.Me.IsMoving)
+						WoWMovement.MoveStop();
+				}
 				return;
 			}
 
@@ -1702,10 +1712,18 @@ namespace VibeParty
 
 		private static void AssistLeaderTarget() => LeaderAssistTarget()?.Target();
 
+		// Hysteresis: stopping at the first tick inside range parks us ON the re-trigger boundary, and a
+		// tanked mob jitters ±1-2yd — every wiggle re-triggers a one-step approach (stutter-step). While
+		// approaching, close the slack inside; slack shrinks with the range so FollowDistance never hits 0.
+		private static double PosSlack(double range) => Math.Min(4.0, range * 0.4);
+
 		private static bool AssistTargetBeyondRange()
 		{
 			WoWUnit? t = LeaderAssistTarget();
-			return t != null && t.Distance > Targeting.PullDistance;
+			if (t == null) return false;
+			double r = Targeting.PullDistance;
+			if (_posApproaching) r -= PosSlack(r);
+			return t.Distance > r;
 		}
 
 		// Location of the assist target, or our own spot (a no-op move) when there isn't one.
@@ -2785,6 +2803,7 @@ namespace VibeParty
 		// Static state
 		private static BotMessage? _botMessage;
 		private static bool _combatEntryStopDone;   // one-shot follow-glue kill on combat entry (reset OOC)
+		private static bool _followClosing;         // FollowLeader combat approach latch (boundary-parking hysteresis)
 		private static bool _posApproaching;        // our positioning approach is the active movement
 		private static readonly WaitTimer _waitTimer0 = WaitTimer.TenSeconds;
 		private static readonly WaitTimer _waitTimer1 = new WaitTimer(TimeSpan.FromMinutes(3.0));
