@@ -1722,12 +1722,55 @@ namespace VibeParty
 		// neutral). Excludes the leader's friendly target (e.g. a healer-leader's heal target).
 		private static WoWUnit? LeaderAssistTarget()
 		{
-			// Commit only when the leader is actually IN combat (pull is on) — not while it's just
-			// targeting a mob to mark/inspect/line up a pull. This is what keeps organized pulls real.
-			if (_botMessage == null || !_botMessage.LeaderInCombat || _botMessage.LeaderTargetGuid == 0) return null;
-			WoWUnit? t = ObjectManager.GetObjectByGuid<WoWUnit>(_botMessage.LeaderTargetGuid);
-			if (t == null || t.Dead || !t.Attackable || !(t.IsHostile || t.IsNeutral)) return null;
-			return t;
+			// Tier 1 — the leader's target, only while the leader is actually IN combat (pull is on),
+			// not while it's just targeting a mob to mark/inspect. This keeps organized pulls real.
+			if (_botMessage != null && _botMessage.LeaderInCombat && _botMessage.LeaderTargetGuid != 0)
+			{
+				WoWUnit? t = ObjectManager.GetObjectByGuid<WoWUnit>(_botMessage.LeaderTargetGuid);
+				if (t != null && !t.Dead && t.Attackable && (t.IsHostile || t.IsNeutral)) return t;
+			}
+			// Tier 2 — party defense: a mob already fighting ANY member (or a member's pet) is party
+			// business whether or not the human leader ever targets it. Before this, only the aggroed
+			// bot fought while the rest stood watching.
+			return PartyDefenseTarget();
+		}
+
+		private const float DefenseEngageRange = 40f;   // assist-range norm; keeps stray far aggro from dragging the party
+		private static DateTime _defenseLogAt = DateTime.MinValue;
+
+		private static WoWUnit? PartyDefenseTarget()
+		{
+			LocalPlayer me = StyxWoW.Me;
+			bool inParty = me.IsInParty;
+			bool inRaid = me.IsInRaid;
+			if (!inParty && !inRaid) return null;
+
+			var guids = new HashSet<ulong>(inRaid ? me.RaidMemberGuids : me.PartyMemberGuids) { me.Guid };
+			List<WoWPlayer>? members = inParty ? me.PartyMembers : inRaid ? me.RaidMembers : null;
+
+			WoWUnit? best = null;
+			double bestDist = double.MaxValue;
+			foreach (WoWUnit u in ObjectManager.GetObjectsOfType<WoWUnit>(false, false))
+			{
+				if (u == null || u.Dead || !u.Combat || !u.Attackable) continue;
+				if (!u.IsHostile && !u.IsNeutral) continue;
+				double d = u.Distance;
+				if (d > DefenseEngageRange || d >= bestDist) continue;
+				bool onParty = guids.Contains(u.CurrentTargetGuid);
+				if (!onParty && members != null)
+					foreach (WoWPlayer member in members)
+						if (IsMemberThreatened(member, u)) { onParty = true; break; }
+				if (!onParty) continue;
+				bestDist = d;
+				best = u;
+			}
+			if (best != null && DateTime.UtcNow > _defenseLogAt.AddSeconds(5))
+			{
+				_defenseLogAt = DateTime.UtcNow;
+				WoWUnit? victim = ObjectManager.GetObjectByGuid<WoWUnit>(best.CurrentTargetGuid);
+				Logging.Write("VibeParty: defending {0} — engaging {1}.", victim != null ? victim.Name : "the party", best.Name);
+			}
+			return best;
 		}
 
 		private static bool ShouldAssistLeaderTarget()
