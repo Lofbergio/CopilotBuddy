@@ -94,6 +94,7 @@ namespace VibeParty
 			// VibeParty (DiscoBot keeps that one); disable LeaderPlugin so :1337 and our :1338 don't both run.
 			if (VibePartySettings.Instance.IsLeader)
 			{
+				_leaderHelpShown = false;   // re-print the command help on each bot start
 				DisableLeaderPluginIfEnabled();
 				if (_bus == null)
 				{
@@ -522,6 +523,7 @@ namespace VibeParty
 				AutoInviteTick();   // party-form: invite every live bus member that isn't grouped yet
 				_partyWater?.WaterTick();   // requester side only: the leader asks for water when out
 				QuestAbandonSyncTick(bus);  // abandoned (NOT completed) quests propagate to the party
+				ShowLeaderCommandsOnFirstStep();   // one-shot in-game help once the human starts moving
 				if ((DateTime.Now - _rezBrokerAt).TotalSeconds >= 2) { _rezBrokerAt = DateTime.Now; RezBrokerTick(bus); }  // party-rez broker (runs while dead)
 			}
 			else
@@ -1327,12 +1329,46 @@ namespace VibeParty
 		// Party chat handler — method_1
 		// ──────────────────────────────────────────────────────────────────────
 
+		// In-game help for the human driving the leader: the command list below, printed to the
+		// leader's own chat frame (local AddMessage — nothing goes to the server or the party).
+		// One-shot per bot start, deferred to the first STEP so it lands after the login/load
+		// spam instead of scrolling away with it. ⚠ Keep in sync with the OnPartyChat switch.
+		private static bool _leaderHelpShown;
+
+		private static void ShowLeaderCommandsOnFirstStep()
+		{
+			if (_leaderHelpShown || !StyxWoW.Me.IsMoving) return;
+			_leaderHelpShown = true;
+			const string c = "|cff7fd5ff";   // command colour
+			const string d = "|cffb0b0b0";   // description colour
+			string[] lines =
+			{
+				"|cff33ff99VibeParty|r - party chat commands (type in /p):",
+				c + "!vendor|r " + d + "- everyone runs its town errand: sell + repair + mail|r",
+				c + "!forcesell !forcerepair !forcemail !forcetrain|r " + d + "- the individual errands|r",
+				c + "!follow|r " + d + "- clear any hold and snap everyone to /follow|r",
+				c + "!wait|r " + d + "- toggle hold-position|r",
+				c + "!mountup !dismount|r " + d + "- mount / dismount everyone|r",
+				c + "!interact|r " + d + "- followers interact with YOUR current target|r",
+				c + "!clearpoi|r " + d + "- drop whatever POI the followers are working|r",
+				c + "!enterdungeon !leavedungeon|r " + d + "- LFG teleport in / out|r",
+				c + "!leavebattleground|r " + d + "- leave the battleground|r",
+				c + "!dance|r " + d + "- morale|r",
+				d + "auto: hearthing pulls the party home; bags, dungeon side and quest log are mirrored|r",
+			};
+			var sb = new System.Text.StringBuilder();
+			foreach (string line in lines)
+				sb.Append("DEFAULT_CHAT_FRAME:AddMessage('").Append(line).Append("') ");
+			Lua.DoString(sb.ToString());
+		}
+
 		private void OnPartyChat(WoWChat.ChatLanguageSpecificEventArgs e)
 		{
 			if (_botMessage == null) return;
 			WoWPlayer? leader = ObjectManager.GetObjectByGuid<WoWPlayer>(_botMessage.LeaderGuid);
 			if (leader == null || e.Author != leader.Name) return;
 
+			// ⚠ New commands here also go in ShowLeaderCommandsOnFirstStep's help list.
 			foreach (string token in e.Message.Split(new[] { "!" }, StringSplitOptions.RemoveEmptyEntries))
 			{
 				switch (token)
