@@ -204,12 +204,17 @@ namespace Bots.Vibes.Shared
                     return QuestInteractOutcome.Retry;
                 }
 
-                // Reward choice: re-issue only while the client shows NO registered choice
-                // (QuestInfoFrame.itemChoice is exactly what the complete button hands to
-                // GetQuestReward). ActionSelectReward verifies its own click; a Failure means the
-                // frame is wedged — close and re-drive rather than completing rewardless.
-                if (Lua.GetReturnVal<int>("return GetNumQuestChoices()", 0U) >= 1
-                    && Lua.GetReturnVal<int>("return (QuestInfoFrame and QuestInfoFrame.itemChoice) or 0", 0U) == 0)
+                // Reward choice — ONLY while the offer-reward panel is shown: GetNumQuestChoices()
+                // is panel-scoped and replays the last detail/offer block on every other panel
+                // (a no-choice quest's progress panel reads the previous quest's choices).
+                // Re-issue only while the client shows NO registered choice (QuestInfoFrame.itemChoice
+                // is exactly what the complete button hands to GetQuestReward). ActionSelectReward
+                // verifies its own click; a Failure means the frame is wedged — close and re-drive
+                // rather than completing rewardless.
+                if (Lua.GetReturnVal<int>(
+                        "return ((QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown())"
+                        + " and GetNumQuestChoices() >= 1"
+                        + " and ((QuestInfoFrame and QuestInfoFrame.itemChoice) or 0) == 0) and 1 or 0", 0U) == 1)
                 {
                     var pick = new Bots.Quest.Actions.ActionSelectReward();
                     pick.Start(null);

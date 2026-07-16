@@ -28,6 +28,14 @@ public class ActionSelectReward : Action
 
     protected override RunStatus Run(object context)
     {
+        // The 'choice' quest-data APIs (GetNumQuestChoices, GetQuestItemLink('choice', i)) are
+        // panel-scoped: they describe the current quest ONLY while the offer-reward panel is
+        // shown — on any other panel they replay the last detail/offer block the client received
+        // (a no-choice quest's progress panel reads the PREVIOUS quest's choices). No panel,
+        // nothing to select.
+        if (Lua.GetReturnVal<int>("return (QuestFrameRewardPanel and QuestFrameRewardPanel:IsShown()) and 1 or 0", 0U) == 0)
+            return RunStatus.Success;
+
         int numChoices = Lua.GetReturnVal<int>("return GetNumQuestChoices()", 0U);
         if (numChoices <= 0)
             return RunStatus.Success;
