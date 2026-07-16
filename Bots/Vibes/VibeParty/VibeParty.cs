@@ -1492,15 +1492,16 @@ namespace VibeParty
 			// moment combat starts. No assist target yet (leader lining up / friendly target) → close on the leader.
 			// Me.Combat too: a follower with its own aggro (leader already done) must never glue itself to the
 			// leader mid-fight — a ranged toon dragged sub-melee loses its whole kit (hunter dead zone).
-			// LIVE party combat too: LeaderInCombat is a bus message and lags the fight — in that stale window
-			// the glue below dragged a ranged follower to 2yd behind the fighting tank (melee of its mob).
-			if (_botMessage.LeaderInCombat || StyxWoW.Me.Combat || StyxWoW.Me.PartyMembers.Any(p => p.Combat))
+			// The leader's LIVE combat too: LeaderInCombat is a bus message and lags the fight — in that
+			// stale window the glue below dragged a ranged follower to 2yd behind the fighting tank.
+			WoWPlayer? leaderUnit = ObjectManager.GetObjectByGuid<WoWPlayer>(_botMessage.LeaderGuid);
+			if (_botMessage.LeaderInCombat || StyxWoW.Me.Combat || (leaderUnit != null && leaderUnit.Combat))
 			{
 				WoWUnit? assist = LeaderAssistTarget();
 				WoWPoint dest = assist != null ? assist.Location : LeaderLocation;
-				// Close-on-leader stops at PullDistance too: the leader is toe-to-toe with its mob, and
-				// FollowDistance (default 5) walks a ranged follower straight into the camp.
-				double stopRange = Targeting.PullDistance;
+				// Mob-relative stop is PullDistance; leader-relative is the user's FollowDistance —
+				// that knob is authoritative spacing intent, combat must not override it.
+				double stopRange = assist != null ? Targeting.PullDistance : VibePartySettings.Instance.FollowDistance;
 				// Same hysteresis as AssistTargetBeyondRange — this stop is level-triggered, so without the
 				// latch a jittering tanked mob becomes a MoveTo/MoveStop-per-tick stutter.
 				if (_followClosing) stopRange -= PosSlack(stopRange);
@@ -1539,7 +1540,7 @@ namespace VibeParty
 				return;
 			}
 
-			WoWPlayer? leader = ObjectManager.GetObjectByGuid<WoWPlayer>(_botMessage.LeaderGuid);
+			WoWPlayer? leader = leaderUnit;
 			// In instances DON'T idle inside FollowDistance — native /follow must engage as soon as we're out of
 			// combat (cases 2/3 above still let us fight and rest), or the follower waits for a ~FollowDistance gap
 			// before it starts moving and loses the leader on dungeon stairs/tight corners (user 2026-07-14).
