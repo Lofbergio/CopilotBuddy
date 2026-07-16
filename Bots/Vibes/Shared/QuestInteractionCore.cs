@@ -1,0 +1,301 @@
+using System;
+using Styx;
+using Styx.Helpers;
+using Styx.Logic.Inventory.Frames.Gossip;
+using Styx.Logic.Inventory.Frames.Quest;
+using Styx.WoWInternals;
+using Styx.WoWInternals.WoWObjects;
+using TreeSharp;
+
+namespace Bots.Vibes.Shared
+{
+    public enum QuestInteractOutcome
+    {
+        /// <summary>Verified by quest-log state (picked up = entered the log; turned in = left it).</summary>
+        Success,
+        /// <summary>Transient (frame didn't open, log lagging, wrong panel) — re-drive shortly.</summary>
+        Retry,
+        /// <summary>The server says no: the quest isn't in this NPC's gossip list here/now.</summary>
+        NotOffered,
+        /// <summary>The entity carries no questgiver npcflag at all — it can never serve this quest
+        /// until a world action enables it. Callers decide how permanent that is.</summary>
+        NoGiverFlag,
+    }
+
+    /// <summary>
+    /// Id-driven quest pickup/turn-in against a LIVE entity — the one frame-driving implementation
+    /// shared by VibeQuester2 and VibeParty (they were drifting copies before). Entity resolution and
+    /// travel are the caller's job; these run once the character stands in interact range.
+    /// Design rules (Grull Hawkwind incident + fluid doctrine):
+    ///  - frames are STATE — bounded polls, no grace-window inference; completion is verified by
+    ///    quest-LOG state, never frame flow;
+    ///  - "not offered" is a TYPED outcome, never a silent re-loop;
+    ///  - the reward choice is verified (ActionSelectReward reads back QuestInfoFrame.itemChoice) and
+    ///    re-issued only while the client shows no registered choice — idempotent per pass;
+    ///  - a server-pushed chained follow-up detail frame is screened through the caller's predicate.
+    /// </summary>
+    public static class QuestInteractionCore
+    {
+        public const int FrameOpenTimeoutMs = 3500;
+        public const int LogUpdateTimeoutMs = 2500;
+        // A chained follow-up is pushed into the SAME window synchronously with the turn-in — long
+        // enough to ride a lag spike, short enough not to stall every non-chained turn-in.
+        public const int ChainedOfferTimeoutMs = 1200;
+
+        /// <summary>Accept one quest by id at a live giver. Caller guarantees interact range.</summary>
+        public static QuestInteractOutcome PickUp(WoWObject giver, int questId, string questName, string logTag)
+        {
+            LocalPlayer me = StyxWoW.Me;
+            if (me == null || giver == null) return QuestInteractOutcome.Retry;
+            if (me.QuestLog.ContainsQuest((uint)questId))
+                return QuestInteractOutcome.Success;   // already have it (share landed, chained accept)
+
+            // The questgiver npcflag is the server's own "!" decider (memory read, no interact) —
+            // captive/pre-trigger NPCs show no marker at all. Fail fast instead of interacting into a void.
+            if (giver is WoWUnit gu && !gu.IsQuestGiver)
+                return QuestInteractOutcome.NoGiverFlag;
+
+            if (!OpenInteraction(giver, questId, logTag)) return QuestInteractOutcome.Retry;
+
+            // Gossip list path: our quest must be among the AVAILABLE entries; a missing entry is the
+            // server saying "not offerable here/now".
+            if (GossipFrame.Instance.IsVisible && !QuestFrame.Instance.IsVisible)
+            {
+                int index = FindGossipIndex(actives: false, questId, questName, logTag);
+                if (index <= 0)
+                {
+                    Logging.Write("{0} pickup q{1} '{2}': {3} does not OFFER it (gossip has no matching entry).",
+                        logTag, questId, questName, giver.Name);
+                    GossipFrame.Instance.Close();
+                    return QuestInteractOutcome.NotOffered;
+                }
+                Lua.DoString("SelectGossipAvailableQuest({0})", index);
+                if (!WaitState(() => QuestFrame.Instance.IsVisible, FrameOpenTimeoutMs))
+                {
+                    Logging.WriteDebug("{0} pickup q{1}: detail frame never opened after select — retry.", logTag, questId);
+                    return QuestInteractOutcome.Retry;
+                }
+            }
+
+            if (!QuestFrame.Instance.IsVisible)
+            {
+                Logging.WriteDebug("{0} pickup q{1}: no quest frame after interact — retry.", logTag, questId);
+                return QuestInteractOutcome.Retry;
+            }
+
+            uint shown = ShownQuestId();
+            if (shown != 0 && shown != (uint)questId)
+            {
+                // Direct-detail giver showing some OTHER quest — not ours to accept blind.
+                Logging.WriteDebug("{0} pickup q{1}: frame shows q{2} instead — closing, retry.", logTag, questId, shown);
+                QuestFrame.Instance.Close();
+                return QuestInteractOutcome.Retry;
+            }
+
+            QuestFrame.Instance.AcceptQuest();
+            // Events notify, the LOG is truth: accepted = it's in the log.
+            if (WaitState(() => me.QuestLog.ContainsQuest((uint)questId), LogUpdateTimeoutMs))
+            {
+                Logging.Write("{0} PickUp q{1} '{2}' OK.", logTag, questId, questName);
+                return QuestInteractOutcome.Success;
+            }
+            Logging.WriteDebug("{0} pickup q{1}: accept sent but quest not in log — retry.", logTag, questId);
+            return QuestInteractOutcome.Retry;
+        }
+
+        /// <summary>
+        /// Turn one quest in by id at a live ender. acceptChainedOffer screens a server-pushed
+        /// follow-up detail frame (null = always decline).
+        /// </summary>
+        public static QuestInteractOutcome TurnIn(WoWObject ender, int questId, string questName, string logTag,
+            Func<uint, bool> acceptChainedOffer)
+        {
+            LocalPlayer me = StyxWoW.Me;
+            if (me == null || ender == null) return QuestInteractOutcome.Retry;
+            if (!me.QuestLog.ContainsQuest((uint)questId))
+                return QuestInteractOutcome.Success;   // already gone
+
+            // A valid turn-in NPC always carries the questgiver npcflag (it drives the "?" marker).
+            if (ender is WoWUnit eu && !eu.IsQuestGiver)
+                return QuestInteractOutcome.NoGiverFlag;
+
+            if (!OpenInteraction(ender, questId, logTag)) return QuestInteractOutcome.Retry;
+
+            if (GossipFrame.Instance.IsVisible && !QuestFrame.Instance.IsVisible)
+            {
+                int index = FindGossipIndex(actives: true, questId, questName, logTag);
+                if (index <= 0)
+                {
+                    Logging.Write("{0} turn-in q{1} '{2}': {3} does not TAKE it (gossip has no matching active entry).",
+                        logTag, questId, questName, ender.Name);
+                    GossipFrame.Instance.Close();
+                    return QuestInteractOutcome.NotOffered;
+                }
+                Lua.DoString("SelectGossipActiveQuest({0})", index);
+                if (!WaitState(() => QuestFrame.Instance.IsVisible, FrameOpenTimeoutMs))
+                    return QuestInteractOutcome.Retry;
+            }
+
+            if (!QuestFrame.Instance.IsVisible)
+                return QuestInteractOutcome.Retry;
+
+            // Progress frame → Continue → (reward choice) → Complete. Bounded loop: each pass reads
+            // the frame STATE fresh; completion is decided by the quest leaving the LOG, nothing else.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (!me.QuestLog.ContainsQuest((uint)questId))
+                    break;   // landed
+
+                if (!QuestFrame.Instance.IsVisible)
+                    return QuestInteractOutcome.Retry;   // frame died without completion — re-approach
+
+                uint shown = ShownQuestId();
+                if (shown != 0 && shown != (uint)questId)
+                {
+                    // Wrong quest's frame while ours is still in the log (multi-quest NPC quirk) —
+                    // close and let the retry re-select ours from the gossip list.
+                    QuestFrame.Instance.Close();
+                    StyxWoW.Sleep(300);
+                    return QuestInteractOutcome.Retry;
+                }
+
+                // Progress panel is the server's own verdict: not completable = our state is wrong
+                // (caller raced, objective lagging) — Continue-spamming it wedged the old bot 25s.
+                if (Lua.GetReturnVal<int>(
+                        "return ((QuestFrameProgressPanel and QuestFrameProgressPanel:IsShown()) and not IsQuestCompletable()) and 1 or 0", 0U) == 1)
+                {
+                    Logging.WriteDebug("{0} turn-in q{1}: server says NOT completable — closing, retry.", logTag, questId);
+                    QuestFrame.Instance.Close();
+                    return QuestInteractOutcome.Retry;
+                }
+
+                // Reward choice: re-issue only while the client shows NO registered choice
+                // (QuestInfoFrame.itemChoice is exactly what the complete button hands to
+                // GetQuestReward). ActionSelectReward verifies its own click; a Failure means the
+                // frame is wedged — close and re-drive rather than completing rewardless.
+                if (Lua.GetReturnVal<int>("return GetNumQuestChoices()", 0U) >= 1
+                    && Lua.GetReturnVal<int>("return (QuestInfoFrame and QuestInfoFrame.itemChoice) or 0", 0U) == 0)
+                {
+                    var pick = new Bots.Quest.Actions.ActionSelectReward();
+                    pick.Start(null);
+                    RunStatus picked = pick.Tick(null);
+                    pick.Stop(null);
+                    if (picked == RunStatus.Failure)
+                    {
+                        Logging.Write("{0} turn-in q{1}: reward choice would not register — closing, retry.", logTag, questId);
+                        QuestFrame.Instance.Close();
+                        return QuestInteractOutcome.Retry;
+                    }
+                }
+
+                QuestFrame.Instance.CompleteQuest();
+                StyxWoW.Sleep(400);
+            }
+
+            if (me.QuestLog.ContainsQuest((uint)questId))
+            {
+                Logging.WriteDebug("{0} turn-in q{1}: still in log after the completion window — retry.", logTag, questId);
+                return QuestInteractOutcome.Retry;
+            }
+
+            Logging.Write("{0} TurnIn q{1} '{2}' OK.", logTag, questId, questName);
+            HandleChainedOffer((uint)questId, logTag, acceptChainedOffer, me);
+            return QuestInteractOutcome.Success;
+        }
+
+        /// <summary>
+        /// After a turn-in lands the server often pushes the follow-up quest's DETAIL frame into the
+        /// same window. Screen it through the caller's predicate → accept on the spot (free pickup);
+        /// otherwise decline cleanly so the frame can't confuse the next task.
+        /// </summary>
+        private static void HandleChainedOffer(uint completedId, string logTag, Func<uint, bool> accept, LocalPlayer me)
+        {
+            if (!WaitState(() => QuestFrame.Instance.IsVisible, ChainedOfferTimeoutMs))
+                return;   // nothing chained
+            uint shown = ShownQuestId();
+            if (shown == 0 || shown == completedId)
+                return;
+            if (accept != null && accept(shown))
+            {
+                QuestFrame.Instance.AcceptQuest();
+                bool accepted = WaitState(() => me.QuestLog.ContainsQuest(shown), LogUpdateTimeoutMs);
+                Logging.Write("{0} chained offer q{1} after q{2}: {3}.",
+                    logTag, shown, completedId, accepted ? "accepted (screened OK)" : "accept did not land");
+            }
+            else
+            {
+                Logging.Write("{0} chained offer q{1} after q{2}: declined (failed screen).", logTag, shown, completedId);
+                QuestFrame.Instance.DeclineQuest();
+            }
+        }
+
+        private static bool OpenInteraction(WoWObject entity, int questId, string logTag)
+        {
+            if (GossipFrame.Instance.IsVisible || QuestFrame.Instance.IsVisible)
+                return true;   // already open (retry pass)
+            if (!entity.WithinInteractRange)
+                return false;  // caller's travel isn't done — not ours to fix
+            if (StyxWoW.Me.IsMoving)
+                WoWMovement.MoveStop();
+            (entity as WoWUnit)?.Target();
+            entity.Interact();
+            bool opened = WaitState(() => GossipFrame.Instance.IsVisible || QuestFrame.Instance.IsVisible, FrameOpenTimeoutMs);
+            if (!opened)
+                Logging.WriteDebug("{0} q{1}: no frame within {2}ms of interacting with {3}.",
+                    logTag, questId, FrameOpenTimeoutMs, entity.Name);
+            return opened;
+        }
+
+        /// <summary>
+        /// 1-based gossip select index for OUR quest, or 0 when it isn't listed. ⚠ LUA is the truth:
+        /// the memory wrapper (GossipFrame.ActiveQuests/AvailableQuests) returned EMPTY lists while
+        /// GetNumGossip*Quests() was non-zero live (docs/gotchas.md) — trusting it here turns a quest
+        /// the server IS offering into a NotOffered strike and a wrongful abandon. Wrapper ids match
+        /// first when they read; otherwise the Lua TITLES match against the DB quest name (same enUS
+        /// strings the server sends).
+        /// </summary>
+        public static int FindGossipIndex(bool actives, int questId, string questTitle, string logTag)
+        {
+            var entries = actives ? GossipFrame.Instance.ActiveQuests : GossipFrame.Instance.AvailableQuests;
+            if (entries != null)
+                foreach (GossipQuestEntry e in entries)
+                    if (e != null && e.Id == questId)
+                        return e.Index + 1;   // wrapper index is 0-based; Lua selects are 1-based
+
+            string fn = actives ? "Active" : "Available";
+            string luaList = Lua.GetReturnVal<string>(
+                "local r = '' local n = GetNumGossip" + fn + "Quests() local q = { GetGossip" + fn + "Quests() } " +
+                "if n > 0 then local s = math.floor(#q / n) for i = 0, n - 1 do r = r .. tostring(q[i*s+1]) .. '\\2' end end return r", 0U) ?? "";
+            string[] titles = luaList.Split(new[] { '\x02' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < titles.Length; i++)
+                if (string.Equals(titles[i], questTitle, StringComparison.OrdinalIgnoreCase))
+                    return i + 1;
+            Logging.WriteDebug("{0} q{1} '{2}' not in the gossip {3} list ({4} entries: {5}).",
+                logTag, questId, questTitle, fn.ToLowerInvariant(), titles.Length, string.Join(" | ", titles));
+            return 0;
+        }
+
+        /// <summary>CurrentShownQuestId is a memory read that can report 0 with a panel open —
+        /// GetQuestID() is the client's own answer (docs/gotchas.md).</summary>
+        public static uint ShownQuestId()
+        {
+            uint shown = QuestFrame.Instance.CurrentShownQuestId;
+            if (shown == 0 && QuestFrame.Instance.IsVisible)
+                shown = (uint)Lua.GetReturnVal<int>("return GetQuestID() or 0", 0U);
+            return shown;
+        }
+
+        /// <summary>Bounded STATE poll (frames/log are state — doctrine rule 1).</summary>
+        public static bool WaitState(Func<bool> condition, int timeoutMs)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (condition()) return true;
+                StyxWoW.Sleep(50);
+            }
+            return condition();
+        }
+    }
+}

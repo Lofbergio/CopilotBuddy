@@ -109,13 +109,9 @@ public class ForcedQuestTurnIn : ForcedBehavior
                 {
                     // Click Continue if objectives shown
                     (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.IsCompleteButtonVisible), (Composite)new TreeSharp.Action((ActionDelegate)(context => this.ClickContinue(context)))),
-                    // Select reward if there are choices
-                    (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.HasRewardChoice), (Composite)new Sequence(new Composite[3]
-                    {
-                        (Composite)new ActionSleep(750),
-                        (Composite)new ActionSelectReward(),
-                        (Composite)new ActionSleep(350)
-                    })),
+                    // Select reward if there are choices (the action waits on the item cache and
+                    // verifies its click itself — no settle sleeps needed around it)
+                    (Composite)new DecoratorContinue(new CanRunDecoratorDelegate(this.HasRewardChoice), (Composite)new ActionSelectReward()),
                     // Complete the quest (HB 4.3.4 - ActionDelegate)
                     (Composite)new TreeSharp.Action((ActionDelegate)(context => this.CompleteQuest(context))),
                     // Close frames after completion (HB 4.3.4 - ActionDelegate)
