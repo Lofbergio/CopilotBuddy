@@ -21,8 +21,8 @@ namespace Styx.Database
         // SELECT * FROM npcs WHERE entry = @entry LIMIT 1
         private static SQLiteCommand _getNpcByIdCmd;
 
-        // SELECT * FROM npcs WHERE map = @map AND trainer_class = @class AND level >= @LEVEL 
-        // ORDER BY VECTORDISTANCE(x, y, z, @x, @y, @z) ASC
+        // SELECT * FROM npcs WHERE map = @map AND trainer_type = 0 AND trainer_class = @class
+        // AND level >= @LEVEL ORDER BY VECTORDISTANCE(x, y, z, @x, @y, @z) ASC
         private static SQLiteCommand _getNearestTrainerCmd;
 
         // SELECT * FROM npcs WHERE map = @map AND (flag & @flags) != 0 
@@ -82,8 +82,11 @@ namespace Styx.Database
             _getNpcByIdCmd = Connection.CreateCommand(
                 "SELECT * FROM npcs WHERE entry = @ENTRY LIMIT 1");
 
+            // trainer_type 0 = class trainer. Pet trainers (type 3) carry the SAME npcflags AND
+            // trainer_class = Hunter (they serve hunters), so trainer_type is the only discriminator
+            // — without it a hunter's nearest "class trainer" can resolve to a pet trainer.
             _getNearestTrainerCmd = Connection.CreateCommand(
-                "SELECT * FROM npcs WHERE map = @MAP_ID AND trainer_class = @TRAINER_CLASS AND level >= @LEVEL ORDER BY VECTORDISTANCE(x,y,z,@X,@Y,@Z) ASC");
+                "SELECT * FROM npcs WHERE map = @MAP_ID AND trainer_type = 0 AND trainer_class = @TRAINER_CLASS AND level >= @LEVEL ORDER BY VECTORDISTANCE(x,y,z,@X,@Y,@Z) ASC");
 
             _getNearestNpcCmd = Connection.CreateCommand(
                 "SELECT * FROM npcs WHERE map = @MAP_ID AND flag & @FLAG ORDER BY VECTORDISTANCE(x,y,z,@X,@Y,@Z) ASC LIMIT 25");
