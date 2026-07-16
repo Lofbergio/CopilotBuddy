@@ -60,6 +60,9 @@ namespace Tripper.Navigation
 
             MoveAwayFromEdgesRecursive(mapId, ref points, ref polygons, ref flags, edgeDistance, 0);
 
+            PruneRedundantCorners(mapId, ref points, ref polygons, ref flags);
+            RoundSharpCorners(mapId, ref points, ref polygons, ref flags);
+
             _paths++;
             EmitIfDue();
         }
@@ -71,9 +74,211 @@ namespace Tripper.Navigation
             long now = Environment.TickCount64;
             if (now - _lastEmit < EmitIntervalMs)
                 return;
-            LogSink($"[EdgeClear] paths={_paths} nodes={_nodes} moved={_moved} open={_noWall} failed={_failed}");
+            LogSink($"[EdgeClear] paths={_paths} nodes={_nodes} moved={_moved} open={_noWall} failed={_failed} pruned={_pruned} rounded={_rounded}");
             _lastEmit = now;
-            _paths = 0; _nodes = 0; _moved = 0; _noWall = 0; _failed = 0;
+            _paths = 0; _nodes = 0; _moved = 0; _noWall = 0; _failed = 0; _pruned = 0; _rounded = 0;
+        }
+
+        // ── Redundant-corner pruning ──
+
+        private static int _pruned;
+
+        /// <summary>
+        /// Removes interior nodes whose neighbor-to-neighbor chord is provably clear. Funnel
+        /// corners exist because the direct line was blocked; after MoveAwayFromEdges shifts the
+        /// neighbors, some corners lose their reason to exist (worst case: a node whose own push
+        /// failed detours the path back toward the wall its neighbors just cleared). Proof is
+        /// strict — raycast fully clear AND every chord sample keeps the fixed wall margin, with
+        /// query failures counting as "keep" — so a node is only dropped when the mesh vouches
+        /// for the shortcut.
+        /// </summary>
+        private static void PruneRedundantCorners(
+            uint mapId, ref Vector3[] points, ref PolygonReference[] polygons, ref StraightPathFlags[] flags)
+        {
+            if (points.Length < 3)
+                return;
+
+            var ptList = points.ToList();
+            var polyList = polygons.ToList();
+            var flagList = flags.ToList();
+            bool changed = false;
+            ulong[] chordPolys = new ulong[MaxRaycastPolys];
+
+            for (int i = 1; i < ptList.Count - 1; i++)
+            {
+                if ((flagList[i] & StraightPathFlags.OffMeshConnection) != 0
+                    || (flagList[i - 1] & StraightPathFlags.OffMeshConnection) != 0
+                    || (flagList[i + 1] & StraightPathFlags.OffMeshConnection) != 0)
+                    continue;
+
+                Vector3 a = ptList[i - 1], c = ptList[i + 1];
+                if (polyList[i - 1].Id == 0)
+                    continue;
+
+                uint status = NativeMethods.Raycast(mapId, polyList[i - 1].Id,
+                    new NativeMethods.XYZ(a), new NativeMethods.XYZ(c),
+                    out float rayT, out _, chordPolys, out int chordCount, MaxRaycastPolys);
+                if (NativeMethods.NavStatusIsFailure(status) || chordCount == 0 || rayT < float.MaxValue * 0.5f)
+                    continue;
+
+                Vector3 chord = c - a;
+                float chordLen = chord.Length();
+                if (chordLen < 0.5f)
+                    continue;
+                int samples = Math.Min(8, (int)(chordLen / 3f) + 1);
+                bool clear = true;
+                for (int s = 1; s <= samples && clear; s++)
+                {
+                    Vector3 p = a + chord * (s / (float)(samples + 1));
+                    float d = NativeMethods.FindDistanceToWall(
+                        mapId, new NativeMethods.XYZ(p), FilletMinWallDist, out _);
+                    if (d < FilletMinWallDist)
+                        clear = false; // strict: query failure (d<0) counts as blocked
+                }
+                if (!clear)
+                    continue;
+
+                ptList.RemoveAt(i);
+                polyList.RemoveAt(i);
+                flagList.RemoveAt(i);
+                changed = true;
+                _pruned++;
+                i--; // re-test the new chord from the same anchor
+            }
+
+            if (changed)
+            {
+                points = ptList.ToArray();
+                polygons = polyList.ToArray();
+                flags = flagList.ToArray();
+            }
+        }
+
+        // ── Corner rounding (fillet) — turns sharp polyline corners into short arcs ──
+
+        // Sharpness gate matches MeshNavigator's corner notion (heading change > 40°). Arcs turn
+        // one sharp corner into a chain of ≤30° bends, which the follower's loose advance already
+        // glides through — the robotic pivot disappears without any follower change.
+        private const float FilletCornerCos = 0.766f;  // cos 40°
+        private const float FilletDistance = 2.5f;     // yd along each leg; clamped to 40% of the leg
+        private const float FilletMinLeg = 1.0f;       // below this the arc is too small to matter
+        private const float FilletMinWallDist = 2.0f;  // mounted-Tauren margin at the arc's deepest point
+        private static int _rounded;
+
+        /// <summary>
+        /// Replaces each sharp corner node with a quadratic Bézier arc (endpoints ON the two
+        /// validated legs, control point at the corner). Runs after MoveAwayFromEdges, which
+        /// provides the wall clearance the arc's inward sag spends (~0.35 × fillet distance at
+        /// 90°). Fail-soft per corner: any unproven arc point/chord keeps the sharp corner.
+        /// </summary>
+        private static void RoundSharpCorners(
+            uint mapId, ref Vector3[] points, ref PolygonReference[] polygons, ref StraightPathFlags[] flags)
+        {
+            if (points.Length < 3)
+                return;
+
+            var ptList = points.ToList();
+            var polyList = polygons.ToList();
+            var flagList = flags.ToList();
+            bool changed = false;
+
+            for (int i = 1; i < ptList.Count - 1; i++)
+            {
+                if ((flagList[i] & StraightPathFlags.OffMeshConnection) != 0)
+                    continue;
+                if ((flagList[i - 1] & StraightPathFlags.OffMeshConnection) != 0)
+                    continue;
+
+                Vector3 a = ptList[i - 1], b = ptList[i], c = ptList[i + 1];
+                float inX = b.X - a.X, inY = b.Y - a.Y, outX = c.X - b.X, outY = c.Y - b.Y;
+                float inLen = (float)Math.Sqrt(inX * inX + inY * inY);
+                float outLen = (float)Math.Sqrt(outX * outX + outY * outY);
+                if (inLen < 0.01f || outLen < 0.01f)
+                    continue;
+
+                float dot = (inX * outX + inY * outY) / (inLen * outLen);
+                if (dot >= FilletCornerCos)
+                    continue; // gentle bend — already looks fine
+
+                float fillet = Math.Min(FilletDistance, 0.4f * Math.Min(inLen, outLen));
+                if (fillet < FilletMinLeg)
+                    continue;
+
+                float angle = (float)Math.Acos(Math.Clamp(dot, -1f, 1f));
+                int segs = Math.Min(5, (int)Math.Ceiling(angle / (30.0 * Math.PI / 180.0)));
+                if (segs < 2)
+                    continue;
+
+                // Arc endpoints lie ON the validated legs (3D lerp keeps Z on the segment).
+                Vector3 entry = Vector3.Lerp(b, a, fillet / inLen);
+                Vector3 exit = Vector3.Lerp(b, c, fillet / outLen);
+
+                // Deepest arc point (t=0.5) must keep the fixed clearance margin, or we keep
+                // the sharp corner — the follower's corner logic still handles it safely.
+                Vector3 deepest = entry * 0.25f + b * 0.5f + exit * 0.25f;
+                float wallDist = NativeMethods.FindDistanceToWall(
+                    mapId, new NativeMethods.XYZ(deepest), FilletMinWallDist, out _);
+                if (wallDist >= 0f && wallDist < FilletMinWallDist)
+                    continue;
+
+                // Build and prove the arc: every point on-mesh + height-snapped, every chord
+                // raycast-clear. Any failure keeps the sharp corner.
+                var arcPts = new List<Vector3>(segs + 1);
+                var arcPolys = new List<PolygonReference>(segs + 1);
+                bool ok = true;
+                for (int k = 0; k <= segs && ok; k++)
+                {
+                    float t = k / (float)segs;
+                    float u = 1f - t;
+                    Vector3 p = entry * (u * u) + b * (2f * t * u) + exit * (t * t);
+                    if (!NativeMethods.FindNearestPolyRef(mapId,
+                            new NativeMethods.XYZ(p), new NativeMethods.XYZ(0.5f, 0.5f, 5f),
+                            out ulong pref, out _) || pref == 0)
+                    {
+                        ok = false;
+                        break;
+                    }
+                    if (!NativeMethods.GetPolyHeight(mapId, pref, new NativeMethods.XYZ(p), out float h))
+                    {
+                        ok = false;
+                        break;
+                    }
+                    p = new Vector3(p.X, p.Y, h);
+                    if (k > 0)
+                    {
+                        ulong[] chordPolys = new ulong[MaxRaycastPolys];
+                        uint status = NativeMethods.Raycast(mapId, arcPolys[k - 1].Id,
+                            new NativeMethods.XYZ(arcPts[k - 1]), new NativeMethods.XYZ(p),
+                            out float rayT, out _, chordPolys, out int chordCount, MaxRaycastPolys);
+                        if (NativeMethods.NavStatusIsFailure(status) || chordCount == 0 || rayT < float.MaxValue * 0.5f)
+                        {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    arcPts.Add(p);
+                    arcPolys.Add(new PolygonReference(pref));
+                }
+                if (!ok)
+                    continue;
+
+                ptList.RemoveAt(i);
+                polyList.RemoveAt(i);
+                flagList.RemoveAt(i);
+                ptList.InsertRange(i, arcPts);
+                polyList.InsertRange(i, arcPolys);
+                flagList.InsertRange(i, Enumerable.Repeat(default(StraightPathFlags), arcPts.Count));
+                changed = true;
+                _rounded++;
+                i += arcPts.Count - 1; // continue at the next original node
+            }
+
+            if (changed)
+            {
+                points = ptList.ToArray();
+                polygons = polyList.ToArray();
+                flags = flagList.ToArray();
+            }
         }
 
         public static void Randomize(
