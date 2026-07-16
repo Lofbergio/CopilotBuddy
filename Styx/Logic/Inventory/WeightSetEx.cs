@@ -20,13 +20,18 @@ public class WeightSetEx : IDisposable
 {
   private static WeightSetEx _cachedWeightSet;
   private static IEnumerable<WeightSetEx> _loadedWeightSets;
-  // Default fallback weights used when a weight set does not define weapon stats
+  // Default fallback weights used when a weight set does not define these stats.
+  // Armor floor: grey/white leveling gear carries no stats at all, so a set without an Armor
+  // weight (every caster/healer set) ranked such gear purely by the item-level tiebreak and
+  // equipped lower-armor leather over mail. Small enough that real set weights (15-100/pt)
+  // always dominate; a set that defines Armor overrides it.
   private static readonly Dictionary<Stat, float> DefaultStatWeights = new Dictionary<Stat, float>
   {
     { Stat.DPS, 1.0f },
     { Stat.MinDamage, 0.5f },
     { Stat.MaxDamage, 0.5f },
-    { Stat.Speed, 0.0f }
+    { Stat.Speed, 0.0f },
+    { Stat.Armor, 0.01f }
   };
 
   private WeightSetEx(XElement weightElm)
@@ -230,10 +235,10 @@ public class WeightSetEx : IDisposable
             totalScore += this.GetStatScore(Stat.BlueSocket, 1f);
         }
       }
-      // Fair tiebreak: otherwise-equal items (statless leveling gear especially — grey/white armor
-      // differs only in armor value, which most sets don't weight) resolve by the game's own
-      // progression metric: item level, then quality. Scaled so real stat weights (15-100/pt)
-      // always dominate; sits above the armor-class nudge so on-class items win pure ties.
+      // Fair tiebreak: otherwise-equal items (statless gear ties on the Armor floor too) resolve
+      // by the game's own progression metric: item level, then quality. Scaled so stat scores —
+      // including the default Armor floor — always dominate; sits above the armor-class nudge so
+      // on-class items win pure ties.
       totalScore += itemInfo.Level * 0.01f + (int) itemInfo.Quality * 0.001f;
       if (itemInfo.ItemClass == WoWItemClass.Armor
           && itemInfo.ArmorClass != WoWItemArmorClass.Misc
