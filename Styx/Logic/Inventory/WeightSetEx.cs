@@ -26,10 +26,7 @@ public class WeightSetEx : IDisposable
     { Stat.DPS, 1.0f },
     { Stat.MinDamage, 0.5f },
     { Stat.MaxDamage, 0.5f },
-    { Stat.Speed, 0.0f },
-    // Most sets only weight real stats, so statless leveling gear (grey/white armor differs ONLY in
-    // armor value) ties at 0 and upgrades never happen. Small enough that any real stat dominates.
-    { Stat.Armor, 1.0f }
+    { Stat.Speed, 0.0f }
   };
 
   private WeightSetEx(XElement weightElm)
@@ -233,6 +230,11 @@ public class WeightSetEx : IDisposable
             totalScore += this.GetStatScore(Stat.BlueSocket, 1f);
         }
       }
+      // Fair tiebreak: otherwise-equal items (statless leveling gear especially — grey/white armor
+      // differs only in armor value, which most sets don't weight) resolve by the game's own
+      // progression metric: item level, then quality. Scaled so real stat weights (15-100/pt)
+      // always dominate; sits above the armor-class nudge so on-class items win pure ties.
+      totalScore += itemInfo.Level * 0.01f + (int) itemInfo.Quality * 0.001f;
       if (itemInfo.ItemClass == WoWItemClass.Armor
           && itemInfo.ArmorClass != WoWItemArmorClass.Misc
           && itemInfo.ArmorClass != WoWItemArmorClass.None)
