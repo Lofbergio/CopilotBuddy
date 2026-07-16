@@ -38,6 +38,9 @@ namespace VibeParty
 		// prot-bound paladin specs Ret until Seal of Command; a Disc priest opens Shadow for Spirit
 		// Tap). Auto = whatever the client already has ticked (WoW remembers the last-used LFD roles),
 		// falling back to a talent guess, falling back to Damage.
+		// ⚠ CONTRACT: GoodVibes reads this value straight from the settings XML (GVHelpers
+		// BotRoleSetting — drop-ins can't reference this assembly) to drive its tank/healer dispatch.
+		// Renaming the setting, the class, or the file pattern breaks that silently.
 		[DefaultValue("Auto")]
 		[Setting(Explanation = "LFG role for dungeon role checks: Auto, Tank, Healer or Damage. Auto uses the roles already ticked in the client (set them once in the LFD window), guessing from talents only when nothing is ticked.")]
 		public string LfgRole { get; set; }
