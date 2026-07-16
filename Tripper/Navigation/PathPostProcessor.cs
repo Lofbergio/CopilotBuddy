@@ -12,9 +12,15 @@ namespace Tripper.Navigation
     /// </summary>
     internal static class PathPostProcessor
     {
-        private const float DefaultEdgeDistance = 3.5f;   // keep in sync with Navigator.EdgeDistance (see its comment)
         private const int MaxRecursionDepth = 5;
         private const int MaxRaycastPolys = 512;
+
+        // This pass was a silent no-op for weeks (degenerate wall queries, see TryMoveAwayFromEdge)
+        // because per-node failures are invisible. Aggregate counters, emit ≤ 1 summary line / 5s.
+        internal static Action<string>? LogSink;
+        private const int EmitIntervalMs = 5000;
+        private static long _lastEmit;
+        private static int _paths, _nodes, _moved, _noWall, _failed;
 
         private enum MoveResult { NoWallNearPoint, Failed, Succeeded }
 
@@ -27,7 +33,7 @@ namespace Tripper.Navigation
             uint mapId,
             ref Vector3[] points,
             ref StraightPathFlags[] flags,
-            float edgeDistance = DefaultEdgeDistance)
+            float edgeDistance)
         {
             PolygonReference[] polygons = Array.Empty<PolygonReference>();
             MoveAwayFromEdges(mapId, ref points, ref flags, ref polygons, edgeDistance);
@@ -38,7 +44,7 @@ namespace Tripper.Navigation
             ref Vector3[] points,
             ref StraightPathFlags[] flags,
             ref PolygonReference[] polygons,
-            float edgeDistance = DefaultEdgeDistance)
+            float edgeDistance)
         {
             if (points == null || points.Length < 2)
                 return;
@@ -53,6 +59,21 @@ namespace Tripper.Navigation
             EnsurePolyRefs(mapId, points, ref polygons);
 
             MoveAwayFromEdgesRecursive(mapId, ref points, ref polygons, ref flags, edgeDistance, 0);
+
+            _paths++;
+            EmitIfDue();
+        }
+
+        private static void EmitIfDue()
+        {
+            if (LogSink == null || _nodes == 0)
+                return;
+            long now = Environment.TickCount64;
+            if (now - _lastEmit < EmitIntervalMs)
+                return;
+            LogSink($"[EdgeClear] paths={_paths} nodes={_nodes} moved={_moved} open={_noWall} failed={_failed}");
+            _lastEmit = now;
+            _paths = 0; _nodes = 0; _moved = 0; _noWall = 0; _failed = 0;
         }
 
         public static void Randomize(
@@ -175,18 +196,26 @@ namespace Tripper.Navigation
                 Vector3 point = points[i];
                 PolygonReference polyRef = polygons[i];
 
-                if (TryMoveAwayFromEdge(mapId, ref point, ref polyRef, edgeDistance) == MoveResult.Succeeded)
+                MoveResult result = TryMoveAwayFromEdge(mapId, ref point, ref polyRef, edgeDistance,
+                    points[i - 1], points[i + 1]);
+                if (result == MoveResult.Succeeded)
                 {
                     points[i] = point;
                     polygons[i] = polyRef;
                 }
+
+                _nodes++;
+                if (result == MoveResult.Succeeded) _moved++;
+                else if (result == MoveResult.NoWallNearPoint) _noWall++;
+                else _failed++;
             }
         }
 
         // ── TryMoveAwayFromEdge (exact port of HB method_2) ──
 
         private static MoveResult TryMoveAwayFromEdge(
-            uint mapId, ref Vector3 point, ref PolygonReference polyRef, float edgeDistance)
+            uint mapId, ref Vector3 point, ref PolygonReference polyRef, float edgeDistance,
+            Vector3 prev, Vector3 next)
         {
             // Step 1: FindDistanceToWall from polygon
             float distance = NativeMethods.FindDistanceToWallFromPoly(
@@ -201,6 +230,17 @@ namespace Tripper.Navigation
 
             Vector3 wallHitPoint = hitPointXyz.ToVector3();
             Vector3 wallNormal = hitNormalXyz.ToVector3();
+
+            // Straight-path corners sit EXACTLY on wall corner vertices (funnel output), so the
+            // wall query degenerates: distance 0, hit == the node, normal = normalize(0) = NaN.
+            // The normal can't drive the push there — derive the direction from the path bend
+            // instead (the outward bisector points away from the wrapped corner by construction).
+            if (distance < 0.05f
+                || !float.IsFinite(wallNormal.X) || !float.IsFinite(wallNormal.Y) || !float.IsFinite(wallNormal.Z)
+                || !float.IsFinite(wallHitPoint.X) || !float.IsFinite(wallHitPoint.Y) || !float.IsFinite(wallHitPoint.Z))
+            {
+                return TryMoveAwayFromCornerVertex(mapId, ref point, ref polyRef, edgeDistance, prev, next);
+            }
 
             // Step 2: snap hitPoint to nearest polygon (HB: FindNearestPolygon with extents 0.5/5/0.5 nav-space)
             // WoW-space equivalent: X=0.5, Y=0.5, Z=5 (Z=hauteur en WoW)
@@ -279,6 +319,92 @@ namespace Tripper.Navigation
             return MoveResult.Failed;
         }
 
+        // ── Corner-vertex fallback (validated offline against the shipped DLL + real mmaps) ──
+
+        /// <summary>
+        /// Pushes a node that sits ON a wall corner vertex (the degenerate wall-query case).
+        /// Direction comes from the path bend: outward bisector of the incoming/outgoing
+        /// headings; for collinear nodes the roomier of the two perpendiculars. The raycast
+        /// keeps the corridor-centering semantics of the normal path (hit → midpoint).
+        /// </summary>
+        private static MoveResult TryMoveAwayFromCornerVertex(
+            uint mapId, ref Vector3 point, ref PolygonReference polyRef, float edgeDistance,
+            Vector3 prev, Vector3 next)
+        {
+            if (polyRef.Id == 0)
+                return MoveResult.Failed;
+
+            float inX = point.X - prev.X, inY = point.Y - prev.Y;
+            float outX = next.X - point.X, outY = next.Y - point.Y;
+            float inLen = (float)Math.Sqrt(inX * inX + inY * inY);
+            float outLen = (float)Math.Sqrt(outX * outX + outY * outY);
+            if (inLen <= 0.01f && outLen <= 0.01f)
+                return MoveResult.Failed;
+            if (inLen > 0.01f) { inX /= inLen; inY /= inLen; }
+            if (outLen > 0.01f) { outX /= outLen; outY /= outLen; }
+
+            float bisX = inX - outX, bisY = inY - outY;
+            float bisLen = (float)Math.Sqrt(bisX * bisX + bisY * bisY);
+
+            Vector3[] candidates = bisLen > 0.05f
+                ? new[] { new Vector3(bisX / bisLen, bisY / bisLen, 0f) }
+                : new[] { new Vector3(-inY, inX, 0f), new Vector3(inY, -inX, 0f) };
+
+            float bestT = -1f;
+            int bestCount = 0;
+            Vector3 bestDir = Vector3.Zero;
+            ulong[]? bestPath = null;
+            ulong[] rayPath = new ulong[MaxRaycastPolys];
+
+            foreach (Vector3 dir in candidates)
+            {
+                Vector3 target = point + dir * (edgeDistance * 2f);
+                uint status = NativeMethods.Raycast(
+                    mapId, polyRef.Id,
+                    new NativeMethods.XYZ(point), new NativeMethods.XYZ(target),
+                    out float t, out _, rayPath, out int count, MaxRaycastPolys);
+
+                if (NativeMethods.NavStatusIsFailure(status) || count == 0)
+                    continue;
+
+                float effective = t >= float.MaxValue * 0.5f ? float.MaxValue : t;
+                if (effective > bestT)
+                {
+                    bestT = effective;
+                    bestDir = dir;
+                    bestCount = count;
+                    bestPath = (ulong[])rayPath.Clone();
+                }
+            }
+
+            if (bestPath == null)
+                return MoveResult.Failed;
+
+            Vector3 newPoint;
+            if (bestT >= float.MaxValue * 0.5f)
+            {
+                newPoint = point + bestDir * edgeDistance;
+            }
+            else
+            {
+                Vector3 target = point + bestDir * (edgeDistance * 2f);
+                Vector3 rayHit = point + (target - point) * bestT;
+                newPoint = (point + rayHit) * 0.5f;
+            }
+
+            for (int i = 0; i < bestCount; i++)
+            {
+                if (NativeMethods.GetPolyHeight(mapId, bestPath[i], new NativeMethods.XYZ(newPoint), out float height))
+                {
+                    point = new Vector3(newPoint.X, newPoint.Y, height);
+                    polyRef = new PolygonReference(bestPath[i]);
+                    return MoveResult.Succeeded;
+                }
+            }
+
+            return MoveResult.Failed;
+        }
+
         // ── RandomizeWaypoints (HB method_4) ──
 
         private static void RandomizeWaypoints(
@@ -301,7 +427,8 @@ namespace Tripper.Navigation
                 PolygonReference pr = polygons[i];
                 bool moved = false;
 
-                MoveResult result = TryMoveAwayFromEdge(mapId, ref pt, ref pr, dist);
+                MoveResult result = TryMoveAwayFromEdge(mapId, ref pt, ref pr, dist,
+                    points[i - 1], points[i + 1]);
                 if (result == MoveResult.NoWallNearPoint)
                 {
                     float r = (float)random.NextDouble() * Math.Min(dist, maxRandom);

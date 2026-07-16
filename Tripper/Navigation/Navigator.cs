@@ -171,6 +171,7 @@ namespace Tripper.Navigation
             _garrisonMesh = new GarrisonMeshManager(this);
             InitializeQueryFilters();
             ResetQueryFilter();
+            PathPostProcessor.LogSink = Log;
         }
 
         /// <summary>
