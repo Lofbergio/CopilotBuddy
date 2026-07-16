@@ -2283,12 +2283,23 @@ namespace VibeParty
 		{
 			return new Decorator(ctx => WantTurnIn(),
 				new PrioritySelector(
-					new Decorator(ctx => !_turnInNpc!.WithinInteractRange,
+					new Decorator(ctx => !_turnInNpc!.WithinInteractRange || NeedTightApproach(_turnInNpc!),
 						new Sequence(
 							new TreeSharp.Action(ctx => TreeRoot.StatusText = "Moving to turn in at " + _turnInNpc!.Name),
 							new NavigationAction(ctx => _turnInNpc!.Location))),
 					new TreeSharp.Action(ctx => { VisitQuestNpc(_turnInNpc!); return RunStatus.Success; })
 				));
+		}
+
+		// A click from the InteractRange boundary can silently no-op (QuestInteractionCore
+		// .SafeInteractRange) — after a no-frame visit, the retry closes to the safe stand-off first.
+		// Deadline-bounded: an NPC nav can't get that close to (behind a counter, on a platform) falls
+		// back to interacting from the best position reached instead of orbiting it forever.
+		private static bool NeedTightApproach(WoWUnit npc)
+		{
+			return _turnInCloseUntil.TryGetValue(npc.Guid, out DateTime until)
+				&& DateTime.UtcNow < until
+				&& npc.Distance > QuestInteractionCore.SafeInteractRange;
 		}
 
 		// Gate + NPC resolution in ONE pass: sets _turnInNpc for the children this tick (avoids re-scanning the
@@ -2543,10 +2554,15 @@ namespace VibeParty
 					_turnInDeadNpc.Add(npc.Guid);
 					Logging.Write("VibeParty: {0} has made no progress in {1} visits — giving up on it this session.", npc.Name, fails);
 				}
-				_turnInCooldown[npc.Guid] = DateTime.UtcNow.AddSeconds(fails >= 2 ? 120 : 15);
+				int cooldownSec = fails >= 2 ? 120 : 15;
+				_turnInCooldown[npc.Guid] = DateTime.UtcNow.AddSeconds(cooldownSec);
+				// The retry must approach tighter (NeedTightApproach); +12s of travel budget past the
+				// cooldown covers the ≤1yd close-in plus a stuck-jiggle before the fallback kicks in.
+				_turnInCloseUntil[npc.Guid] = DateTime.UtcNow.AddSeconds(cooldownSec + 12);
 				return;
 			}
 			_turnInFrameFails.Remove(npc.Guid);
+			_turnInCloseUntil.Remove(npc.Guid);
 
 			if (turnedIn == 0 && pickedUp == 0 && refused > 0)
 			{
@@ -2661,6 +2677,7 @@ namespace VibeParty
 		private static readonly WaitTimer _waitTimer1 = new WaitTimer(TimeSpan.FromMinutes(3.0));
 		private static readonly Dictionary<ulong, DateTime> _turnInCooldown = new Dictionary<ulong, DateTime>();
 		private static readonly Dictionary<ulong, int> _turnInFrameFails = new Dictionary<ulong, int>();    // guid → no-progress visits (reset on any progress)
+		private static readonly Dictionary<ulong, DateTime> _turnInCloseUntil = new Dictionary<ulong, DateTime>();   // guid → retry must approach to SafeInteractRange until this deadline
 		private static readonly HashSet<ulong> _turnInDeadNpc = new HashSet<ulong>();                       // no-flag / 6 stalled visits → dead for the session
 		private static readonly ConcurrentDictionary<uint, DateTime> _leaderPickupLog = new ConcurrentDictionary<uint, DateTime>();   // npc entry → leader accepted a quest there (hub thread writes)
 		private static bool _leaderSignal;                        // LeaderAtQuestGiver(), cached per tick by WantTurnIn

@@ -38,6 +38,11 @@ namespace Bots.Vibes.Shared
     {
         public const int FrameOpenTimeoutMs = 3500;
         public const int LogUpdateTimeoutMs = 2500;
+        // Travel stand-off for quest NPCs, deliberately INSIDE WoWUnit.InteractRange (CombatReach+4):
+        // that property approximates the client's own right-click range, and a click fired from its
+        // boundary can silently no-op — the client refuses, nothing is sent, no frame ever opens.
+        // 4.5yd is VibeQuester2's live-proven value.
+        public const float SafeInteractRange = 4.5f;
         // A chained follow-up is pushed into the SAME window synchronously with the turn-in — long
         // enough to ride a lag spike, short enough not to stall every non-chained turn-in.
         public const int ChainedOfferTimeoutMs = 1200;
@@ -295,7 +300,10 @@ namespace Bots.Vibes.Shared
             if (StyxWoW.Me.IsMoving)
                 WoWMovement.MoveStop();
             (entity as WoWUnit)?.Target();
-            entity.Interact();
+            // ignoreTimer: WoWObject.Interact's 2s anti-spam timer swallows the call SILENTLY (no log,
+            // nothing sent) — a second per-quest transaction at the same NPC inside 2s is deliberate
+            // here, and a swallowed click reads as "no frame" and charges a wrongful Retry.
+            entity.Interact(ignoreTimer: true);
             bool opened = WaitState(() => GossipFrame.Instance.IsVisible || QuestFrame.Instance.IsVisible, FrameOpenTimeoutMs);
             if (!opened)
                 Logging.WriteDebug("{0} q{1}: no frame within {2}ms of interacting with {3}.",

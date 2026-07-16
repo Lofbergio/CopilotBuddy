@@ -52,7 +52,7 @@ namespace Bots.Vibes.VibeQuester2.Execution
         private string _lastGossipSummary;   // the friendly NPC's dialogue options, captured for teachable blacklist evidence
         private readonly Dictionary<string, DateTime> _goBlacklist = new Dictionary<string, DateTime>();   // key: rounded position
 
-        private const float InteractRange = 4.5f;
+        private const float InteractRange = QuestInteractionCore.SafeInteractRange;
         private const float GoInteractRange = 4.0f;
         private const int InteractRetryMs = 2000;
         private const int ExploreCreditTimeoutMs = 3000;   // server credits an areatrigger near-instantly; a miss = bad DB coord/radius
