@@ -1633,27 +1633,23 @@ namespace VibeParty
 		}
 
 		// The /follow break tap: /follow has no cancel API — only a movement INPUT breaks it (MoveStop
-		// does nothing for glue armed while stationary). Press Backwards one pulse, release the next;
-		// the release lives in Pulse so it can't be orphaned (the GVHunter run-7 moonwalk).
+		// does nothing for glue armed while stationary). Atomic press→sleep→release (the BackHop idiom)
+		// so the key can never orphan; the hold only needs the client to render ONE frame with the key
+		// down — 70ms covers ~15 fps.
 		private static bool _followBreakQueued;
-		private static bool _followBreakHeld;
+		private const int FollowBreakTapMs = 70;
 
 		private static void QueueFollowBreak() => _followBreakQueued = true;
 
 		private static void PulseFollowBreak()
 		{
-			if (_followBreakHeld)
-			{
-				_followBreakHeld = false;
-				WoWMovement.MoveStop(WoWMovement.MovementDirection.Backwards);
-				return;
-			}
 			// Defer while casting — the tap is a movement input and would cancel a hardcast; a casting
 			// character is stationary, so the glue isn't dragging it anywhere meanwhile.
 			if (!_followBreakQueued || StyxWoW.Me.IsCasting) return;
 			_followBreakQueued = false;
-			_followBreakHeld = true;
 			WoWMovement.Move(WoWMovement.MovementDirection.Backwards);
+			System.Threading.Thread.Sleep(FollowBreakTapMs);
+			WoWMovement.MoveStop(WoWMovement.MovementDirection.Backwards);
 		}
 
 		// Bag-visibility sync (follower): mirror the leader's open/closed bag UI, edge-triggered — apply only
