@@ -26,7 +26,10 @@ public class WeightSetEx : IDisposable
     { Stat.DPS, 1.0f },
     { Stat.MinDamage, 0.5f },
     { Stat.MaxDamage, 0.5f },
-    { Stat.Speed, 0.0f }
+    { Stat.Speed, 0.0f },
+    // Most sets only weight real stats, so statless leveling gear (grey/white armor differs ONLY in
+    // armor value) ties at 0 and upgrades never happen. Small enough that any real stat dominates.
+    { Stat.Armor, 1.0f }
   };
 
   private WeightSetEx(XElement weightElm)
