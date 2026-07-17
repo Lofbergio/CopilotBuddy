@@ -1141,23 +1141,49 @@ namespace Styx.WoWInternals.WoWObjects
 
         #region Death Knight Runes
 
-        /// <summary>
-        /// Gets the rune count at the specified index (0-5).
-        /// </summary>
-        public byte GetRuneCount(int index)
-        {
-            if (Memory == null || index < 0 || index >= 6)
-                return 0;
+        // Rune type + ready-state come from Lua (GetRuneType / GetRuneCooldown) — the client memory offset for rune
+        // TYPE reads every slot as Blood on this build, so Lua is the source of truth (same pattern as this class's
+        // other Lua-backed getters). One batched sweep cached ~150ms. Lua GetRuneType: 1=Blood 2=Unholy 3=Frost
+        // 4=Death → C# RuneType enum (Blood=0…) is that minus 1.
+        private static readonly RuneType[] _runeTypes =
+            { RuneType.Blood, RuneType.Blood, RuneType.Unholy, RuneType.Unholy, RuneType.Frost, RuneType.Frost };
+        private static readonly byte[] _runeReady = { 1, 1, 1, 1, 1, 1 };
+        private static DateTime _runeCacheAt = DateTime.MinValue;
 
+        private static void RefreshRuneCache()
+        {
+            if ((DateTime.Now - _runeCacheAt).TotalMilliseconds < 150)
+                return;
+            _runeCacheAt = DateTime.Now;
             try
             {
-                uint runeMask = Memory.Read<uint>(12731272);
-                return (byte)((runeMask >> index) & 1);
+                // 12 chars: [type 1-4][ready 0/1] per rune, i = 1..6
+                string s = Lua.GetReturnVal<string>(
+                    "local s='' for i=1,6 do local _,_,rdy=GetRuneCooldown(i) s=s..(GetRuneType(i) or 1)..(rdy and 1 or 0) end return s", 0);
+                if (string.IsNullOrEmpty(s) || s.Length < 12)
+                    return;   // keep the last good cache rather than zero everything out
+                for (int i = 0; i < 6; i++)
+                {
+                    int lt = s[2 * i] - '0';
+                    _runeTypes[i] = lt >= 1 && lt <= 4 ? (RuneType)(lt - 1) : RuneType.Blood;
+                    _runeReady[i] = (byte)(s[2 * i + 1] == '1' ? 1 : 0);
+                }
             }
             catch
             {
-                return 0;
+                // keep the last good cache
             }
+        }
+
+        /// <summary>
+        /// Gets whether the rune at the specified index (0-5) is ready (1) or on cooldown (0).
+        /// </summary>
+        public byte GetRuneCount(int index)
+        {
+            if (index < 0 || index >= 6)
+                return 0;
+            RefreshRuneCache();
+            return _runeReady[index];
         }
 
         /// <summary>
@@ -1165,32 +1191,22 @@ namespace Styx.WoWInternals.WoWObjects
         /// </summary>
         public RuneType GetRuneType(int index)
         {
-            if (Memory == null || index < 0 || index >= 6)
+            if (index < 0 || index >= 6)
                 return RuneType.Blood;
-
-            try
-            {
-                return Memory.Read<RuneType>(12731140 + (uint)(4 * index));
-            }
-            catch
-            {
-                return RuneType.Blood;
-            }
+            RefreshRuneCache();
+            return _runeTypes[index];
         }
 
         /// <summary>
-        /// Gets the total rune count of a specific type.
+        /// Gets the count of READY runes of a specific type (death-rune conversion reflected via Lua).
         /// </summary>
         public byte GetRuneCount(RuneType type)
         {
+            RefreshRuneCache();
             byte total = 0;
             for (int i = 0; i < 6; i++)
-            {
-                if (GetRuneType(i) == type)
-                {
-                    total += GetRuneCount(i);
-                }
-            }
+                if (_runeTypes[i] == type)
+                    total += _runeReady[i];
             return total;
         }
 
@@ -2199,6 +2215,7 @@ namespace Styx.WoWInternals.WoWObjects
                     reason = GameError.None;
                     return false;
                 }
+
                 else
                 {
                     return CanUseItemInternal(this, itemInfo.BaseAddress, out reason);
