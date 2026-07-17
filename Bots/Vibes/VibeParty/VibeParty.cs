@@ -1475,13 +1475,13 @@ namespace VibeParty
 						VibePartyPanel:Show()
 					end
 				end
-				if VibePartyPanel then VibePartyPanel:SetFrameStrata('DIALOG') VibePartyPanel:Show() return end
+				if VibePartyPanel then VibePartyPanel:Show() return end
 				local f = CreateFrame('Frame', 'VibePartyPanel', UIParent)
 				f:SetWidth(340) f:SetHeight(280)
 				f:SetPoint('RIGHT', UIParent, 'RIGHT', -40, 0)
-				f:SetFrameStrata('DIALOG') f:SetToplevel(true) f:SetClampedToScreen(true)
+				f:SetFrameStrata('MEDIUM') f:SetToplevel(true) f:SetClampedToScreen(true)
 				f:SetBackdrop({bgFile='Interface\\Buttons\\WHITE8X8', edgeFile='Interface\\Buttons\\WHITE8X8', edgeSize=1})
-				f:SetBackdropColor(0.055, 0.055, 0.06, 0.72) f:SetBackdropBorderColor(0, 0, 0, 1)
+				f:SetBackdropColor(0.055, 0.055, 0.06, 0.55) f:SetBackdropBorderColor(0, 0, 0, 0.9)
 				f:SetMovable(true) f:EnableMouse(true) f:RegisterForDrag('LeftButton')
 				f:SetScript('OnDragStart', function() f:StartMoving() end)
 				f:SetScript('OnDragStop', function() f:StopMovingOrSizing() end)
@@ -1495,7 +1495,7 @@ namespace VibeParty
 						b:SetBackdrop({edgeFile='Interface\\Buttons\\WHITE8X8', edgeSize=1})
 						b:SetBackdropBorderColor(0.32, 0.32, 0.38, 1)
 					end
-					local bg = b:CreateTexture(nil, 'BACKGROUND') bg:SetAllPoints() bg:SetTexture(plain and 0.12 or 0.17, plain and 0.12 or 0.17, plain and 0.13 or 0.19, 1)
+					local bg = b:CreateTexture(nil, 'BACKGROUND') bg:SetAllPoints() bg:SetTexture(plain and 0.12 or 0.17, plain and 0.12 or 0.17, plain and 0.13 or 0.19, 0.9)
 					local hl = b:CreateTexture(nil, 'HIGHLIGHT') hl:SetAllPoints() hl:SetTexture(1, 1, 1, 0.08)
 					local t = b:CreateFontString(nil, 'OVERLAY', 'GameFontHighlightSmall') t:SetPoint('CENTER') t:SetText(label)
 					b.bg = bg b.text = t
