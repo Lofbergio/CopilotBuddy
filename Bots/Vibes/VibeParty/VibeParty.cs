@@ -1833,14 +1833,28 @@ namespace VibeParty
 						}
 						break;
 					case "interact":
-						leader.CurrentTarget?.Interact();
+						// Bus orders arrive regardless of distance (chat implied proximity, the bus
+						// does not) — the leader or its target may not be in OUR object manager.
+						// ignoreTimer: an explicit order must not be swallowed by the 2s spam guard.
+						if (leader?.CurrentTarget != null)
+						{
+							Logging.Write("VibeParty: leader said interact — interacting with {0}.", leader.CurrentTarget.Name);
+							leader.CurrentTarget.Interact(ignoreTimer: true);
+						}
+						else
+							Logging.Write("VibeParty: interact order — leader or its target is not visible from here.");
 						break;
 					case "follow":
 						// Manual "everyone follow me" — clear any wait-hold and snap to native /follow now.
-						Logging.Write("VibeParty: leader said follow — engaging follow.");
 						_waiting = false;
 						if (leader != null && !StyxWoW.Me.Combat)
+						{
+							Logging.Write("VibeParty: leader said follow — engaging follow.");
 							Lua.DoString(string.Format("FollowUnit('{0}', true)", leader.Name));
+						}
+						else
+							Logging.Write("VibeParty: follow order — {0} (hold cleared; the follow tree takes over when it can).",
+								leader == null ? "leader not visible from here" : "in combat");
 						break;
 				}
 			}
