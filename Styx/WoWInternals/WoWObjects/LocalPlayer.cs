@@ -2216,10 +2216,19 @@ namespace Styx.WoWInternals.WoWObjects
                     return false;
                 }
 
-                else
+                if (!CanUseItemInternal(this, itemInfo.BaseAddress, out reason))
+                    return false;
+
+                // Native CanUseItem validates the item TEMPLATE only (class/race/level/required
+                // skill rank) — weapon/armor proficiency is a separate skill-line check the client
+                // defers to equip time ("You do not have the required proficiency").
+                if (!HasProficiencyFor(itemInfo))
                 {
-                    return CanUseItemInternal(this, itemInfo.BaseAddress, out reason);
+                    reason = GameError.ProficiencyNeeded;
+                    return false;
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
@@ -2227,6 +2236,59 @@ namespace Styx.WoWInternals.WoWObjects
                 reason = GameError.InvFull;
                 throw;
             }
+        }
+
+        /// <summary>
+        /// True when the player has learned the weapon/armor skill line this item requires.
+        /// Read from the live skill list so trainable proficiencies (a dwarf hunter learning
+        /// Bows, Plate Mail at 40) are honored the moment they're learned.
+        /// </summary>
+        public bool HasProficiencyFor(ItemInfo itemInfo)
+        {
+            SkillLine required = RequiredProficiency(itemInfo);
+            return required == 0 || GetSkill(required) != null;
+        }
+
+        // TrinityCore ItemTemplate::GetSkill parity (item_weapon_skills / item_armor_skills).
+        // 0 = no proficiency line (exotic/misc weapons, misc armor, relics — those are gated by
+        // AllowableClass in the native check instead).
+        private static SkillLine RequiredProficiency(ItemInfo itemInfo)
+        {
+            if (itemInfo.ItemClass == WoWItemClass.Weapon)
+            {
+                switch (itemInfo.WeaponClass)
+                {
+                    case WoWItemWeaponClass.Axe:         return SkillLine.Axes;
+                    case WoWItemWeaponClass.AxeTwoHand:  return SkillLine.TwoHandedAxes;
+                    case WoWItemWeaponClass.Bow:         return SkillLine.Bows;
+                    case WoWItemWeaponClass.Gun:         return SkillLine.Guns;
+                    case WoWItemWeaponClass.Mace:        return SkillLine.Maces;
+                    case WoWItemWeaponClass.MaceTwoHand: return SkillLine.TwoHandedMaces;
+                    case WoWItemWeaponClass.Polearm:     return SkillLine.Polearms;
+                    case WoWItemWeaponClass.Sword:       return SkillLine.Swords;
+                    case WoWItemWeaponClass.SwordTwoHand:return SkillLine.TwoHandedSwords;
+                    case WoWItemWeaponClass.Staff:       return SkillLine.Staves;
+                    case WoWItemWeaponClass.Fist:        return SkillLine.FistWeapons;
+                    case WoWItemWeaponClass.Dagger:      return SkillLine.Daggers;
+                    case WoWItemWeaponClass.Thrown:      return SkillLine.Thrown;
+                    case WoWItemWeaponClass.Spear:       return SkillLine.Assassination;
+                    case WoWItemWeaponClass.Crossbow:    return SkillLine.Crossbows;
+                    case WoWItemWeaponClass.Wand:        return SkillLine.Wands;
+                    case WoWItemWeaponClass.FishingPole: return SkillLine.Fishing;
+                }
+            }
+            else if (itemInfo.ItemClass == WoWItemClass.Armor)
+            {
+                switch (itemInfo.ArmorClass)
+                {
+                    case WoWItemArmorClass.Cloth:   return SkillLine.Cloth;
+                    case WoWItemArmorClass.Leather: return SkillLine.Leather;
+                    case WoWItemArmorClass.Mail:    return SkillLine.Mail;
+                    case WoWItemArmorClass.Plate:   return SkillLine.PlateMail;
+                    case WoWItemArmorClass.Shield:  return SkillLine.Shield;
+                }
+            }
+            return 0;
         }
 
         /// <summary>
