@@ -49,8 +49,9 @@ namespace VibeParty
 			{
 				if (_root != null) return _root;
 				_root = new PrioritySelector(
-					// Absolutely idle — do nothing at all (no buffing either).
-					new Decorator(ctx => _waiting || VibePartySettings.Instance.DoNothing, new ActionIdle()),
+					// Absolutely idle — do nothing at all (no buffing either). A wait-HOLD yields to
+					// combat: a held follower still defends itself, then re-holds when the fight ends.
+					new Decorator(ctx => VibePartySettings.Instance.DoNothing || (_waiting && !StyxWoW.Me.Combat), new ActionIdle()),
 					// Leader: you drive manually, but the routine keeps buffs up on self + party. Buff upkeep runs
 					// OUT OF COMBAT only (so we never touch your current target mid-fight), then idle — no
 					// follow / combat / loot. Do Nothing above takes precedence for a truly dead bot.
@@ -1474,23 +1475,27 @@ namespace VibeParty
 						VibePartyPanel:Show()
 					end
 				end
-				if VibePartyPanel then VibePartyPanel:Show() return end
+				if VibePartyPanel then VibePartyPanel:SetFrameStrata('DIALOG') VibePartyPanel:Show() return end
 				local f = CreateFrame('Frame', 'VibePartyPanel', UIParent)
 				f:SetWidth(340) f:SetHeight(280)
 				f:SetPoint('RIGHT', UIParent, 'RIGHT', -40, 0)
-				f:SetFrameStrata('MEDIUM') f:SetClampedToScreen(true)
+				f:SetFrameStrata('DIALOG') f:SetToplevel(true) f:SetClampedToScreen(true)
 				f:SetBackdrop({bgFile='Interface\\Buttons\\WHITE8X8', edgeFile='Interface\\Buttons\\WHITE8X8', edgeSize=1})
-				f:SetBackdropColor(0.055, 0.055, 0.06, 0.92) f:SetBackdropBorderColor(0, 0, 0, 1)
+				f:SetBackdropColor(0.055, 0.055, 0.06, 0.72) f:SetBackdropBorderColor(0, 0, 0, 1)
 				f:SetMovable(true) f:EnableMouse(true) f:RegisterForDrag('LeftButton')
 				f:SetScript('OnDragStart', function() f:StartMoving() end)
 				f:SetScript('OnDragStop', function() f:StopMovingOrSizing() end)
 				tinsert(UISpecialFrames, 'VibePartyPanel')
 				VibePartyPanelQueue = VibePartyPanelQueue or {}
 				local function Send(order) table.insert(VibePartyPanelQueue, order) end
-				local function Btn(parent, w, h, label)
+				local function Btn(parent, w, h, label, plain)
 					local b = CreateFrame('Button', nil, parent)
 					b:SetWidth(w) b:SetHeight(h)
-					local bg = b:CreateTexture(nil, 'BACKGROUND') bg:SetAllPoints() bg:SetTexture(0.12, 0.12, 0.13, 1)
+					if not plain then
+						b:SetBackdrop({edgeFile='Interface\\Buttons\\WHITE8X8', edgeSize=1})
+						b:SetBackdropBorderColor(0.32, 0.32, 0.38, 1)
+					end
+					local bg = b:CreateTexture(nil, 'BACKGROUND') bg:SetAllPoints() bg:SetTexture(plain and 0.12 or 0.17, plain and 0.12 or 0.17, plain and 0.13 or 0.19, 1)
 					local hl = b:CreateTexture(nil, 'HIGHLIGHT') hl:SetAllPoints() hl:SetTexture(1, 1, 1, 0.08)
 					local t = b:CreateFontString(nil, 'OVERLAY', 'GameFontHighlightSmall') t:SetPoint('CENTER') t:SetText(label)
 					b.bg = bg b.text = t
@@ -1499,7 +1504,7 @@ namespace VibeParty
 				local title = f:CreateFontString(nil, 'OVERLAY', 'GameFontNormal') title:SetPoint('TOPLEFT', 8, -5) title:SetText('|cff33ff99VibeParty|r')
 				local hd = f:CreateFontString('VibePartyPanelHeadText', 'OVERLAY', 'GameFontHighlightSmall')
 				hd:SetPoint('TOPRIGHT', -26, -8) hd:SetText('')
-				local xb = Btn(f, 16, 16, '|cff909090x|r') xb:SetPoint('TOPRIGHT', -5, -4)
+				local xb = Btn(f, 16, 16, '|cff909090x|r', true) xb:SetPoint('TOPRIGHT', -5, -4)
 				xb:SetScript('OnClick', function() f:Hide() end)
 				local pages, tabs = {}, {}
 				local function SelectTab(n)
@@ -1512,7 +1517,7 @@ namespace VibeParty
 				end
 				local function AddTab(label)
 					local i = #tabs + 1
-					local b = Btn(f, 81, 22, label)
+					local b = Btn(f, 81, 22, label, true)
 					b:SetPoint('TOPLEFT', 8 + (i - 1) * 81, -24)
 					b.label = label
 					local ac = b:CreateTexture(nil, 'BORDER') ac:SetTexture(0.5, 0.84, 1, 1)
@@ -1815,6 +1820,17 @@ namespace VibeParty
 						break;
 					case "wait":
 						_waiting = !_waiting;
+						Logging.Write("VibeParty: leader said wait — {0}.", _waiting ? "holding position" : "resuming");
+						PublishAlert(false, _waiting ? "holding position" : "resuming");
+						if (_waiting)
+						{
+							// Idling the tree does NOT stop movement already in flight: native /follow
+							// is client-persistent glue and keeps dragging us — break it or the hold
+							// reads as a no-op. The queued backpedal tap covers the stationary-glue
+							// case MoveStop can't (same mechanism as rest entry).
+							WoWMovement.MoveStop();
+							QueueFollowBreak();
+						}
 						break;
 					case "interact":
 						leader.CurrentTarget?.Interact();
