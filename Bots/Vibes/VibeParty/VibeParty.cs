@@ -1378,7 +1378,20 @@ namespace VibeParty
 			}
 
 			// The frame survives bot restarts within one client session — reuse, don't duplicate.
+			// The slash handler registers BEFORE the reuse early-return so a bot restart always
+			// installs the current handler. Showing via /vp RE-CENTERS every time — a panel
+			// dragged off screen is always one /vp away from recovered.
 			string lua = $$$"""
+				SLASH_VIBEPARTY1 = '/vp'
+				SlashCmdList['VIBEPARTY'] = function()
+					if not VibePartyPanel then return end
+					if VibePartyPanel:IsShown() then VibePartyPanel:Hide()
+					else
+						VibePartyPanel:ClearAllPoints()
+						VibePartyPanel:SetPoint('CENTER', UIParent, 'CENTER', 0, 0)
+						VibePartyPanel:Show()
+					end
+				end
 				if VibePartyPanel then VibePartyPanel:Show() return end
 				local f = CreateFrame('Frame', 'VibePartyPanel', UIParent)
 				f:SetWidth(400) f:SetHeight({{{78 + LeaderCommands.Length * 18}}})
@@ -1417,9 +1430,7 @@ namespace VibeParty
 				st:SetPoint('TOPLEFT', 0, 0) st:SetWidth(376) st:SetJustifyH('LEFT') st:SetJustifyV('TOP') st:SetSpacing(3)
 				st:SetText('waiting for follower reports...')
 				SelectTab(1)
-				SLASH_VIBEPARTY1 = '/vp'
-				SlashCmdList['VIBEPARTY'] = function() if VibePartyPanel:IsShown() then VibePartyPanel:Hide() else VibePartyPanel:Show() end end
-				DEFAULT_CHAT_FRAME:AddMessage('VibeParty: command panel ready - /vp toggles it.')
+				DEFAULT_CHAT_FRAME:AddMessage('VibeParty: command panel ready - /vp toggles it (always opens centered).')
 				""";
 			Lua.DoString(lua);
 		}
