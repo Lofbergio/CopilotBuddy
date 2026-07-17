@@ -159,6 +159,7 @@ namespace VibeParty
 				_bus.Subscribe("LeaderQuests", OnLeaderQuestsMsg);   // leader's log snapshot — seed the accept whitelist
 				_bus.Subscribe("RezAssign", OnRezAssign);            // leader assigned a rezzer to a corpse
 				_bus.Subscribe("RezRelease", OnRezRelease);          // no rezzer available — release + corpse-run
+				_bus.Subscribe("Order", OnOrderReceived);            // leader panel orders (vendor/hearth/…)
 				AttachLuaEvents();
 				Vendors.OnVendorItems += OnVendorSweep;   // disposition: only true junk sells
 				Vendors.OnMailItems += OnMailSweep;       // disposition: valuables queue for the bank
@@ -568,6 +569,7 @@ namespace VibeParty
 				_partyWater?.WaterTick();   // requester side only: the leader asks for water when out
 				QuestAbandonSyncTick(bus);  // abandoned (NOT completed) quests propagate to the party
 				ShowLeaderCommandPanel();     // inject the addon-style control panel once attached + in world
+				DrainPanelOrdersTick(bus);    // panel button clicks → PartyBus "Order" messages
 				AlertDrainTick();             // follower alerts: strip data + OOM raid warning (fires even with the panel hidden)
 				UpdateLeaderPanelTick();      // push live roster/quests/alerts into the panel (~2s, panel-shown gated)
 				if ((DateTime.Now - _rezBrokerAt).TotalSeconds >= 2) { _rezBrokerAt = DateTime.Now; RezBrokerTick(bus); }  // party-rez broker (runs while dead)
@@ -585,6 +587,7 @@ namespace VibeParty
 				MirrorLeaderTeleportTick();    // LFG: match the leader's inside/outside-the-dungeon state
 				MirrorLeaderBagsTick();        // bag-visibility sync: leader's bags open ⇒ ours open
 				MirrorLeaderHearthTick();      // hearth sync: leader hearthing ⇒ we hearth (cancel if it cancels)
+				while (_orderQueue.TryDequeue(out string? order)) ExecuteOrder(order);   // leader panel orders
 				ProcessAbandonQueue();         // drop quests the leader abandoned (block set stops re-accepts)
 				PulseFollowBreak();            // executes queued /follow-break taps (press one pulse, release next)
 				if (StyxWoW.Me.Combat && !_wasInCombat) QueueFollowBreak();   // combat entry: break glue the moment WE are in combat
@@ -907,6 +910,16 @@ namespace VibeParty
 			string leader = _botMessage?.LeaderName;
 			if (string.IsNullOrEmpty(leader)) return;
 			Lua.DoString("SendChatMessage('" + msg.Replace("'", "") + "', 'WHISPER', nil, '" + leader.Replace("'", "") + "')");
+		}
+
+		// Order (leader→follower, hub thread — pure data only): queue raw order strings; the bot
+		// thread drains them through ExecuteOrder.
+		private static readonly System.Collections.Concurrent.ConcurrentQueue<string> _orderQueue =
+			new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+		private void OnOrderReceived(PartyMessage msg)
+		{
+			if (!string.IsNullOrEmpty(msg.Payload)) _orderQueue.Enqueue(msg.Payload);
 		}
 
 		// Follower → leader alert channel: feeds the leader panel's alert strip; critical alerts
@@ -1395,50 +1408,61 @@ namespace VibeParty
 		// BUTTON that sends its command to party chat; /vp toggles, Escape closes, drag to move.
 		// Descriptions stay apostrophe-free (they land inside single-quoted Lua strings).
 		private static bool _leaderPanelShown;
+		// Order names, no prefix — the transport is the PartyBus ("Order" messages), never chat.
 		private static readonly (string Cmd, string Desc)[] LeaderCommands =
 		{
-			("!vendor",            "run the whole errand: sell + repair + mail"),
-			("!hearth",            "everyone uses their hearthstone"),
-			("!forcesell",         "force a sell run"),
-			("!forcerepair",       "force a repair run"),
-			("!forcemail",         "force a mail run"),
-			("!forcetrain",        "force a class trainer visit"),
-			("!follow",            "clear holds, snap everyone to /follow"),
-			("!wait",              "toggle hold-position"),
-			("!mountup",           "everyone mounts"),
-			("!dismount",          "everyone dismounts"),
-			("!interact",          "followers interact with your target"),
-			("!clearpoi",          "drop the followers active POI"),
-			("!enterdungeon",      "LFG teleport into the dungeon"),
-			("!leavedungeon",      "LFG teleport out"),
-			("!leavebattleground", "leave the battleground"),
-			("!dance",             "morale"),
+			("vendor",            "run the whole errand: sell + repair + mail"),
+			("hearth",            "everyone uses their hearthstone"),
+			("forcesell",         "force a sell run"),
+			("forcerepair",       "force a repair run"),
+			("forcemail",         "force a mail run"),
+			("forcetrain",        "force a class trainer visit"),
+			("follow",            "clear holds, snap everyone to /follow"),
+			("wait",              "toggle hold-position"),
+			("mountup",           "everyone mounts"),
+			("dismount",          "everyone dismounts"),
+			("interact",          "followers interact with your target"),
+			("clearpoi",          "drop the followers active POI"),
+			("enterdungeon",      "LFG teleport into the dungeon"),
+			("leavedungeon",      "LFG teleport out"),
+			("leavebattleground", "leave the battleground"),
+			("dance",             "morale"),
 		};
 
+		// Layout (fixed 340x280, adversarially reviewed): 20px title row (brand + live party summary
+		// + flat close), 22px full-background tab bar (real click targets — the old text-only tabs
+		// were the complaint), fixed-height content, 2-line alert dock pinned bottom on EVERY tab.
+		// Fixed height on purpose: per-tab resizing dragged the always-on alert dock up and down —
+		// the one element that must never move. Buttons are a flat-dark factory (BACKGROUND texture
+		// + free HIGHLIGHT-layer hover); UIPanelButtonTemplate's gold cannot be desaturated on this
+		// client and clashes with the dark skin. ⚠ 3.3.5a has no SetWordWrap/SetMaxLines — every
+		// pushed line is truncated C#-side (TruncRaw) or long text wraps and breaks the fixed rows.
 		private static void ShowLeaderCommandPanel()
 		{
 			if (_leaderPanelShown) return;
 			_leaderPanelShown = true;
 
+			// Orders reference tab: 16 commands as 2 columns of 8 flat buttons, description on hover.
 			var rows = new System.Text.StringBuilder();
-			int y = 0;
+			int idx = 0;
 			foreach (var (cmd, desc) in LeaderCommands)
 			{
+				int col = idx / 8, row = idx % 8;
+				idx++;
 				rows.Append($$$"""
-					do local b = CreateFrame('Button', nil, cp) b:SetPoint('TOPLEFT', 0, {{{y}}}) b:SetWidth(120) b:SetHeight(16)
-					local bt = b:CreateFontString(nil, 'OVERLAY', 'GameFontHighlightSmall') bt:SetPoint('LEFT') bt:SetJustifyH('LEFT') bt:SetText('|cff7fd5ff{{{cmd}}}|r')
-					b:SetScript('OnEnter', function() bt:SetText('|cffffffff{{{cmd}}}|r') end)
-					b:SetScript('OnLeave', function() bt:SetText('|cff7fd5ff{{{cmd}}}|r') end)
+					do local b = Btn(cp, 158, 20, '|cff7fd5ff{{{cmd}}}|r')
+					b:SetPoint('TOPLEFT', {{{col * 166}}}, {{{-row * 22}}})
+					b.text:ClearAllPoints() b.text:SetPoint('LEFT', 6, 0)
 					b:SetScript('OnClick', function() Send('{{{cmd}}}') end)
-					local dt = cp:CreateFontString(nil, 'OVERLAY', 'GameFontDisableSmall') dt:SetPoint('TOPLEFT', 128, {{{y - 2}}}) dt:SetWidth(248) dt:SetJustifyH('LEFT') dt:SetText('{{{desc}}}') end
+					b:SetScript('OnEnter', function() GameTooltip:SetOwner(b, 'ANCHOR_RIGHT') GameTooltip:SetText('{{{desc}}}') GameTooltip:Show() end)
+					b:SetScript('OnLeave', function() GameTooltip:Hide() end) end
 					""").Append('\n');
-				y -= 18;
 			}
 
-			// The frame survives bot restarts within one client session — reuse, don't duplicate.
-			// The slash handler registers BEFORE the reuse early-return so a bot restart always
-			// installs the current handler. Showing via /vp RE-CENTERS every time — a panel
-			// dragged off screen is always one /vp away from recovered.
+			// The frame survives bot restarts within one client session — reuse, don't duplicate
+			// (re-injection would orphan a ghost frame; #1 injected-UI trap). The slash handler
+			// registers BEFORE the reuse early-return so restarts install the current handler;
+			// /vp always re-centers on show, so an off-screen drag is one /vp from recovered.
 			string lua = $$$"""
 				SLASH_VIBEPARTY1 = '/vp'
 				SlashCmdList['VIBEPARTY'] = function()
@@ -1452,105 +1476,150 @@ namespace VibeParty
 				end
 				if VibePartyPanel then VibePartyPanel:Show() return end
 				local f = CreateFrame('Frame', 'VibePartyPanel', UIParent)
-				local heights = {210, {{{160 + LeaderCommands.Length * 18}}}, 340, 440}
-				f:SetWidth(400) f:SetHeight(heights[1])
-				f:SetPoint('RIGHT', UIParent, 'RIGHT', -40, 0) f:SetFrameStrata('MEDIUM')
-				f:SetBackdrop({bgFile='Interface\\Tooltips\\UI-Tooltip-Background', edgeFile='Interface\\Tooltips\\UI-Tooltip-Border', tile=true, tileSize=16, edgeSize=16, insets={left=4,right=4,top=4,bottom=4}})
-				f:SetBackdropColor(0, 0, 0, 0.85)
+				f:SetWidth(340) f:SetHeight(280)
+				f:SetPoint('RIGHT', UIParent, 'RIGHT', -40, 0)
+				f:SetFrameStrata('MEDIUM') f:SetClampedToScreen(true)
+				f:SetBackdrop({bgFile='Interface\\Buttons\\WHITE8X8', edgeFile='Interface\\Buttons\\WHITE8X8', edgeSize=1})
+				f:SetBackdropColor(0.055, 0.055, 0.06, 0.92) f:SetBackdropBorderColor(0, 0, 0, 1)
 				f:SetMovable(true) f:EnableMouse(true) f:RegisterForDrag('LeftButton')
 				f:SetScript('OnDragStart', function() f:StartMoving() end)
 				f:SetScript('OnDragStop', function() f:StopMovingOrSizing() end)
-				local t = f:CreateFontString(nil, 'OVERLAY', 'GameFontNormal') t:SetPoint('TOPLEFT', 12, -10) t:SetText('|cff33ff99VibeParty|r')
-				local x = CreateFrame('Button', nil, f, 'UIPanelCloseButton') x:SetPoint('TOPRIGHT', 2, 2)
 				tinsert(UISpecialFrames, 'VibePartyPanel')
-				local function Send(cmd)
-					if GetNumPartyMembers() > 0 then SendChatMessage(cmd, 'PARTY')
-					else DEFAULT_CHAT_FRAME:AddMessage('VibeParty: no party to command yet.') end
+				VibePartyPanelQueue = VibePartyPanelQueue or {}
+				local function Send(order) table.insert(VibePartyPanelQueue, order) end
+				local function Btn(parent, w, h, label)
+					local b = CreateFrame('Button', nil, parent)
+					b:SetWidth(w) b:SetHeight(h)
+					local bg = b:CreateTexture(nil, 'BACKGROUND') bg:SetAllPoints() bg:SetTexture(0.12, 0.12, 0.13, 1)
+					local hl = b:CreateTexture(nil, 'HIGHLIGHT') hl:SetAllPoints() hl:SetTexture(1, 1, 1, 0.08)
+					local t = b:CreateFontString(nil, 'OVERLAY', 'GameFontHighlightSmall') t:SetPoint('CENTER') t:SetText(label)
+					b.bg = bg b.text = t
+					return b
 				end
-				local ln = f:CreateTexture(nil, 'ARTWORK') ln:SetTexture(1, 1, 1, 0.15)
-				ln:SetPoint('BOTTOMLEFT', 12, 62) ln:SetPoint('BOTTOMRIGHT', -12, 62) ln:SetHeight(1)
-				local al = f:CreateFontString('VibePartyPanelAlertText', 'OVERLAY', 'GameFontHighlightSmall')
-				al:SetPoint('BOTTOMLEFT', 12, 10) al:SetWidth(376) al:SetHeight(46)
-				al:SetJustifyH('LEFT') al:SetJustifyV('BOTTOM') al:SetSpacing(2)
-				al:SetText('|cff808080no alerts yet|r')
+				local title = f:CreateFontString(nil, 'OVERLAY', 'GameFontNormal') title:SetPoint('TOPLEFT', 8, -5) title:SetText('|cff33ff99VibeParty|r')
+				local hd = f:CreateFontString('VibePartyPanelHeadText', 'OVERLAY', 'GameFontHighlightSmall')
+				hd:SetPoint('TOPRIGHT', -26, -8) hd:SetText('')
+				local xb = Btn(f, 16, 16, '|cff909090x|r') xb:SetPoint('TOPRIGHT', -5, -4)
+				xb:SetScript('OnClick', function() f:Hide() end)
 				local pages, tabs = {}, {}
 				local function SelectTab(n)
-					for i, p in ipairs(pages) do if i == n then p:Show() else p:Hide() end end
-					for i, b in ipairs(tabs) do b.text:SetText((i == n and '|cffffffff' or '|cff808080') .. b.label .. '|r') end
-					f:SetHeight(heights[n])
+					for i = 1, #tabs do
+						local on = i == n
+						tabs[i].bg:SetTexture(0.12, 0.12, 0.13, on and 1 or 0.35)
+						tabs[i].text:SetText((on and '|cffffffff' or '|cff909090') .. tabs[i].label .. '|r')
+						if on then tabs[i].accent:Show() pages[i]:Show() else tabs[i].accent:Hide() pages[i]:Hide() end
+					end
 				end
 				local function AddTab(label)
 					local i = #tabs + 1
-					local b = CreateFrame('Button', nil, f) b:SetWidth(70) b:SetHeight(16) b:SetPoint('TOPLEFT', 12 + (i - 1) * 74, -28)
-					local bt = b:CreateFontString(nil, 'OVERLAY', 'GameFontHighlightSmall') bt:SetPoint('LEFT') bt:SetText(label)
-					b.text = bt b.label = label
+					local b = Btn(f, 81, 22, label)
+					b:SetPoint('TOPLEFT', 8 + (i - 1) * 81, -24)
+					b.label = label
+					local ac = b:CreateTexture(nil, 'BORDER') ac:SetTexture(0.5, 0.84, 1, 1)
+					ac:SetPoint('BOTTOMLEFT', 0, 0) ac:SetPoint('BOTTOMRIGHT', 0, 0) ac:SetHeight(1) ac:Hide()
+					b.accent = ac
 					b:SetScript('OnClick', function() SelectTab(i) end)
 					tabs[i] = b
 					local p = CreateFrame('Frame', nil, f)
-					p:SetPoint('TOPLEFT', 12, -50) p:SetPoint('BOTTOMRIGHT', -12, 64)
+					p:SetPoint('TOPLEFT', 8, -52) p:SetPoint('BOTTOMRIGHT', -8, 44) p:Hide()
 					pages[i] = p
 					return p
 				end
 				local mp = AddTab('Main')
-				local cp = AddTab('Commands')
+				local cp = AddTab('Orders')
 				local pp = AddTab('Party')
 				local qp = AddTab('Quests')
-				local function BigBtn(label, cmd, bx, by)
-					local b = CreateFrame('Button', nil, mp, 'UIPanelButtonTemplate')
-					b:SetWidth(180) b:SetHeight(22) b:SetPoint('TOPLEFT', bx, by) b:SetText(label)
-					b:SetScript('OnClick', function() Send(cmd) end)
+				local ln = f:CreateTexture(nil, 'ARTWORK') ln:SetTexture(0.5, 0.84, 1, 0.25)
+				ln:SetPoint('BOTTOMLEFT', 8, 40) ln:SetPoint('BOTTOMRIGHT', -8, 40) ln:SetHeight(1)
+				local al = f:CreateFontString('VibePartyPanelAlertText', 'OVERLAY', 'GameFontHighlightSmall')
+				al:SetPoint('BOTTOMLEFT', 8, 7) al:SetPoint('BOTTOMRIGHT', -8, 7) al:SetHeight(30)
+				al:SetJustifyH('LEFT') al:SetJustifyV('BOTTOM') al:SetSpacing(2)
+				al:SetText('|cff707070no alerts yet|r')
+				local money = {{'Vendor','vendor'},{'Hearth','hearth'},{'Follow','follow'},{'Hold','wait'}}
+				for i = 1, 4 do
+					local b = Btn(mp, 78, 24, money[i][1])
+					b:SetPoint('TOPLEFT', (i - 1) * 82, 0)
+					local order = money[i][2]
+					b:SetScript('OnClick', function() Send(order) end)
 				end
-				BigBtn('Vendor run', '!vendor', 0, 0)      BigBtn('Hearth home', '!hearth', 196, 0)
-				BigBtn('Follow me', '!follow', 0, -28)     BigBtn('Hold / resume', '!wait', 196, -28)
-				local mn = mp:CreateFontString(nil, 'OVERLAY', 'GameFontDisableSmall') mn:SetPoint('TOPLEFT', 0, -60) mn:SetWidth(376) mn:SetJustifyH('LEFT')
-				mn:SetText('full list on the Commands tab - alerts always show below')
+				local fd = mp:CreateFontString('VibePartyPanelFeedText', 'OVERLAY', 'GameFontHighlightSmall')
+				fd:SetPoint('TOPLEFT', 0, -32) fd:SetPoint('BOTTOMRIGHT', 0, 0)
+				fd:SetJustifyH('LEFT') fd:SetJustifyV('TOP') fd:SetSpacing(3)
+				fd:SetText('|cff707070alerts appear here, newest first|r')
 				{{{rows}}}
-				local h = cp:CreateFontString(nil, 'OVERLAY', 'GameFontDisableSmall') h:SetPoint('BOTTOMLEFT', 0, 16) h:SetWidth(376) h:SetJustifyH('LEFT')
-				h:SetText('append a name to target one follower - !vendor Bart')
-				local a = cp:CreateFontString(nil, 'OVERLAY', 'GameFontDisableSmall') a:SetPoint('BOTTOMLEFT', 0, 0) a:SetWidth(376) a:SetJustifyH('LEFT')
-				a:SetText('auto: hearthing pulls the party home; bags, dungeon side and quest log are mirrored')
-				local st = pp:CreateFontString('VibePartyPanelStatusText', 'OVERLAY', 'GameFontHighlightSmall')
-				st:SetPoint('TOPLEFT', 0, 0) st:SetWidth(376) st:SetHeight(92) st:SetJustifyH('LEFT') st:SetJustifyV('TOP') st:SetSpacing(3)
-				st:SetText('waiting for follower reports...')
-				local pl = pp:CreateFontString(nil, 'OVERLAY', 'GameFontDisableSmall') pl:SetPoint('TOPLEFT', 0, -98) pl:SetText('per-follower orders:')
 				for i = 1, 4 do
 					local row = CreateFrame('Frame', 'VibePartyPanelSlot'..i, pp)
-					row:SetPoint('TOPLEFT', 0, -114 - (i - 1) * 22) row:SetWidth(376) row:SetHeight(20) row:Hide()
-					row.name = row:CreateFontString(nil, 'OVERLAY', 'GameFontHighlightSmall') row.name:SetPoint('LEFT') row.name:SetWidth(110) row.name:SetJustifyH('LEFT')
-					local function RowBtn(label, cmd, bx)
-						local b = CreateFrame('Button', nil, row, 'UIPanelButtonTemplate')
-						b:SetWidth(60) b:SetHeight(18) b:SetPoint('LEFT', bx, 0) b:SetText(label)
-						b:SetScript('OnClick', function() if row.member then Send(cmd .. ' ' .. row.member) end end)
+					row:SetPoint('TOPLEFT', 0, -16 - (i - 1) * 24) row:SetWidth(324) row:SetHeight(22) row:Hide()
+					row.name = row:CreateFontString(nil, 'OVERLAY', 'GameFontHighlightSmall')
+					row.name:SetPoint('LEFT', 0, 0) row.name:SetWidth(96) row.name:SetJustifyH('LEFT')
+					row.info = row:CreateFontString(nil, 'OVERLAY', 'GameFontHighlightSmall')
+					row.info:SetPoint('LEFT', 100, 0) row.info:SetWidth(92) row.info:SetJustifyH('LEFT')
+					local acts = {{'Vend','vendor'},{'Train','forcetrain'},{'Wait','wait'}}
+					for a = 1, 3 do
+						local b = Btn(row, 40, 18, acts[a][1])
+						b:SetPoint('LEFT', 196 + (a - 1) * 44, 0)
+						local order = acts[a][2]
+						b:SetScript('OnClick', function() if row.member then Send(order .. ' ' .. row.member) end end)
 					end
-					RowBtn('Vendor', '!vendor', 116) RowBtn('Train', '!forcetrain', 180) RowBtn('Wait', '!wait', 244)
 				end
-				function VibePartyPanelSetMembers(names)
+				local ph = pp:CreateFontString(nil, 'OVERLAY', 'GameFontDisableSmall')
+				ph:SetPoint('TOPLEFT', 0, 0) ph:SetText('follower                 hp   quests')
+				local qt = qp:CreateFontString('VibePartyPanelQuestText', 'OVERLAY', 'GameFontHighlightSmall')
+				qt:SetPoint('TOPLEFT', 0, 0) qt:SetPoint('BOTTOMRIGHT', 0, 0)
+				qt:SetJustifyH('LEFT') qt:SetJustifyV('TOP') qt:SetSpacing(3)
+				qt:SetText('|cff707070no quest data yet|r')
+				function VibePartyPanelApply(head, feed, alerts, quests, plain, disp, infos)
+					VibePartyPanelHeadText:SetText(head)
+					VibePartyPanelFeedText:SetText(feed)
+					VibePartyPanelAlertText:SetText(alerts)
+					VibePartyPanelQuestText:SetText(quests)
 					for i = 1, 4 do
 						local row = _G['VibePartyPanelSlot'..i]
-						if names[i] then row.member = names[i] row.name:SetText('|cffffffff'..names[i]..'|r') row:Show()
+						if plain[i] then row.member = plain[i] row.name:SetText(disp[i]) row.info:SetText(infos[i]) row:Show()
 						else row.member = nil row:Hide() end
 					end
 				end
-				local qt = qp:CreateFontString('VibePartyPanelQuestText', 'OVERLAY', 'GameFontHighlightSmall')
-				qt:SetPoint('TOPLEFT', 0, 0) qt:SetWidth(376) qt:SetJustifyH('LEFT') qt:SetJustifyV('TOP') qt:SetSpacing(3)
-				qt:SetText('no quest data yet')
-				function VibePartyPanelApply(status, quests, alerts, names)
-					VibePartyPanelStatusText:SetText(status)
-					VibePartyPanelQuestText:SetText(quests)
-					VibePartyPanelAlertText:SetText(alerts)
-					VibePartyPanelSetMembers(names)
-				end
 				SelectTab(1)
-				DEFAULT_CHAT_FRAME:AddMessage('VibeParty: control panel ready - /vp toggles it (always opens centered).')
+				DEFAULT_CHAT_FRAME:AddMessage('VibeParty: control panel ready - /vp toggles (opens centered).')
 				""";
 			Lua.DoString(lua);
 		}
 
-		// Panel live refresh: the leader composes the Party roster, per-member button slots, the
-		// Quests progress readout and the alert strip, and pushes all four through one Lua apply
-		// call. Lua-side guard keeps it a no-op while the panel is hidden (alerts still reach the
-		// user — AlertDrainTick fires the raid warning independently).
+		// Panel clicks land in a Lua-side queue (buttons can't call C#); the leader drains it here
+		// and publishes each order on the bus — chat is NOT the transport (the server parses '!'/'.'
+		// prefixed chat as GM-command syntax and eats it).
+		private static DateTime _panelOrderPollAt = DateTime.MinValue;
+
+		private static void DrainPanelOrdersTick(PartyBus bus)
+		{
+			if (!_leaderPanelShown) return;
+			if ((DateTime.Now - _panelOrderPollAt).TotalMilliseconds < 250) return;
+			_panelOrderPollAt = DateTime.Now;
+			string drained = Lua.GetReturnVal<string>(
+				"local q = VibePartyPanelQueue if not q or #q == 0 then return '' end VibePartyPanelQueue = {} return table.concat(q, ';')", 0U) ?? "";
+			if (drained.Length == 0) return;
+			foreach (string order in drained.Split(';'))
+			{
+				if (string.IsNullOrWhiteSpace(order)) continue;
+				Logging.Write("[VibeParty] panel order: {0}", order);
+				bus.Publish("Order", order);
+			}
+		}
+
+		// Panel live refresh: the leader composes the header summary, Main alert feed, the alert
+		// dock, the Quests readout and the per-member roster slots, and pushes them through one
+		// Lua apply call. Lua-side guard keeps it a no-op while the panel is hidden (alerts still
+		// reach the user — AlertDrainTick fires the raid warning independently).
 		private static DateTime _panelStatusAt = DateTime.MinValue;
+
+		// 3.3.5a FontStrings have no SetWordWrap/SetMaxLines — an over-long line WRAPS and breaks
+		// the fixed-line layout, so every raw text piece is capped before coloring.
+		private static string TruncRaw(string s, int max)
+			=> string.IsNullOrEmpty(s) || s.Length <= max ? s ?? "" : s.Substring(0, max - 2) + "..";
+
+		private static string AlertLine((DateTime At, string Name, string Text, bool Crit) al)
+			=> string.Format("|cff707070{0:HH:mm}|r |cffffffff{1}|r {2}{3}|r",
+				al.At, EscLua(TruncRaw(al.Name, 12)), al.Crit ? "|cffff4040" : "|cffffd070", EscLua(TruncRaw(al.Text, 38)));
 
 		private void UpdateLeaderPanelTick()
 		{
@@ -1564,35 +1633,54 @@ namespace VibeParty
 
 			long cutoff = DateTime.UtcNow.Ticks - TimeSpan.FromSeconds(ProgressLivenessSeconds).Ticks;
 
-			// Party roster + member slots (live reporters only get order buttons).
-			var status = new System.Text.StringBuilder();
-			var members = new List<string>();
+			// Roster slots: name colored by STATE (the actionable glance signal), role as a letter,
+			// numbers in the info column. Live reporters get the per-member order buttons.
+			var plain = new List<string>();
+			var disp = new List<string>();
+			var infos = new List<string>();
+			int liveN = 0, deadN = 0, combatN = 0, silentN = 0;
 			foreach (var kv in _partyProgress.OrderBy(k => k.Value.Name))
 			{
 				MemberProgress mp = kv.Value;
+				if (string.IsNullOrEmpty(mp.Name)) continue;
 				bool live = mp.LastUtcTicks >= cutoff;
 				WoWPlayer? p = ObjectManager.GetObjectByGuid<WoWPlayer>(kv.Key);
+				bool dead = p != null && (p.Dead || p.IsGhost);
+				bool combat = p != null && p.Combat;
+				if (!live) silentN++; else { liveN++; if (dead) deadN++; else if (combat) combatN++; }
+
 				int done = 0;
 				foreach (PlayerQuest q in mine)
 					if (mp.QuestComplete.TryGetValue(q.Id, out bool d) && d) done++;
-				string state = !live ? "|cff808080no heartbeat|r"
-					: p == null ? "|cffb0b0b0far away|r"
-					: p.Dead || p.IsGhost ? "|cffff4040DEAD|r"
-					: p.Combat ? "|cffffc040in combat|r"
-					: "|cff40ff40ok|r";
-				string hp = live && p != null && !p.Dead ? string.Format(" {0:F0}%", p.HealthPercent) : "";
-				status.AppendFormat("|cffffffff{0}|r |cff808080({1})|r {2}{3}  |cffb0b0b0quests {4}/{5}|r\\n",
-					EscLua(mp.Name), mp.Role, state, hp, done, mine.Count);
-				if (live && members.Count < 4 && !string.IsNullOrEmpty(mp.Name)) members.Add(mp.Name);
-			}
-			if (status.Length == 0) status.Append("no follower reports yet");
 
-			// Quests readout: my log vs the live reporters (same shape ReviewPartyProgress logs).
+				string nameColor = !live ? "|cff707070" : dead ? "|cffff4040" : combat ? "|cffffa040" : "|cffffffff";
+				string roleLetter = string.IsNullOrEmpty(mp.Role) ? "D" : mp.Role.Substring(0, 1);
+				string info = !live ? "|cff707070silent|r"
+					: dead ? "|cffff4040DEAD|r"
+					: p == null ? "|cff909090far|r"
+					: string.Format("|cffd0d0d0{0:F0}%|r |cff909090{1}/{2}|r", p.HealthPercent, done, mine.Count);
+
+				if (plain.Count < 4)
+				{
+					plain.Add(EscLua(mp.Name));
+					disp.Add("|cff909090" + roleLetter + "|r " + nameColor + EscLua(TruncRaw(mp.Name, 12)) + "|r");
+					infos.Add(info);
+				}
+			}
+
+			// Header summary: the worst live condition wins — readable without opening any tab.
+			string head = deadN > 0 ? "|cffff4040" + deadN + " DEAD|r"
+				: silentN > 0 ? "|cff909090" + silentN + " silent|r"
+				: combatN > 0 ? "|cffffa040" + combatN + " in combat|r"
+				: liveN > 0 ? "|cff40ff40" + liveN + "/" + liveN + " ok|r"
+				: "|cff707070no followers|r";
+
+			// Quests: collapse done quests to a count (packing every quest was the space complaint);
+			// list only the ones the party is still working, capped.
 			var quests = new System.Text.StringBuilder();
-			int shown = 0;
+			int doneQ = 0, listed = 0, overflow = 0;
 			foreach (PlayerQuest q in mine)
 			{
-				if (++shown > 22) { quests.Append("|cff808080(").Append(mine.Count - 22).Append(" more...)|r"); break; }
 				var behind = new List<string>();
 				bool anyReport = false;
 				foreach (var kv in _partyProgress)
@@ -1602,24 +1690,37 @@ namespace VibeParty
 					anyReport = true;
 					if (!d) behind.Add(kv.Value.Name);
 				}
+				if (anyReport && behind.Count == 0) { doneQ++; continue; }
+				if (listed >= 9) { overflow++; continue; }
+				listed++;
 				behind.Sort();
-				string verdict = !anyReport ? "|cff808080no reports|r"
-					: behind.Count == 0 ? "|cff40ff40party done|r"
-					: "|cffffc040waiting: " + EscLua(string.Join(", ", behind)) + "|r";
-				quests.AppendFormat("|cffffffff{0}|r  {1}\\n", EscLua(q.Name), verdict);
+				string verdict = !anyReport ? "|cff707070no reports|r"
+					: "|cffffc040waiting: " + EscLua(TruncRaw(string.Join(", ", behind), 26)) + "|r";
+				quests.AppendFormat("|cffffffff{0}|r {1}\\n", EscLua(TruncRaw(q.Name, 24)), verdict);
 			}
-			if (quests.Length == 0) quests.Append("no quests in your log");
+			var questsOut = new System.Text.StringBuilder();
+			if (doneQ > 0) questsOut.Append("|cff40ff40").Append(doneQ).Append(" done|r\\n");
+			questsOut.Append(quests);
+			if (overflow > 0) questsOut.Append("|cff707070(+").Append(overflow).Append(" more)|r");
+			if (questsOut.Length == 0) questsOut.Append("|cff707070no quests in your log|r");
 
-			// Alert strip: the last 3, oldest first (reads like chat), critical in red.
-			var alerts = new System.Text.StringBuilder();
-			foreach (var al in _alerts.Skip(Math.Max(0, _alerts.Count - 3)))
-				alerts.AppendFormat("|cff808080{0:HH:mm}|r |cffffffff{1}|r {2}{3}|r\\n",
-					al.At, EscLua(al.Name), al.Crit ? "|cffff4040" : "|cffffd070", EscLua(al.Text));
-			if (alerts.Length == 0) alerts.Append("|cff808080no alerts yet|r");
+			// Feeds: newest first — mid-combat the leader reads "what just fired" top-down.
+			var feed = new System.Text.StringBuilder();
+			for (int i = _alerts.Count - 1; i >= 0 && i >= _alerts.Count - 8; i--)
+				feed.Append(AlertLine(_alerts[i])).Append("\\n");
+			if (feed.Length == 0) feed.Append("|cff707070no alerts yet|r");
 
-			string names = string.Join(",", members.Select(n => "'" + EscLua(n) + "'"));
+			var dock = new System.Text.StringBuilder();
+			for (int i = _alerts.Count - 1; i >= 0 && i >= _alerts.Count - 2; i--)
+				dock.Append(AlertLine(_alerts[i])).Append("\\n");
+			if (dock.Length == 0) dock.Append("|cff707070no alerts yet|r");
+
+			string plainArr = string.Join(",", plain.Select(n => "'" + n + "'"));
+			string dispArr = string.Join(",", disp.Select(n => "'" + n + "'"));
+			string infoArr = string.Join(",", infos.Select(n => "'" + n + "'"));
 			Lua.DoString("if VibePartyPanelApply and VibePartyPanel:IsShown() then VibePartyPanelApply('"
-				+ status + "', '" + quests + "', '" + alerts + "', {" + names + "}) end");
+				+ head + "', '" + feed + "', '" + dock + "', '" + questsOut + "', {"
+				+ plainArr + "}, {" + dispArr + "}, {" + infoArr + "}) end");
 		}
 
 		private void OnPartyChat(WoWChat.ChatLanguageSpecificEventArgs e)
@@ -1628,21 +1729,31 @@ namespace VibeParty
 			WoWPlayer? leader = ObjectManager.GetObjectByGuid<WoWPlayer>(_botMessage.LeaderGuid);
 			if (leader == null || e.Author != leader.Name) return;
 
-			// ⚠ New commands here also go in the LeaderCommands panel table.
-			foreach (string raw in e.Message.Split(new[] { "!" }, StringSplitOptions.RemoveEmptyEntries))
+			// Typed fallback for orders. '#' — NOT '!' or '.': the server (acore) parses those chat
+			// prefixes as GM-command syntax and eats the message ("Command \"follow\" does not exist").
+			foreach (string raw in e.Message.Split(new[] { "#" }, StringSplitOptions.RemoveEmptyEntries))
+				ExecuteOrder(raw);
+		}
+
+		// One order = "cmd" or "cmd Name" (targeted at ONE follower — everyone else drops it).
+		// Orders arrive over the PartyBus ("Order", published from the leader panel) or as typed
+		// '#cmd' party chat — one grammar, one executor.
+		// ⚠ New commands here also go in the LeaderCommands panel table.
+		private void ExecuteOrder(string raw)
+		{
+			string token = raw.Trim();
+			if (token.Length == 0) return;
+			int sp = token.IndexOf(' ');
+			if (sp > 0)
 			{
-				// "!cmd Name" targets ONE follower — everyone else ignores the token. The panel's
-				// per-member buttons ride this, and it works typed by hand too.
-				string token = raw.Trim();
-				int sp = token.IndexOf(' ');
-				if (sp > 0)
-				{
-					string arg = token.Substring(sp + 1).Trim();
-					token = token.Substring(0, sp);
-					if (arg.Length > 0 && !arg.Equals(StyxWoW.Me.Name, StringComparison.OrdinalIgnoreCase))
-						continue;
-				}
-				switch (token)
+				string arg = token.Substring(sp + 1).Trim();
+				token = token.Substring(0, sp);
+				if (arg.Length > 0 && !arg.Equals(StyxWoW.Me.Name, StringComparison.OrdinalIgnoreCase))
+					return;
+			}
+			WoWPlayer? leader = _botMessage != null ? ObjectManager.GetObjectByGuid<WoWPlayer>(_botMessage.LeaderGuid) : null;
+			{
+				switch (token.ToLowerInvariant())
 				{
 					case "dance":
 						Logging.Write("VibeParty: Dancing");
