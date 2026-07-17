@@ -2239,6 +2239,13 @@ namespace Styx.WoWInternals.WoWObjects
         }
 
         /// <summary>
+        /// True when a Warrior has Titan's Grip (Fury tree tab 2, talent index 20) — a 2H
+        /// weapon then occupies a single hand for slot-mapping purposes.
+        /// </summary>
+        public bool HasTitansGrip =>
+            Class == WoWClass.Warrior && Lua.GetReturnVal<int>("return GetTalentInfo(2,20)", 4U) > 0;
+
+        /// <summary>
         /// True when the player has learned the weapon/armor skill line this item requires.
         /// Read from the live skill list so trainable proficiencies (a dwarf hunter learning
         /// Bows, Plate Mail at 40) are honored the moment they're learned.

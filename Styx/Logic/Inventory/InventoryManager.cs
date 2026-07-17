@@ -83,7 +83,7 @@ namespace Styx.Logic.Inventory
                 case InventoryType.TwoHandWeapon:
                 {
                     list.Add(InventorySlot.MainHandSlot);
-                    bool flag = StyxWoW.Me.Class == WoWClass.Warrior && Lua.GetReturnVal<int>("return GetTalentInfo(2,20)", 4U) > 0;
+                    bool flag = StyxWoW.Me.HasTitansGrip;
                     WoWItem mainHand = StyxWoW.Me.Inventory.Equipped.MainHand;
                     if (flag && mainHand != null && mainHand.ItemInfo.InventoryType == InventoryType.TwoHandWeapon)
                     {
