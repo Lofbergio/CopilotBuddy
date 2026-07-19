@@ -147,9 +147,10 @@ SourceCompiler builds its reference set from the assemblies **loaded at compile 
 `Routines/GoodVibes/GVSettingsForm.cs` (reference implementation: title band, `NavBar`, `Card`s, accent Save) ·
 `Plugins/VibeTalents/Forms/*` (talent-tree controls are `IThemeExempt`) · `Plugins/GuildRecruiter/ConfigForm.cs`
 (frameless chrome, `Stack`-style rows, glyph-only toggles) · `Bots/Vibes/VibeParty` · `Bots/Vibes/VibeGrinder`
-(`PropertyGrid`) · `Bots/Vibes/VibeQuester` (legacy, stock controls + `Apply`).
+(`PropertyGrid`) · `Bots/Vibes/VibeQuester` (legacy, stock controls + `Apply`) · `Plugins/AutoEquip2`
+(legacy, `PropertyGrid` + `Apply` — maintained by us since the 2026-07 overhaul, no longer a shipped original).
 
-Third-party drop-ins (AutoEquip2, RareKiller, LazyRaider, Templar…) are shipped originals — leave them alone.
+Third-party drop-ins (RareKiller, LazyRaider, Templar…) are shipped originals — leave them alone.
 
 ---
 
