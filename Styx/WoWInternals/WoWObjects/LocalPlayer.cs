@@ -2246,6 +2246,14 @@ namespace Styx.WoWInternals.WoWObjects
             Class == WoWClass.Warrior && Lua.GetReturnVal<int>("return GetTalentInfo(2,20)", 4U) > 0;
 
         /// <summary>
+        /// True when the player can dual-wield — base spell 674 (rogue/DK innate, warrior/hunter
+        /// trained at 20) or the Enhancement talent 30798. Until then SecondaryHandSlot is not a
+        /// legal target for any weapon and must not be offered by slot mapping.
+        /// </summary>
+        public bool CanDualWield =>
+            Logic.Combat.SpellManager.HasSpell(674) || Logic.Combat.SpellManager.HasSpell(30798);
+
+        /// <summary>
         /// True when the player has learned the weapon/armor skill line this item requires.
         /// Read from the live skill list so trainable proficiencies (a dwarf hunter learning
         /// Bows, Plate Mail at 40) are honored the moment they're learned.

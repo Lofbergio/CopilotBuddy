@@ -64,11 +64,19 @@ namespace Styx.Logic.Inventory
                     break;
                 case InventoryType.Weapon:
                     list.Add(InventorySlot.MainHandSlot);
-                    list.Add(InventorySlot.SecondaryHandSlot);
+                    // Offhand is only a legal target for a WEAPON once the player can dual-wield
+                    // — offering it earlier made every spare 1H fire a client-refused equip into
+                    // the empty offhand (pre-20 hunter, Anvilmar Knife, benched 3x).
+                    if (StyxWoW.Me.CanDualWield)
+                        list.Add(InventorySlot.SecondaryHandSlot);
+                    break;
+                case InventoryType.WeaponOffHand:
+                    if (StyxWoW.Me.CanDualWield)
+                        list.Add(InventorySlot.SecondaryHandSlot);
                     break;
                 case InventoryType.Shield:
-                case InventoryType.WeaponOffHand:
                 case InventoryType.Holdable:
+                    // Never need dual wield — shields/frills are not weapons.
                     list.Add(InventorySlot.SecondaryHandSlot);
                     break;
                 case InventoryType.Ranged:
