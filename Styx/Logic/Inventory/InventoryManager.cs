@@ -107,8 +107,8 @@ namespace Styx.Logic.Inventory
                 case InventoryType.Ammo:
                     // WotLK: Ammo slot exists (physical slot 0) but AutoEquip2 (Cata plugin)
                     // never adds AmmoSlot=0 to its EquippedItems dictionary → KeyNotFoundException.
-                    // Return empty list so AutoEquip2 skips ammo items gracefully.
-                    // Ammo is auto-equipped by AutoEquipper.CheckAndEquipAmmo() instead.
+                    // Return empty list so AutoEquip2 skips ammo items gracefully; the plugin's
+                    // own Lua ammo path (CheckAndEquipAmmo) handles ammo equipping.
                     break;
             }
 
