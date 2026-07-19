@@ -165,6 +165,7 @@ namespace VibeParty
 				Vendors.OnVendorItems += OnVendorSweep;   // disposition: only true junk sells
 				Vendors.OnMailItems += OnMailSweep;       // disposition: valuables queue for the bank
 				LootTargeting.Instance.IncludeTargetsFilter += LevelBot.LevelbotIncludeLootsFilter;
+				LootTargeting.Instance.IncludeTargetsFilter += IncludeQuestSparkles;   // Goober-type quest objects (LevelBot only admits chests)
 				LootTargeting.Instance.IncludeTargetsFilter += PruneDangerousCollectibles;
 				LootTargeting.Instance.IncludeTargetsFilter += PartyLootFilter;   // Phase 5: lease-gate collectibles
 				Targeting.Instance.IncludeTargetsFilter += new IncludeTargetsFilterDelegate(IncludeTargetsFilter);
@@ -210,6 +211,7 @@ namespace VibeParty
 			Vendors.OnVendorItems -= OnVendorSweep;
 			Vendors.OnMailItems -= OnMailSweep;
 			LootTargeting.Instance.IncludeTargetsFilter -= LevelBot.LevelbotIncludeLootsFilter;
+			LootTargeting.Instance.IncludeTargetsFilter -= IncludeQuestSparkles;
 			LootTargeting.Instance.IncludeTargetsFilter -= PruneDangerousCollectibles;
 			LootTargeting.Instance.IncludeTargetsFilter -= PartyLootFilter;
 			Targeting.Instance.IncludeTargetsFilter -= new IncludeTargetsFilterDelegate(IncludeTargetsFilter);
@@ -2619,6 +2621,26 @@ namespace VibeParty
 		private static void PruneDangerousCollectibles(List<WoWObject> incoming, HashSet<WoWObject> outgoing)
 		{
 			outgoing.RemoveWhere(o => o is WoWGameObject go && HostileBubbleCovers(go.Location));
+		}
+
+		// Quest ground objects come in TWO GO types: chest-loot (LevelBot admits those via LootChests) and
+		// "use" objects (Goober — mugs, kegs, levers, boards). LevelBot's filter only admits herb/mineral/
+		// chest, so Goober-type quest objectives were invisible to followers (live report 2026-07-19). The
+		// server already says per player which GO is our quest business — the sparkle dynamic flags CanLoot
+		// reads ("on the quest, still needs it") — so include any sparkling non-profession GO in radius and
+		// let the safety (PruneDangerousCollectibles) and lease (PartyLootFilter) filters behind us arbitrate.
+		private static void IncludeQuestSparkles(List<WoWObject> incoming, HashSet<WoWObject> outgoing)
+		{
+			foreach (WoWObject obj in incoming)
+			{
+				if (obj is not WoWGameObject go) continue;
+				// Professions stay behind the Harvest settings; a bobber is a transient player-owned object.
+				if (go.IsHerb || go.IsMineral || go.SubType == WoWGameObjectType.FishingBobber) continue;
+				if (go.Distance > LootTargeting.LootRadius) continue;
+				if (Blacklist.Contains(go.Guid)) continue;
+				if (!go.CanLoot) continue;
+				outgoing.Add(go);
+			}
 		}
 
 		// Phase 5: lease-gate collectible ground objects — pursue only what WE hold a lease for; claim the nearest
