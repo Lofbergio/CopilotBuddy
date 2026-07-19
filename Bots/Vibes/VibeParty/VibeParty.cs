@@ -1868,8 +1868,13 @@ namespace VibeParty
 		{
 			bool inParty = StyxWoW.Me.IsInParty;
 			bool inRaid  = StyxWoW.Me.IsInRaid;
+			// PartyMemberGuids excludes SELF (PartyDefenseTarget re-adds it for the same reason). Without it,
+			// a mob whose only target is ME never enters the list — and IsInCombatState()'s FirstUnit gate
+			// then holds the combat branch closed while I'm being hit (follower frozen mid-fight).
 			List<ulong> partyGuids = StyxWoW.Me.PartyMemberGuids.ToList();
 			List<ulong> raidGuids  = StyxWoW.Me.RaidMemberGuids.ToList();
+			partyGuids.Add(StyxWoW.Me.Guid);
+			raidGuids.Add(StyxWoW.Me.Guid);
 			List<WoWPlayer>? members = inParty ? StyxWoW.Me.PartyMembers :
 			                           inRaid  ? StyxWoW.Me.RaidMembers  : null;
 
@@ -2269,11 +2274,20 @@ namespace VibeParty
 			if (runner != null) return runner;
 
 			// Tier 1 — the leader's target, only while the leader is actually IN combat (pull is on),
-			// not while it's just targeting a mob to mark/inspect. This keeps organized pulls real.
-			if (_botMessage != null && _botMessage.LeaderInCombat && _botMessage.LeaderTargetGuid != 0)
+			// not while it's just targeting a mob to mark/inspect. Prefer the LIVE OM read over the bus —
+			// the bus lags the fight (same lesson the mover's 2b branch already carries); the bus covers a
+			// leader outside OM range.
+			if (_botMessage != null)
 			{
-				WoWUnit? t = ObjectManager.GetObjectByGuid<WoWUnit>(_botMessage.LeaderTargetGuid);
-				if (t != null && !t.Dead && t.Attackable && (t.IsHostile || t.IsNeutral)) return t;
+				WoWPlayer? leader = ObjectManager.GetObjectByGuid<WoWPlayer>(_botMessage.LeaderGuid);
+				bool leaderFighting = leader != null ? leader.Combat : _botMessage.LeaderInCombat;
+				ulong targetGuid = leader != null && leader.CurrentTargetGuid != 0
+					? leader.CurrentTargetGuid : _botMessage.LeaderTargetGuid;
+				if (leaderFighting && targetGuid != 0)
+				{
+					WoWUnit? t = ObjectManager.GetObjectByGuid<WoWUnit>(targetGuid);
+					if (t != null && !t.Dead && t.Attackable && (t.IsHostile || t.IsNeutral)) return t;
+				}
 			}
 			// Tier 2 — party defense: a mob already fighting ANY member (or a member's pet) is party
 			// business whether or not the human leader ever targets it. Before this, only the aggroed
