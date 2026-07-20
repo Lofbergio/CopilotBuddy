@@ -38,7 +38,7 @@ namespace Bots.VibeGrinder
     /// user-facing, because no one can sanely tune "CorridorDangerCap=20 vs 22". Two enums
     /// (AddAvoidance, RelocateMode) replace ~14 individually-meaningless knobs.
     /// </summary>
-    public class VibeGrinderSettings : Settings
+    public class VibeGrinderSettings : Settings, Bots.Vibes.Shared.IVibeTuning
     {
         private static VibeGrinderSettings _instance;
 

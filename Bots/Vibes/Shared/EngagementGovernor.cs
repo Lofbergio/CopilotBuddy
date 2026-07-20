@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using Bots.VibeGrinder;
 using Bots.VibeGrinder.Data;
 using Styx;
 using Styx.Helpers;
@@ -21,10 +20,34 @@ namespace Bots.Vibes.Shared
     ///   Targeting.Instance.WeighTargetsFilter += governor.WeighTargets;
     ///   Targeting.Instance.IncludeTargetsFilter += governor.IncludeTargets;
     /// plus OnClientPullError from a UI_ERROR_MESSAGE handler, NotifyKillEntry from OnMobKilled.
-    /// Engagement knobs stay on VibeGrinderSettings (one tuning surface for both bots).
+    /// Tuning comes from IVibeTuning (assigned by the host in Start), NOT from a concrete bot: this
+    /// class is Shared/ and must not import the bot that owns it. Log prefix likewise via Tag.
     /// </summary>
     public class EngagementGovernor
     {
+        private static IVibeTuning _tuning;
+
+        /// <summary>
+        /// The tuning this governor reads. The owning botbase assigns it in Start(). Static because
+        /// several of the pull helpers below are static and are called from the bots' own weighting
+        /// passes — this replaces a hard read of VibeGrinderSettings.Instance, which is precisely what
+        /// made "shared" code depend on one concrete bot.
+        /// Throws rather than defaulting: silently grinding on default thresholds is how a bot dies.
+        /// </summary>
+        public static IVibeTuning Tuning
+        {
+            get => _tuning ?? throw new System.InvalidOperationException(
+                "EngagementGovernor.Tuning is unset — the owning botbase must assign it in Start().");
+            set => _tuning = value;
+        }
+
+        /// <summary>
+        /// Log prefix, assigned by the owning botbase from its own Name. Every line this class writes
+        /// used to be hardcoded "[VibeGrinder/…]", so a VibeQuester2 run reported its decisions under a
+        /// bot that wasn't running — in the exact channel outcomes get graded from.
+        /// </summary>
+        public static string Tag { get; set; } = "Vibes";
+
         private readonly IEngagementHost _host;
 
         private ulong _committedGuid;
@@ -47,6 +70,11 @@ namespace Bots.Vibes.Shared
         // "Same elevation" tolerance: a hostile more than this many yards above/below is on a different
         // deck (a cliff/bridge) and can't reach us — verified real protection (Kenata Dabyrie, log). One
         // const, six aggro/bubble checks; a retune must not drift between them.
+        /// <summary>unit_flags bits that make a mob permanently unattackable (non-attackable, immune to
+        /// players, uninteractible). DB truth, shared by spot selection and the live entry veto — one copy
+        /// so a retune can't drift between them.</summary>
+        public const long ImmuneUnitFlagMask = 0x2L | 0x100L | 0x2000000L;
+
         private const float SameLevelZTolerance = 5f;
 
         // Pathability-REJECT strikes per guid (session-scoped): 3 no-path rejects of the same mob = a real
@@ -91,7 +119,7 @@ namespace Bots.Vibes.Shared
                 _pullErrorCount++;
                 _lastPullError = msg;
                 _pullErrorAt = DateTime.UtcNow;
-                Logging.WriteDebug("[VibeGrinder/Commit] pull-error strike {0} on {1:X}: '{2}'",
+                Logging.WriteDebug("[" + Tag + "/Commit] pull-error strike {0} on {1:X}: '{2}'",
                     _pullErrorCount, _committedGuid, msg);
             }
         }
@@ -168,7 +196,7 @@ namespace Bots.Vibes.Shared
         /// The fight is coming regardless, so these keep tier-0 pick priority and bypass the exposure gates.
         /// In-band mobs deliberately do NOT qualify (the Lost Rigger fix).
         /// </summary>
-        public static bool FightIsOurs(WoWUnit u, WoWUnit me, VibeGrinderSettings s)
+        public static bool FightIsOurs(WoWUnit u, WoWUnit me, IVibeTuning s)
         {
             int ulevel = (int)u.Level;
             bool outOfBand = ulevel > me.Level + s.PathHostileLevelMargin
@@ -184,7 +212,7 @@ namespace Bots.Vibes.Shared
         /// plus mobs within AssistRadius of x (coarse same-camp assist). A LOWER bound for a long fight.
         /// </summary>
         public static int FightExposure(WoWUnit x, WoWPoint point, List<WoWUnit> hostiles,
-                                        VibeGrinderSettings s, out string colliders)
+                                        IVibeTuning s, out string colliders)
         {
             int n = 0;
             System.Text.StringBuilder sb = null;
@@ -211,7 +239,7 @@ namespace Bots.Vibes.Shared
 
         // Where WE stand when the opener goes out: on the approach line MaxPullDistance short of x (the
         // mob then runs to us, so the fight sits there); already in pull range → right where we are.
-        public static WoWPoint OpenPoint(WoWUnit me, WoWUnit x, VibeGrinderSettings s)
+        public static WoWPoint OpenPoint(WoWUnit me, WoWUnit x, IVibeTuning s)
         {
             WoWPoint mine = me.Location, theirs = x.Location;
             double d = mine.Distance(theirs);
@@ -228,7 +256,7 @@ namespace Bots.Vibes.Shared
         /// ~8yd steps, bounded, so it costs distance checks, not pathfinds.
         /// </summary>
         private static int CorridorExposure(WoWPoint[] path, WoWUnit x, List<WoWUnit> hostiles,
-                                            VibeGrinderSettings s, out string colliders)
+                                            IVibeTuning s, out string colliders)
         {
             int n = 0;
             System.Text.StringBuilder sb = null;
@@ -304,7 +332,7 @@ namespace Bots.Vibes.Shared
             }
             if (vetoed > 0 && (!_eliteVetoLogSw.IsRunning || _eliteVetoLogSw.Elapsed.TotalSeconds >= 3))
             {
-                Logging.WriteDebug("[VibeGrinder/Hostiles] vetoed {0} elite(s) from pull candidates (e.g. {1}) — won't engage.",
+                Logging.WriteDebug("[" + Tag + "/Hostiles] vetoed {0} elite(s) from pull candidates (e.g. {1}) — won't engage.",
                     vetoed, sample);
                 _eliteVetoLogSw.Restart();
             }
@@ -337,7 +365,7 @@ namespace Bots.Vibes.Shared
             }
             if (vetoed > 0 && (!_playerVetoLogSw.IsRunning || _playerVetoLogSw.Elapsed.TotalSeconds >= 3))
             {
-                Logging.WriteDebug("[VibeGrinder/Hostiles] vetoed {0} player/pet candidate(s) (e.g. {1}) — never proactively PvP.",
+                Logging.WriteDebug("[" + Tag + "/Hostiles] vetoed {0} player/pet candidate(s) (e.g. {1}) — never proactively PvP.",
                     vetoed, sample);
                 _playerVetoLogSw.Restart();
             }
@@ -365,7 +393,7 @@ namespace Bots.Vibes.Shared
             }
             if (vetoed > 0 && (!_entryVetoLogSw.IsRunning || _entryVetoLogSw.Elapsed.TotalSeconds >= 3))
             {
-                Logging.WriteDebug("[VibeGrinder/Hostiles] vetoed {0} banned/immune-entry candidate(s) (e.g. {1}) — won't engage.",
+                Logging.WriteDebug("[" + Tag + "/Hostiles] vetoed {0} banned/immune-entry candidate(s) (e.g. {1}) — won't engage.",
                     vetoed, sample);
                 _entryVetoLogSw.Restart();
             }
@@ -378,7 +406,7 @@ namespace Bots.Vibes.Shared
             bool immune;
             if (_dbImmuneCache.TryGetValue(entry, out immune)) return immune;
             long flags = GrindMobsRepository.GetTemplateUnitFlags(entry);
-            immune = flags > 0 && (flags & Bots.VibeGrinder.Selection.SpotSelector.ImmuneUnitFlagMask) != 0;
+            immune = flags > 0 && (flags & ImmuneUnitFlagMask) != 0;
             _dbImmuneCache[entry] = immune;
             return immune;
         }
@@ -389,7 +417,7 @@ namespace Bots.Vibes.Shared
         /// explicitly said the engage can't work); the slow clock only counts with the in-place signature.
         /// Kills reset strikes (NotifyKillEntry).
         /// </summary>
-        private void RecordEntryGiveUp(WoWUnit held, double d, VibeGrinderSettings s, bool clientReported)
+        private void RecordEntryGiveUp(WoWUnit held, double d, IVibeTuning s, bool clientReported)
         {
             if (held == null || held.Entry == 0) return;
             if (!clientReported && (d > s.MaxPullDistance + 3 || !held.InLineOfSpellSight)) return;
@@ -401,7 +429,7 @@ namespace Bots.Vibes.Shared
             _entryBanUntil[held.Entry] = DateTime.UtcNow.AddMinutes(s.EntryBanMinutes);
             _entryGiveUps.Remove(held.Entry);
             Logging.Write(System.Drawing.Color.Khaki,
-                "[VibeGrinder/Commit] ENTRY BAN {0} (entry {1}) — {2} distinct in-place give-ups; ignoring that name for {3}m.",
+                "[" + Tag + "/Commit] ENTRY BAN {0} (entry {1}) — {2} distinct in-place give-ups; ignoring that name for {3}m.",
                 held.Name, held.Entry, s.EntryBanGiveUps, s.EntryBanMinutes);
         }
 
@@ -412,7 +440,7 @@ namespace Bots.Vibes.Shared
             for (int i = 0; i < units.Count; i++)
                 if (units[i].Object != null && units[i].Object.Guid == guid)
                 {
-                    units[i].Score += VibeGrinderSettings.Instance.PullCommitBoost;
+                    units[i].Score += Tuning.PullCommitBoost;
                     break;
                 }
         }
@@ -428,7 +456,7 @@ namespace Bots.Vibes.Shared
             for (int i = 0; i < units.Count; i++)
                 if (units[i].Object != null && units[i].Object.Guid == ct)
                 {
-                    units[i].Score += VibeGrinderSettings.Instance.PullCommitBoost;
+                    units[i].Score += Tuning.PullCommitBoost;
                     break;
                 }
         }
@@ -440,7 +468,7 @@ namespace Bots.Vibes.Shared
         private void ApplyCrowdAndNeutralWeighting(List<Targeting.TargetPriority> units,
                                                    WoWUnit me, List<WoWUnit> hostiles)
         {
-            var s = VibeGrinderSettings.Instance;
+            IVibeTuning s = Tuning;
             if (s.PullCrowdRadius <= 0f) return;   // AddAvoidance Off disables the whole layer
 
             // Squishy-lowbie COMFORT taper — applies only to the soft tiebreaker penalty below. The hard
@@ -530,7 +558,7 @@ namespace Bots.Vibes.Shared
         private void ApplyPullCommitment(List<Targeting.TargetPriority> units,
                                          WoWUnit me, List<WoWUnit> hostiles)
         {
-            var s = VibeGrinderSettings.Instance;
+            IVibeTuning s = Tuning;
 
             // Dead/ghost: the pre-pull selection layer has no business running. Own drop path — never the
             // held==null branch, so the drop-ban can't misread a death as a wedge.
@@ -552,7 +580,7 @@ namespace Bots.Vibes.Shared
             {
                 if (_committedGuid != 0)
                 {
-                    Logging.WriteDebug("[VibeGrinder/Commit] swimming — dropping pin on {0:X} (won't tread water after it).",
+                    Logging.WriteDebug("[" + Tag + "/Commit] swimming — dropping pin on {0:X} (won't tread water after it).",
                         _committedGuid);
                     _committedGuid = 0; _committedTimer.Reset(); _committedLastDist = double.MaxValue;
                     _host.RecordSwimBlocked();
@@ -592,7 +620,7 @@ namespace Bots.Vibes.Shared
                         if (exposure >= maxCompany)
                         {
                             Logging.Write(System.Drawing.Color.Khaki,
-                                "[VibeGrinder/Commit] PREEMPT DENIED {0} (d={1:F1}) — fighting it here pulls {2} more ({3}); cap {4} — shedding it and leaving.",
+                                "[" + Tag + "/Commit] PREEMPT DENIED {0} (d={1:F1}) — fighting it here pulls {2} more ({3}); cap {4} — shedding it and leaving.",
                                 threat.Name, threatDist, exposure, who, maxCompany);
                             Blacklist.Add(threat.Guid, TimeSpan.FromSeconds(s.ExposureRejectSeconds));
                             _host.RecordExposureReject(threat);
@@ -604,7 +632,7 @@ namespace Bots.Vibes.Shared
                     if (threat != null)
                     {
                         Logging.Write(System.Drawing.Color.Khaki,
-                            "[VibeGrinder/Commit] PREEMPT to {0} (d={1:F1}, aggro={2:F0}{3}) — path hostile about to pull; deferring {4:X}",
+                            "[" + Tag + "/Commit] PREEMPT to {0} (d={1:F1}, aggro={2:F0}{3}) — path hostile about to pull; deferring {4:X}",
                             threat.Name, threatDist, threat.MyAggroRange, heldNeutral ? ", neutral commit" : "", _committedGuid);
                         // Commit STRAIGHT to the threat — dropping to 0 and letting Acquire re-pick would
                         // re-grab the NEARER neutral, re-fire the preempt, and oscillate 5x/sec.
@@ -642,7 +670,7 @@ namespace Bots.Vibes.Shared
                         if (exposure >= maxCompany)
                         {
                             Logging.Write(System.Drawing.Color.Khaki,
-                                "[VibeGrinder/Commit] ABORT approach to {0} (d={1:F1}) — standing inside {2} bubble(s) ({3}); cap {4} — backing off 45s.",
+                                "[" + Tag + "/Commit] ABORT approach to {0} (d={1:F1}) — standing inside {2} bubble(s) ({3}); cap {4} — backing off 45s.",
                                 held.Name, d, exposure, who, maxCompany);
                             Blacklist.Add(_committedGuid, TimeSpan.FromSeconds(s.ExposureRejectSeconds));
                             _host.RequestBreakEngageGrace();
@@ -655,7 +683,7 @@ namespace Bots.Vibes.Shared
                     if (valid && !opened && _pullErrorCount >= 2 && (DateTime.UtcNow - _pullErrorAt).TotalSeconds < 6)
                     {
                         Logging.Write(System.Drawing.Color.Khaki,
-                            "[VibeGrinder/Commit] GIVE UP FAST on {0} — client reported '{1}' ×{2} — blacklisting 2m.",
+                            "[" + Tag + "/Commit] GIVE UP FAST on {0} — client reported '{1}' ×{2} — blacklisting 2m.",
                             held.Name, _lastPullError, _pullErrorCount);
                         Blacklist.Add(_committedGuid, TimeSpan.FromMinutes(2));
                         RecordEntryGiveUp(held, d, s, clientReported: true);
@@ -666,7 +694,7 @@ namespace Bots.Vibes.Shared
                     if (valid && _committedTimer.Elapsed.TotalSeconds > s.PullCommitMaxSeconds)
                     {
                         Logging.Write(System.Drawing.Color.Khaki,
-                            "[VibeGrinder/Commit] GIVE UP on {0} (reaction={1}, d={2:F1}, noProgressFor={3:F0}s, " +
+                            "[" + Tag + "/Commit] GIVE UP on {0} (reaction={1}, d={2:F1}, noProgressFor={3:F0}s, " +
                             "moving={4}, inLoS={5}) — blacklisting 2m. nearestHostile={6} candidates={7}",
                             held.Name, held.MyReaction, d, _committedTimer.Elapsed.TotalSeconds,
                             me.IsMoving, held.InLineOfSpellSight, NearestHostileDesc(hostiles), units.Count);
@@ -677,7 +705,7 @@ namespace Bots.Vibes.Shared
                 }
                 else if (_committedGuid != 0)
                 {
-                    Logging.WriteDebug("[VibeGrinder/Commit] drop {0:X} — {1}", _committedGuid,
+                    Logging.WriteDebug("[" + Tag + "/Commit] drop {0:X} — {1}", _committedGuid,
                         held == null ? "no longer a candidate" : "dead");
                     // EXPERIMENTAL (Den of Flame timber-fence trap): left the candidate list withOUT ever
                     // closing distance or opening — almost always physically unreachable; ban at the drop
@@ -686,7 +714,7 @@ namespace Bots.Vibes.Shared
                     {
                         Blacklist.Add(_committedGuid, TimeSpan.FromMinutes(s.ExperimentalDropBanMinutes));
                         Logging.Write(System.Drawing.Color.Khaki,
-                            "[VibeGrinder/Commit] EXPERIMENTAL BAN {0} ({1:X}) — committed with zero approach progress before it left the list; likely a pathing wedge. Ignoring {2}min.",
+                            "[" + Tag + "/Commit] EXPERIMENTAL BAN {0} ({1:X}) — committed with zero approach progress before it left the list; likely a pathing wedge. Ignoring {2}min.",
                             _committedName ?? "?", _committedGuid, s.ExperimentalDropBanMinutes);
                     }
                 }
@@ -736,7 +764,7 @@ namespace Bots.Vibes.Shared
                             _pathRejects[pu.Guid] = strikes;
                             bool longBan = strikes >= 3;
                             Logging.Write(System.Drawing.Color.Khaki,
-                                "[VibeGrinder/Commit] REJECT {0} (d={1:F1}) — no path to it ({2}); trying next-nearest.",
+                                "[" + Tag + "/Commit] REJECT {0} (d={1:F1}) — no path to it ({2}); trying next-nearest.",
                                 pu.Name, pu.Distance,
                                 longBan ? "3rd no-path — banning " + s.EntryBanMinutes + "m" : "strike " + strikes);
                             Blacklist.Add(pu.Guid, longBan
@@ -762,7 +790,7 @@ namespace Bots.Vibes.Shared
                                 {
                                     bool viaCorridor = exposure < maxCompany;
                                     Logging.Write(System.Drawing.Color.Khaki,
-                                        "[VibeGrinder/Commit] REJECT {0} (d={1:F1}) — {2} pulls {3} more ({4}); cap {5} — 45s.",
+                                        "[" + Tag + "/Commit] REJECT {0} (d={1:F1}) — {2} pulls {3} more ({4}); cap {5} — 45s.",
                                         pu.Name, pu.Distance,
                                         viaCorridor ? "the walk to it" : "opening on it",
                                         viaCorridor ? crossed : exposure,
@@ -799,7 +827,7 @@ namespace Bots.Vibes.Shared
                     _committedName = bu?.Name;      // stash for the drop-ban log (held is null at the drop)
                     if (bu != null)
                         Logging.Write(System.Drawing.Color.Khaki,
-                            "[VibeGrinder/Commit] ACQUIRE {0} (reaction={1}, d={2:F1}, score={3:F0}) " +
+                            "[" + Tag + "/Commit] ACQUIRE {0} (reaction={1}, d={2:F1}, score={3:F0}) " +
                             "nearestHostile={4} candidates={5}",
                             bu.Name, bu.MyReaction, bu.Distance, pick.Score, NearestHostileDesc(hostiles), units.Count);
                 }
@@ -847,12 +875,12 @@ namespace Bots.Vibes.Shared
             if (me == null) return;
             // Surface foreign hostiles WIDER than pull range so the commit/pull pipeline has lead time
             // before they aggro on the approach.
-            double surfaceR = VibeGrinderSettings.Instance.IncidentalHostileRadius;
+            double surfaceR = Tuning.IncidentalHostileRadius;
             if (surfaceR <= 0) surfaceR = Targeting.PullDistance > 0 ? Targeting.PullDistance : 28;
-            int safeLevel = me.Level + VibeGrinderSettings.Instance.PathHostileLevelMargin;
+            int safeLevel = me.Level + Tuning.PathHostileLevelMargin;
             // Upper bound of the "inevitable fight" band — derived from DangerLevelMargin so the two
             // systems always meet.
-            int inevitableLevel = me.Level + VibeGrinderSettings.Instance.DangerLevelMargin;
+            int inevitableLevel = me.Level + Tuning.DangerLevelMargin;
             ulong petGuid = me.GotAlivePet && me.Pet != null ? me.Pet.Guid : 0;
             int surfaced = 0, defensive = 0, inevitableN = 0, greenN = 0;
 
@@ -870,17 +898,17 @@ namespace Bots.Vibes.Shared
                 // Path-clear is gated to level-safe in-range hostiles, band-bounded below too (greens have
                 // no grind value; if one body-pulls, attackingUs surfaces it and we defend).
                 int ulevel = (int)u.Level;
-                int floorLevel = me.Level - VibeGrinderSettings.Instance.LevelBandBelow;
+                int floorLevel = me.Level - Tuning.LevelBandBelow;
                 bool pathClear = u.Distance <= surfaceR && ulevel >= floorLevel && ulevel <= safeLevel;
                 // Inevitable fight: (L+PathHostileLevelMargin, L+DangerLevelMargin] band, bubble-deep —
                 // invisible to BOTH safety systems otherwise (Kenata Dabyrie). Z ≥5yd = real protection.
                 bool inevitable = ulevel > safeLevel && ulevel <= inevitableLevel
-                                  && u.Distance <= u.MyAggroRange + VibeGrinderSettings.Instance.PreemptAggroBuffer
+                                  && u.Distance <= u.MyAggroRange + Tuning.PreemptAggroBuffer
                                   && Math.Abs(u.Location.Z - me.Location.Z) < SameLevelZTolerance;
                 // Downward twin: a BELOW-band hostile on foot inside its bubble — the fight has already
                 // started, we just can't see it. Mounted stays invisible (outrun it).
                 bool unavoidable = !me.Mounted && ulevel > 0 && ulevel < floorLevel
-                                   && u.Distance <= u.MyAggroRange + VibeGrinderSettings.Instance.PreemptAggroBuffer
+                                   && u.Distance <= u.MyAggroRange + Tuning.PreemptAggroBuffer
                                    && Math.Abs(u.Location.Z - me.Location.Z) < SameLevelZTolerance;
                 // Commitment hysteresis: the COMMITTED mob stays surfaced regardless of the radius (a mob
                 // wandering ON the 40yd boundary otherwise flaps candidate↔gone every pulse). Real
@@ -897,7 +925,7 @@ namespace Bots.Vibes.Shared
 
             if (surfaced > 0 && (!_surfaceLogSw.IsRunning || _surfaceLogSw.Elapsed.TotalSeconds >= 3))
             {
-                Logging.WriteDebug("[VibeGrinder/Hostiles] surfaced {0} incidental hostile(s) ({1} attacking us{2}{3}).",
+                Logging.WriteDebug("[" + Tag + "/Hostiles] surfaced {0} incidental hostile(s) ({1} attacking us{2}{3}).",
                     surfaced, defensive,
                     inevitableN > 0 ? ", " + inevitableN + " inevitable over-level" : "",
                     greenN > 0 ? ", " + greenN + " bubble-deep below-band" : "");

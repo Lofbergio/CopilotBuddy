@@ -21,7 +21,7 @@ namespace Bots.VibeGrinder.Selection
     {
         // 3.3.5a UNIT_FLAGS to exclude: NON_ATTACKABLE(0x2) | IMMUNE_TO_PC(0x100) | NOT_SELECTABLE(0x2000000).
         // TODO: confirm against Styx/Patchables/Offsets335.txt if any target type is wrongly excluded.
-        internal const long ImmuneUnitFlagMask = 0x2L | 0x100L | 0x2000000L;   // shared: spot selection + live entry veto (VetoBannedEntries)
+        internal const long ImmuneUnitFlagMask = Bots.Vibes.Shared.EngagementGovernor.ImmuneUnitFlagMask;   // one copy, in Shared
 
         private static VibeGrinderSettings S => VibeGrinderSettings.Instance;
 

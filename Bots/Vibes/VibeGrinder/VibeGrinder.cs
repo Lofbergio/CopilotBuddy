@@ -278,6 +278,10 @@ namespace Bots.VibeGrinder
             _restGovernor.SuppressedFloorMana = VibeGrinderSettings.Instance.EmergencyMinMana;
 
             // Shared pull pipeline — fresh per Start (session-scoped strikes/bans reset by construction).
+            // Tuning is supplied, not imported: the governor lives in Shared/ and must not know which bot
+            // owns it. VibeQuester2 inherits this assignment; a future non-subclass bot brings its own.
+            EngagementGovernor.Tuning = VibeGrinderSettings.Instance;
+            EngagementGovernor.Tag = Name;   // VQ2 overrides Name, so its lines stop reading "[VibeGrinder/…]"
             _governor = new EngagementGovernor(this);
 
             // Reuse LevelBot's target/loot filters (faction + blackspot + loot rules).
