@@ -111,6 +111,7 @@ namespace VibeParty
 				}
 				_bus.Subscribe("Progress", OnProgressReceived);
 				_bus.Subscribe("Alert", OnAlertReceived);   // follower alerts → panel strip + OOM raid warning
+				_bus.Subscribe("WaterStatus", OnWaterStatus);   // mage service state → the panel's water line
 				_partyLoot = new PartyLoot(_bus, isLeader: true);   // Phase 5: the lease broker
 				// The leader drinks too: requester-side PartyWater (ask when out, hear WaterKind, purge stale).
 				// MUST be created BEFORE the relay below — Subscribe is last-wins per type and the relay must
@@ -517,6 +518,17 @@ namespace VibeParty
 					Lua.DoString("RaidNotice_AddMessage(RaidWarningFrame, '" + EscLua(parts[1].ToUpper() + " IS " + parts[2].ToUpper())
 						+ "', ChatTypeInfo['RAID_WARNING']) PlaySound('RaidWarning')");
 			}
+		}
+
+		// WaterStatus (mage→leader, hub thread — pure data only): last-heard service state for the
+		// Main-tab water line ("<have>/<target>|<guid>,…" — see PartyWater.PublishStatus).
+		private static string? _waterStatusRaw;
+		private static string? _waterMageName;
+
+		private void OnWaterStatus(PartyMessage msg)
+		{
+			_waterMageName = msg.SenderName;
+			_waterStatusRaw = msg.Payload;
 		}
 
 		// Everything pushed into the panel lands inside single-quoted Lua literals.
@@ -1568,8 +1580,11 @@ namespace VibeParty
 					local order = money[i][2]
 					b:SetScript('OnClick', function() Send(order) end)
 				end
+				local wt = mp:CreateFontString('VibePartyPanelWaterText', 'OVERLAY', 'GameFontHighlightSmall')
+				wt:SetPoint('TOPLEFT', 0, -30) wt:SetPoint('TOPRIGHT', 0, -30) wt:SetJustifyH('LEFT')
+				wt:SetText('|cff707070Water: no mage report|r')
 				local fd = mp:CreateFontString('VibePartyPanelFeedText', 'OVERLAY', 'GameFontHighlightSmall')
-				fd:SetPoint('TOPLEFT', 0, -32) fd:SetPoint('BOTTOMRIGHT', 0, 0)
+				fd:SetPoint('TOPLEFT', 0, -46) fd:SetPoint('BOTTOMRIGHT', 0, 0)
 				fd:SetJustifyH('LEFT') fd:SetJustifyV('TOP') fd:SetSpacing(3)
 				fd:SetText('|cff707070alerts appear here, newest first|r')
 				{{{rows}}}
@@ -1594,11 +1609,12 @@ namespace VibeParty
 				qt:SetPoint('TOPLEFT', 0, 0) qt:SetPoint('BOTTOMRIGHT', 0, 0)
 				qt:SetJustifyH('LEFT') qt:SetJustifyV('TOP') qt:SetSpacing(3)
 				qt:SetText('|cff707070no quest data yet|r')
-				function VibePartyPanelApply(head, feed, alerts, quests, plain, disp, infos)
+				function VibePartyPanelApply(head, feed, alerts, quests, plain, disp, infos, water)
 					VibePartyPanelHeadText:SetText(head)
 					VibePartyPanelFeedText:SetText(feed)
 					VibePartyPanelAlertText:SetText(alerts)
 					VibePartyPanelQuestText:SetText(quests)
+					if water then VibePartyPanelWaterText:SetText(water) end
 					for i = 1, 4 do
 						local row = _G['VibePartyPanelSlot'..i]
 						if plain[i] then row.member = plain[i] row.name:SetText(disp[i]) row.info:SetText(infos[i]) row:Show()
@@ -1646,6 +1662,31 @@ namespace VibeParty
 		private static string AlertLine((DateTime At, string Name, string Text, bool Crit) al)
 			=> string.Format("|cff707070{0:HH:mm}|r |cffffffff{1}|r {2}{3}|r",
 				al.At, EscLua(TruncRaw(al.Name, 12)), al.Crit ? "|cffff4040" : "|cffffd070", EscLua(TruncRaw(al.Text, 38)));
+
+		// Main-tab water line: the mage reports "<have>/<target>|<guid>,…"; guids resolve through the
+		// progress roster — the leader's own guid too (the leader is a requester as well).
+		private static string ComposeWaterLine()
+		{
+			string? raw = _waterStatusRaw;
+			if (string.IsNullOrEmpty(raw)) return "|cff707070Water: no mage report|r";
+			int bar = raw.IndexOf('|');
+			string stock = bar < 0 ? raw : raw.Substring(0, bar);
+			var names = new List<string>();
+			if (bar >= 0)
+			{
+				foreach (string tok in raw.Substring(bar + 1).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+				{
+					if (!ulong.TryParse(tok, out ulong guid)) continue;
+					if (guid == StyxWoW.Me.Guid) names.Add(StyxWoW.Me.Name);
+					else if (_partyProgress.TryGetValue(guid, out MemberProgress? mp) && !string.IsNullOrEmpty(mp.Name)) names.Add(mp.Name);
+				}
+			}
+			string line = "|cff909090Water:|r |cffffffff" + EscLua(TruncRaw(_waterMageName ?? "?", 12))
+				+ "|r |cffd0d0d0" + EscLua(TruncRaw(stock, 7)) + "|r";
+			if (names.Count > 0)
+				line += " |cff909090-|r |cffffc040" + EscLua(TruncRaw(string.Join(", ", names), 24)) + " waiting|r";
+			return line;
+		}
 
 		private void UpdateLeaderPanelTick()
 		{
@@ -1746,7 +1787,7 @@ namespace VibeParty
 			string infoArr = string.Join(",", infos.Select(n => "'" + n + "'"));
 			Lua.DoString("if VibePartyPanelApply and VibePartyPanel:IsShown() then VibePartyPanelApply('"
 				+ head + "', '" + feed + "', '" + dock + "', '" + questsOut + "', {"
-				+ plainArr + "}, {" + dispArr + "}, {" + infoArr + "}) end");
+				+ plainArr + "}, {" + dispArr + "}, {" + infoArr + "}, '" + ComposeWaterLine() + "') end");
 		}
 
 		private void OnPartyChat(WoWChat.ChatLanguageSpecificEventArgs e)
@@ -2700,7 +2741,7 @@ namespace VibeParty
 					//    start while moving (retrying it every tick was a 12Hz busy-loop, Marge 2026-07-12_1237)
 					//    and must not cancel our own drink; the throttle bounds any other silently-failing cast.
 					new Decorator(
-						ctx => PartyWater.ConjuredWaterCount() < MageWaterStock
+						ctx => PartyWater.ConjuredWaterCount() < PartyWater.MageWaterStock
 							&& !StyxWoW.Me.IsCasting && !StyxWoW.Me.IsMoving && !StyxWoW.Me.HasAura("Drink")
 							&& DateTime.UtcNow >= _nextConjureTry && FirstConjureSpell() != null,
 						new TreeSharp.Action(ctx => { _nextConjureTry = DateTime.UtcNow.AddSeconds(2); SpellManager.Cast(FirstConjureSpell()); return RunStatus.Success; }))
@@ -2714,7 +2755,7 @@ namespace VibeParty
 		private bool WantDeliverWater()
 		{
 			_waterTarget = null;
-			if (_partyWater == null || PartyWater.ConjuredWaterCount() < PartyWater.ReserveForSelf + WaterStackGive) return false;
+			if (_partyWater == null || PartyWater.ConjuredWaterCount() < PartyWater.ReserveForSelf + PartyWater.WaterStackGive) return false;
 			_waterTarget = _partyWater.NextRequester();
 			return _waterTarget != null;
 		}
@@ -3516,8 +3557,6 @@ namespace VibeParty
 		private PartyLoot? _partyLoot;
 		private static PartyWater? _partyWater;   // static so the static FollowLeader can read AwaitingWater
 		private WoWPlayer? _waterTarget;
-		private const int WaterStackGive = 20;    // one full stack per delivery (refill-on-empty model)
-		private const int MageWaterStock = 25;    // reserve (5) + one full stack handout (20)
 		private const float WaterTradeRange = 8f;
 		private static DateTime _nextConjureTry = DateTime.MinValue;   // paces the stock-up cast (see CreateWaterServiceBehavior)
 		private static readonly System.Text.Json.JsonSerializerOptions _cmdJson = new System.Text.Json.JsonSerializerOptions { IncludeFields = true };

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using PartyBot.IPC;
 using Styx;
+using Styx.Helpers;
 using Styx.Combat.CombatRoutine;
 using Styx.Logic;
 using Styx.WoWInternals;
@@ -23,6 +25,8 @@ namespace VibeParty
 	public sealed class PartyWater
 	{
 		public const int ReserveForSelf = 5;     // the mage never trades below this many drinks
+		public const int WaterStackGive = 20;    // one full stack per delivery (refill-on-empty model)
+		public const int MageWaterStock = ReserveForSelf + WaterStackGive;   // conjure target: the reserve + one deliverable stack
 		private const int LowWater = 2;          // refill-on-empty: ask only when down to the last drink or two
 		                                         // (the buffer covers one more rest while the mage walks over)
 		private const double RequestEvery = 30;  // seconds between our water requests
@@ -48,7 +52,7 @@ namespace VibeParty
 		{
 			if ((DateTime.UtcNow - _lastTick).TotalSeconds < TickEvery) return;
 			_lastTick = DateTime.UtcNow;
-			if (StyxWoW.Me.Class == WoWClass.Mage) MageAdvertise();
+			if (StyxWoW.Me.Class == WoWClass.Mage) { MageAdvertise(); PublishStatus(); }
 			else RequesterUpkeep();
 		}
 
@@ -105,6 +109,25 @@ namespace VibeParty
 				_advertised = best;
 				_bus.Publish("WaterKind", best.ToString());
 			}
+		}
+
+		// Service state for the leader panel: "<have>/<target>|<guid>,<guid>,…" — change-only + 15s
+		// keepalive (re-seeds a leader whose bot restarted mid-session). Waiting = the live request set,
+		// so a served name drops off the leader's line the moment the trade lands.
+		private void PublishStatus()
+		{
+			long stale = DateTime.UtcNow.Ticks - TimeSpan.FromSeconds(RequestStale).Ticks;
+			List<ulong> waiting = new List<ulong>();
+			foreach (KeyValuePair<ulong, long> kv in _requests)
+				if (kv.Value >= stale) waiting.Add(kv.Key);
+			waiting.Sort();
+			string status = ConjuredWaterCount() + "/" + MageWaterStock + "|" + string.Join(",", waiting);
+			bool changed = status != _lastStatus;
+			if (!changed && (DateTime.UtcNow - _lastStatusAt).TotalSeconds < 15) return;
+			if (changed) Logging.WriteDebug("[VibeParty] water status → {0} ({1} waiting)", status, waiting.Count);
+			_lastStatus = status;
+			_lastStatusAt = DateTime.UtcNow;
+			_bus.Publish("WaterStatus", status);
 		}
 
 		public WoWPlayer NextRequester()
@@ -185,6 +208,8 @@ namespace VibeParty
 		private readonly ulong _self;
 		private int _currentWaterId;
 		private int _advertised;
+		private string _lastStatus = "";
+		private DateTime _lastStatusAt = DateTime.MinValue;
 		private DateTime _lastTick = DateTime.MinValue;
 		private DateTime _lastRequest = DateTime.MinValue;
 		private long _awaitUntil;
