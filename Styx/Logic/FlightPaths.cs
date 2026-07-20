@@ -507,6 +507,9 @@ namespace Styx.Logic
                 }
                 else
                 {
+                    // Learn/Update is DONE — drop the reason too, or the flight-path check
+                    // (Reason != None) re-poses the same master's Fly POI forever.
+                    Reason = FlightPathReason.None;
                     BotPoi.Clear("Learned/Updated Flight Path Information");
                 }
             }

@@ -1205,30 +1205,20 @@ namespace Bots.Grind
                                                 new ActionIdle()
                                             )
                                         ),
-                                        // Fly POI: if TaxiFrame never opened after 5 seconds, blacklist the flight master
+                                        // A POI whose ACTION frame still isn't up after the interact cap (no
+                                        // frame at all, or gossip-only every time): the DB is wrong about this
+                                        // NPC (not a vendor/trainer on this server) — blacklist the resolve and
+                                        // move on; the next Need* pass picks another vendor, or none and the
+                                        // bot just carries on. Fly retries through here too: 3.3.5 cores answer
+                                        // the FIRST interact at an unknown taxi node with learn-only
+                                        // (SMSG_NEW_TAXI_PATH, early return — no taxi map), so one frameless
+                                        // interact is the normal discovery handshake and the re-interact opens
+                                        // the map; blacklisting on the first miss threw the learn away.
                                         new DecoratorContinue(
-                                            ctx => BotPoi.Current.Type == PoiType.Fly && !TaxiFrame.Instance.IsVisible,
-                                            new Sequence(
-                                                new TreeSharp.Action(ctx => Logging.Write("Taximap failed to open. Blacklisting the flight master.")),
-                                                new TreeSharp.Action(ctx =>
-                                                {
-                                                    if (BotPoi.Current.AsObject != null)
-                                                        Blacklist.Add(BotPoi.Current.AsObject.Guid, TimeSpan.FromMinutes(30));
-                                                }),
-                                                new ActionClearPoi("Flight master blacklisted")
-                                            )
-                                        ),
-                                        // Any other vendor POI whose ACTION frame still isn't up after the
-                                        // interact cap (no frame at all, or gossip-only every time): the DB is
-                                        // wrong about this NPC (not a vendor/trainer on this server) —
-                                        // blacklist the resolve and move on; the next Need* pass picks another
-                                        // vendor, or none and the bot just carries on.
-                                        new DecoratorContinue(
-                                            ctx => BotPoi.Current.Type != PoiType.Fly && !PoiActionFrameOpen()
-                                                   && _vendorInteracts >= VendorInteractCap,
+                                            ctx => !PoiActionFrameOpen() && _vendorInteracts >= VendorInteractCap,
                                             new Sequence(
                                                 new TreeSharp.Action(ctx => Logging.Write(System.Drawing.Color.Orange,
-                                                    "{0} [{1}] resolved as a {2} vendor but offers no frame after {3} tries — blacklisting.",
+                                                    "{0} [{1}] resolved as a {2} POI but offers no frame after {3} tries — blacklisting.",
                                                     BotPoi.Current.Name, BotPoi.Current.Entry, BotPoi.Current.Type, _vendorInteracts)),
                                                 new DecoratorContinue(
                                                     ctx => BotPoi.Current.AsVendor != null,
