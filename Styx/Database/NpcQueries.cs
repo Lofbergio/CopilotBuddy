@@ -246,6 +246,43 @@ namespace Styx.Database
             return null;
         }
 
+        /// <summary>
+        /// Nearest NPCs carrying ANY of <paramref name="npcFlags"/>, nearest-first, with their raw
+        /// npcflag mask intact — so a caller planning several errands can see that one NPC covers two
+        /// of them. <see cref="GetNearestNpc"/> answers "the closest NPC for THIS errand" and is the
+        /// wrong shape for that: asking it once per errand yields one NPC per errand and no way to
+        /// notice they are the same NPC, which is how a bot ends up walking a town twice.
+        ///
+        /// Reachability is deliberately NOT checked here. CanNavigateFully is a full Detour pathfind;
+        /// running it across a whole candidate list is a cost the caller may not want, and a caller
+        /// that validates the stops it actually picks keeps ONE reachability authority instead of two.
+        /// </summary>
+        public static List<NpcResult> GetNearbyNpcs(uint mapId, WoWPoint searchLocation, UnitNPCFlags npcFlags,
+                                                    int limit, HashSet<int> excludeEntries = null)
+        {
+            var results = new List<NpcResult>();
+            EnsureInitialized();
+            if (_getNearestNpcCmd == null || limit <= 0) return results;
+
+            using var reader = Connection.ExecuteReader(_getNearestNpcCmd,
+                mapId, (uint)npcFlags, searchLocation.X, searchLocation.Y, searchLocation.Z);
+            if (reader == null) return results;
+
+            while (reader.Read() && results.Count < limit)
+            {
+                NpcResult result = new NpcResult(reader);
+                if (excludeEntries != null && excludeEntries.Contains(result.Entry))
+                    continue;
+                // [DND] placeholders carry junk npcflags and aren't interactable — see GetNearestNpc.
+                if (!string.IsNullOrEmpty(result.Name) && result.Name.IndexOf("[DND]", StringComparison.OrdinalIgnoreCase) >= 0)
+                    continue;
+                if (result.Faction == 0 || !IsFactionUsable(result.Faction))
+                    continue;
+                results.Add(result);
+            }
+            return results;
+        }
+
         #endregion
     }
 }
