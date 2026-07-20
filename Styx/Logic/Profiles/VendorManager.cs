@@ -259,7 +259,10 @@ namespace Styx.Logic.Profiles
                 if (type == Vendor.VendorType.Train)
                 {
                     var vendor = source
-                        .Where(v => v.TrainClass == playerClass)
+                        // The blacklist applies here too. Without it, a trainer that proved unreachable or
+                        // sat in enemy territory was re-resolved every tick forever — the Train branch was
+                        // the one resolver path that ignored its own reject list.
+                        .Where(v => v.TrainClass == playerClass && !Blacklist.Contains(v, type))
                         .OrderBy(v => location.Distance(v.Location))
                         .FirstOrDefault();
                     return vendor;

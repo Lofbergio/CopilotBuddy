@@ -75,7 +75,10 @@ namespace Styx.Logic.Profiles
                     Logging.WriteException(ex);
                 }
             }
-            _filteredMailboxes = AllMailboxes;
+            // COPY, not an alias: RemoveBlacklisted mutates _filteredMailboxes, and while these were the
+            // same List instance a single blacklisting permanently destroyed the profile's own mailbox
+            // set — un-blacklisting could never bring it back, and a reload was the only recovery.
+            _filteredMailboxes = new List<Mailbox>(AllMailboxes);
         }
 
         /// <summary>
@@ -94,13 +97,21 @@ namespace Styx.Logic.Profiles
             Mailbox closest = null;
             float closestDist = float.MaxValue;
 
-            // Use forced mailboxes if available, otherwise use profile mailboxes
+            // Use forced mailboxes if available, otherwise use profile mailboxes.
+            // ⚠ The blacklist applies to BOTH. It used to be skipped entirely on the forced path, and
+            // every Vibes bot populates ForcedMailboxes (MailboxService feeds it the map's faction-safe
+            // set) — so the blacklist was inert for exactly the bots that rely on it, and a mailbox found
+            // unsafe at runtime was handed straight back on the next resolve. MailboxService worked around
+            // it by also RemoveAll-ing from ForcedMailboxes itself; that workaround is now belt-and-braces
+            // rather than the only thing holding.
             var mailboxList = (ForcedMailboxes != null && ForcedMailboxes.Count > 0)
                 ? ForcedMailboxes
                 : Mailboxes;
 
             foreach (var mailbox in mailboxList)
             {
+                if (Blacklist != null && Blacklist.Contains(mailbox)) continue;
+
                 float dist = location.DistanceSqr(mailbox.Location);
                 if (dist < closestDist)
                 {
