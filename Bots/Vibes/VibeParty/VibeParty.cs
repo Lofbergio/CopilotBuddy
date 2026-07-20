@@ -2829,33 +2829,70 @@ namespace VibeParty
 					new Sequence(
 						new TreeSharp.Action(ctx =>
 						{
-							uint shown = QuestFrame.Instance.CurrentShownQuestId;
-							if (QuestBlocked(shown))
-							{
-								Logging.Write("VibeParty: declining shared quest {0} — the leader abandoned it.", shown);
-								Lua.DoString("DeclineQuest()");
-							}
-							else
-							{
-								if (shown != 0 && !IsLeaderQuest(shown))
-								{
-									// Not one of the leader's quests — a random "!" the follower stumbled onto. The
-									// party only does the leader's quests (completing anything already held is fine).
-									Logging.Write("VibeParty: declining quest {0} - not one of the leader's quests.", shown);
-									Lua.DoString("DeclineQuest()");
-								}
-								else
-								{
-									Logging.Write("VibeParty: Accepting shared quest");
-									Lua.DoString("AcceptQuest()");
-								}
-							}
-							return RunStatus.Success;
-						}),
-						new TreeSharp.Action(ctx => _pendingQuestAccept = false)
+							if (ResolveOfferFrame()) { _pendingQuestAccept = false; return RunStatus.Success; }
+							// ⛔ Staying armed must NOT eat the tick. Success here makes this branch succeed, so the
+							// root PrioritySelector never reaches follow and the follower stands still — and a frame
+							// closes by WALKING AWAY, so the freeze would sustain itself by suppressing the very
+							// movement that ends it. Failure lets follow run; the flag re-reads next tick and the
+							// visible-frame guard clears it once the frame is gone.
+							return RunStatus.Failure;
+						})
 					)
 				)
 			);
+		}
+
+		// ──────────────────────────────────────────────────────────────────────
+		// Quest offers — ONE policy, ONE executor
+		// ──────────────────────────────────────────────────────────────────────
+
+		/// <summary>
+		/// THE accept policy. Every path that can take a quest asks this and nothing else: the
+		/// unsolicited-offer resolver below, the core's chained-offer screen after a turn-in, and the
+		/// quest-starter item scan. It used to be re-implemented at each of those, which is how one
+		/// decision drifted into three shapes — one of them accepting an unreadable id outright.
+		/// </summary>
+		private static bool ShouldAcceptOffer(uint questId)
+			=> questId != 0 && IsLeaderQuest(questId) && !QuestBlocked(questId);
+
+		/// <summary>
+		/// THE only place that answers an open offer frame — the sole caller of AcceptQuest/DeclineQuest.
+		/// The quest frame has exactly one owner: while <see cref="QuestInteractionCore.IsDriving"/> the
+		/// visit transaction owns it and this never runs (the event handler declines to arm), so the two
+		/// can no longer fight over the same frame.
+		/// </summary>
+		/// <returns>True when the offer has been ANSWERED (or there is nothing to answer) and the pending
+		/// flag may be cleared; false to stay armed and re-read on the next tick.</returns>
+		private static bool ResolveOfferFrame()
+		{
+			// ASK, don't assume: answer the frame that is actually OPEN, never a remembered one. Without
+			// this the resolver fires Lua into a closed frame and logs an accept that never happened.
+			if (!QuestFrame.Instance.IsVisible) return true;   // nothing open — nothing to answer
+
+			uint shown = QuestInteractionCore.ShownQuestId();
+			if (shown == 0)
+			{
+				// ⛔ Never accept what we cannot identify — that is a hole straight through "the party does
+				// the LEADER's quests, nothing else". But do NOT drop it either: nothing re-raises
+				// QUEST_DETAIL for a frame that is already open, so clearing here would strand a real share
+				// until some later CloseQuestFrames silently declined it. Stay armed and re-read — the
+				// panel's own lifetime bounds this, since the guard above clears us once it closes.
+				Logging.WriteDebug("VibeParty: quest offer with no readable id yet — re-reading next tick.");
+				return false;
+			}
+			if (ShouldAcceptOffer(shown))
+			{
+				// NOT necessarily a share: this fires for any offer we did not open ourselves — a real
+				// /share, a quest-starter item, or a server-pushed chain follow-up. Calling them all
+				// "shared" made an unshared chain quest unexplainable in the log.
+				Logging.Write("VibeParty: accepting offered quest {0}.", shown);
+				Lua.DoString("AcceptQuest()");
+				return true;
+			}
+			Logging.Write("VibeParty: declining quest {0} — {1}.", shown,
+				QuestBlocked(shown) ? "the leader abandoned it" : "not one of the leader's quests");
+			Lua.DoString("DeclineQuest()");
+			return true;
 		}
 
 		// ──────────────────────────────────────────────────────────────────────
@@ -3053,8 +3090,8 @@ namespace VibeParty
 				if (item == null || item.ItemInfo == null) continue;
 				int qid = item.ItemInfo.BeginQuestId;
 				if (qid <= 0) continue;
-				if (QuestBlocked((uint)qid)) continue;   // leader abandoned it — don't restart it from the item
-				if (!IsLeaderQuest((uint)qid)) continue;   // only start quests the leader is doing (accept whitelist)
+				// Same accept policy as every other offer path — the whitelist + abandon block live in ONE place.
+				if (!ShouldAcceptOffer((uint)qid)) continue;
 				if (me.QuestLog.ContainsQuest((uint)qid)) continue;
 				if (completed != null && completed.Contains((uint)qid)) continue;
 				if (_starterCooldown.TryGetValue((uint)qid, out DateTime until) && DateTime.UtcNow < until) continue;
