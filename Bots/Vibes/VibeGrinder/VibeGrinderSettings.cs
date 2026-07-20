@@ -105,39 +105,13 @@ namespace Bots.VibeGrinder
         [Browsable(false)] public float FlightMaxTravelDistance => 50000f; // far-spot fallback searches the whole continent
         [Browsable(false)] public int FlightPreTakeoffSeconds => 150;      // abort a taxi hop that never takes off (unreachable master / taxi won't open)
 
-        // ---- Loot disposition (what to do with looted items on a vendor/mail run) ----
-        // Decided by category, not quality: cloth (white) is income, a white sword is trash. Mail needs
-        // EnableMailing + a recipient + a reachable mailbox; with mailing unavailable, Mail items just stay
-        // in bags (never silently vendored). Soulbound items can't be mailed — a Mail action on a soulbound
-        // item vendors it (epics are always kept). Grey is always vendored; quest/keys/bags/ammo/
-        // consumables/reagents/heirlooms are always kept. See Loot/CLAUDE.md.
-        [Setting, Styx.Helpers.DefaultValue(DispositionAction.Mail)]
-        [Category("Loot"), Description("Cloth, leather, ore, herbs, enchanting mats — the main grind income. Mail to bank by default.")]
-        public DispositionAction TradeGoodsAction { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(DispositionAction.Vendor)]
-        [Category("Loot"), Description("Cooking meat (a low-value trade good). Vendor by default.")]
-        public DispositionAction MeatAction { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(DispositionAction.Vendor)]
-        [Category("Loot"), Description("White (common) weapons/armor. Vendor by default (low value).")]
-        public DispositionAction WhiteGearAction { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(DispositionAction.Vendor)]
-        [Category("Loot"), Description("Green (uncommon) BoE gear. Vendor by default; set to Mail if you disenchant/AH them (soulbound greens are always vendored).")]
-        public DispositionAction GreenGearAction { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(DispositionAction.Mail)]
-        [Category("Loot"), Description("Blue (rare) gear. BoE mailed to bank by default; soulbound blues are vendored.")]
-        public DispositionAction BlueGearAction { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(DispositionAction.Mail)]
-        [Category("Loot"), Description("Epic gear. BoE mailed to bank; epics are NEVER auto-sold regardless of this (soulbound epics are kept).")]
-        public DispositionAction EpicGearAction { get; set; }
-
-        [Setting, Styx.Helpers.DefaultValue(DispositionAction.Mail)]
-        [Category("Loot"), Description("Recipes/patterns and gems. Mail to bank by default.")]
-        public DispositionAction RecipesGemsAction { get; set; }
+        // ---- Loot disposition ----
+        // NOT stored here: the whole Vibe suite classifies items through the same ItemDisposition, so the
+        // policy lives in Bots/Vibes/Shared/VibesLootSettings and is surfaced here as an expandable node.
+        // Editing it from either bot's panel edits the one shared policy.
+        [Category("Loot"), TypeConverter(typeof(ExpandableObjectConverter))]
+        [Description("Loot policy (Keep/Vendor/Mail per category) shared by every Vibe bot. Mailing turns on by setting MailRecipient in General settings — there is no separate enable flag.")]
+        public Bots.Vibes.Shared.VibesLootSettings Loot => Bots.Vibes.Shared.VibesLootSettings.Instance;
 
         [Setting, Styx.Helpers.DefaultValue(AddAvoidance.Auto)]
         [Category("Survival"), Description("How hard to avoid pulling extra mobs. Auto: solo-pull while low/squishy, relax as you out-level, tighten up after deaths to adds. Aggressive: always prefer isolated pulls (safer, slower). Off: pull the nearest mob regardless of neighbours.")]
@@ -152,10 +126,6 @@ namespace Bots.VibeGrinder
         [Category("Supervisor"), Description("Minutes an abandoned spot stays blacklisted before the bot will consider it again.")]
         public int BlacklistMinutes { get; set; }
 
-        // ---- Mailing ----
-        [Setting, Styx.Helpers.DefaultValue(false)]
-        [Category("Mailing"), Description("Mail valuables to a bank alt during vendor runs. Requires MailRecipient set in General settings and mailbox locations in Mailboxes.db (what gets mailed is decided by the loot-disposition settings, not the Mail* flags). Enemy-faction-territory mailboxes are skipped automatically. Off by default.")]
-        public bool EnableMailing { get; set; }
 
         // =====================================================================================
         //  Fixed algorithm constants (not user-tunable; kept as members so call sites are stable)

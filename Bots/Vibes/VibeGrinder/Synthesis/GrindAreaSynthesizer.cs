@@ -118,8 +118,8 @@ namespace Bots.VibeGrinder.Synthesis
             EnsureProfile();
 
             // Feed the map's mailboxes into the synthetic profile (reload only on map change) so the
-            // reused vendor behaviour can mail to the bank. Off unless mailing is enabled.
-            if (VibeGrinderSettings.Instance.EnableMailing && MapChanged(spot.Map))
+            // reused vendor behaviour can mail to the bank. Skipped when no recipient is set.
+            if (Bots.Vibes.Shared.MailboxService.MailingConfigured && MapChanged(spot.Map))
                 LoadMailboxesForMap(spot.Map);
 
             _area.Name = "VibeGrinder";

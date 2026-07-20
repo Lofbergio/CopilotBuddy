@@ -234,9 +234,11 @@ namespace Bots.VibeGrinder
                 Styx.Logic.FlightPaths.XmlNodes?.Count ?? 0);
             // A typo'd recipient silently voids mailed items for 30 days on an unattended run — make the
             // configured name visible in every session log.
-            if (VibeGrinderSettings.Instance.EnableMailing)
-                Logging.Write("[VibeGrinder] Mailing ENABLED → recipient '{0}' (verify the spelling — returned mail takes 30 days).",
-                    CharacterSettings.Instance.MailRecipient ?? "(not set)");
+            if (Bots.Vibes.Shared.MailboxService.MailingConfigured)
+                Logging.Write("[VibeGrinder] Mailing ON → recipient '{0}' (verify the spelling — returned mail takes 30 days).",
+                    CharacterSettings.Instance.MailRecipient);
+            else
+                Logging.Write("[VibeGrinder] Mailing OFF — no MailRecipient set (General settings); Mail-class loot will be vendored instead.");
             LevelBot.ResetState();
             BotPoi.Clear("VibeGrinder start");
             _root = null;
@@ -1062,7 +1064,7 @@ namespace Bots.VibeGrinder
             else if (me.Combat || (_governor?.CommittedGuid ?? 0) != 0)
                 _engageUntil = DateTime.UtcNow.AddSeconds(VibeGrinderSettings.Instance.EngageGraceSeconds);
 
-            if (VibeGrinderSettings.Instance.EnableMailing)
+            if (Bots.Vibes.Shared.MailboxService.MailingConfigured)
                 _mailboxes?.CheckCurrentMailboxSafety();   // shared runtime backstop (see MailboxService)
         }
 

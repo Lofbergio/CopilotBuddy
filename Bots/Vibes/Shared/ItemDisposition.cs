@@ -1,38 +1,29 @@
 using Styx;
-using Styx.Helpers;
 using Styx.WoWInternals.WoWObjects;
 
-namespace Bots.VibeGrinder
+namespace Bots.Vibes.Shared
 {
-    /// <summary>What VibeGrinder does with a carried item on a vendor/mail run.</summary>
-    public enum DispositionAction
-    {
-        /// <summary>Never sold or mailed — stays in bags.</summary>
-        Keep,
-        /// <summary>Sold to the merchant for coin.</summary>
-        Vendor,
-        /// <summary>Mailed to the bank alt (BoE only — soulbound can't mail; see Classify).</summary>
-        Mail,
-    }
-
     /// <summary>
-    /// Single source of truth for loot disposition. Decides Keep/Vendor/Mail per item by CATEGORY first
-    /// (ItemClass + trade-goods sub-class), then quality, then binding — NOT by quality alone. Quality is
-    /// a poor proxy for value: cloth is white but it's the main income; a white sword is white but it's
-    /// trash. The per-category action comes from VibeGrinderSettings ("Loot" group); this only resolves
-    /// the always-keep floor and the soulbound/epic binding rules. Feeds both VibeGrinder's sell hook
-    /// (protect everything that isn't Vendor) and mail hook (queue everything that is Mail).
+    /// Single source of truth for loot disposition across the WHOLE Vibe suite. Decides Keep/Vendor/Mail
+    /// per item by CATEGORY first (ItemClass + trade-goods sub-class), then quality, then binding — NOT by
+    /// quality alone. Quality is a poor proxy for value: cloth is white but it's the main income; a white
+    /// sword is white but it's trash. The per-category action comes from <see cref="VibesLootSettings"/>;
+    /// this only resolves the always-keep floor and the soulbound/epic binding rules.
     ///
-    /// READ Loot/CLAUDE.md before changing this — the category-first design is deliberate and was argued
-    /// through; don't regress it to quality flags.
+    /// Lives in Shared/ because VibeGrinder AND VibeParty both classify through it. While it sat under
+    /// VibeGrinder/ and read VibeGrinderSettings, VibeParty's loot policy was governed by a panel belonging
+    /// to a bot it isn't — including a mailing flag that made VibeParty silently unable to mail at all.
+    ///
+    /// READ VibeGrinder/Loot/CLAUDE.md before changing this — the category-first design is deliberate and
+    /// was argued through; don't regress it to quality flags.
     /// </summary>
     public static class ItemDisposition
     {
-        private static VibeGrinderSettings S => VibeGrinderSettings.Instance;
+        private static VibesLootSettings S => VibesLootSettings.Instance;
 
-        /// <summary>Mailing is usable only when enabled AND a recipient is set (mirrors NeedToMail's gate).</summary>
-        private static bool MailingConfigured =>
-            S.EnableMailing && !string.IsNullOrEmpty(CharacterSettings.Instance.MailRecipient);
+        /// <summary>Mailing is usable when a recipient is set — one switch, in General settings, for
+        /// every bot. See <see cref="MailboxService.MailingConfigured"/>.</summary>
+        private static bool MailingConfigured => MailboxService.MailingConfigured;
 
         public static DispositionAction Classify(WoWItem item)
         {

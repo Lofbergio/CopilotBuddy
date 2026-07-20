@@ -89,8 +89,14 @@ namespace VibeParty.Forms
 
             y += 14;
             var btnLevelbot = MakeButton("Levelbot Settings…", 20, y, 160, (s, e) => { using (var f = new FormLevelbotSettings()) f.ShowDialog(this); });
-            var btnSave = MakeButton("Save && Close", 260, y, 100, (s, e) => { _s.Save(); Close(); });
+            // Loot policy is shared across the Vibe suite (same ItemDisposition), so it opens the shared
+            // dialog rather than a VibeParty-local copy. Without this VibeParty has no loot UI at all and
+            // silently inherits whatever VibeGrinder's panel was set to.
+            var btnLoot = MakeButton("Loot Policy…", 186, y, 110,
+                (s, e) => { using (var f = new Bots.Vibes.Shared.VibesLootSettingsForm()) f.ShowDialog(this); });
+            var btnSave = MakeButton("Save && Close", 302, y, 100, (s, e) => { _s.Save(); Close(); });
             _rolePanel.Controls.Add(btnLevelbot);
+            _rolePanel.Controls.Add(btnLoot);
             _rolePanel.Controls.Add(btnSave);
             y += 42;
 

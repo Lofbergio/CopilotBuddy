@@ -14,6 +14,10 @@ namespace VibeParty
 		{
 		}
 
+		// Loot policy is NOT here: the whole Vibe suite classifies through one ItemDisposition, so the
+		// policy lives in Shared/VibesLootSettings and is edited via the "Loot Policy…" button on the
+		// config form. A property here would render nowhere (this form is hand-built, not a PropertyGrid).
+
 		[Setting(Explanation = "Absolutely idle — the bot does NOTHING: no combat, no follow, no buffing, no leader broadcast. Use it to park a loaded bot. (Unlike Leader mode, this does not keep your buffs up.)")]
 		[DefaultValue(false)]
 		public bool DoNothing { get; set; }

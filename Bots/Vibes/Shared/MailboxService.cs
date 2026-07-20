@@ -24,6 +24,17 @@ namespace Bots.Vibes.Shared
     /// </summary>
     public class MailboxService
     {
+        /// <summary>
+        /// THE answer to "is mailing set up", for every Vibe bot. The recipient name IS the switch: a name
+        /// means "send my valuables there", empty means "don't". A separate on/off flag is a second control
+        /// over one decision — and while that flag lived on VibeGrinderSettings it silently governed
+        /// VibeParty too (same ItemDisposition), so a VibeParty user could set a recipient, read their own
+        /// bot's "an unset MailRecipient already means no mailing" comment, and still never mail anything.
+        /// Bot-agnostic on purpose: nothing here may read a concrete bot's settings.
+        /// </summary>
+        public static bool MailingConfigured
+            => !string.IsNullOrEmpty(CharacterSettings.Instance.MailRecipient);
+
         // Mailboxes found unsafe at runtime — kept out across reloads/map changes.
         private readonly HashSet<WoWPoint> _runtimeUnsafe = new();
         private readonly Stopwatch _backstopThrottle = new();
