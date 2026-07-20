@@ -7,7 +7,7 @@ using Styx.Helpers;
 using Styx.Logic;
 using Styx.Logic.Pathing;
 using TreeSharp;
-using VibeQuester;
+using Bots.Vibes.Shared.QuestData;
 using Action = TreeSharp.Action;
 
 namespace Bots.Vibes.VibeQuester2

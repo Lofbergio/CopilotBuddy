@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using Styx;
 using Styx.Helpers;
 using Styx.Logic.Pathing;
-using VibeQuester;
+using Bots.Vibes.Shared.QuestData;
 
 namespace VibeParty
 {

@@ -14,7 +14,7 @@ using Styx.Logic.Pathing;
 using Styx.WoWInternals;
 using Styx.WoWInternals.WoWObjects;
 using TreeSharp;
-using VibeQuester;
+using Bots.Vibes.Shared.QuestData;
 using Action = System.Action;
 
 namespace Bots.Vibes.VibeQuester2.Execution
