@@ -11,6 +11,10 @@ namespace Styx.Logic
     {
         public List<WoWItem> AdditionalItems { get; set; }
 
+        /// <summary>False when the caller is only asking what WOULD be mailed (a per-tick gate).
+        /// Subscribers must stay silent then — the payload resolvers run every second.</summary>
+        public bool Verbose { get; set; }
+
         public MailItemsEventArgs()
         {
             AdditionalItems = new List<WoWItem>();

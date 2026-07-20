@@ -133,7 +133,7 @@ namespace Styx.Logic
 
 			if (OnMailItems != null)
 			{
-				var args = new MailItemsEventArgs { AdditionalItems = new List<WoWItem>() };
+				var args = new MailItemsEventArgs { AdditionalItems = new List<WoWItem>(), Verbose = verbose };
 
 				foreach (Delegate handler in OnMailItems.GetInvocationList())
 				{
@@ -193,15 +193,51 @@ namespace Styx.Logic
 		}
 
 		/// <summary>
-		/// Sells all items according to profile settings.
+		/// THE answer to "what would we sell right now", in the same shape as
+		/// <see cref="ResolveMailPayload"/> and for the same reason: a gate that decides a sell trip
+		/// from a different set than the executor disposes of is how a bot walks to a vendor with a bag
+		/// of unsellable greys and comes back with them. Pure and Lua-free — the executor's own sweep is
+		/// Lua (it needs the open merchant frame), so this mirrors its INPUTS (the profile quality mask
+		/// and every protection SellAllItems applies) against BagItems rather than re-deriving a policy.
+		///
+		/// SellPrice &gt; 0 is the server's own statement that an item is vendorable at all; without it
+		/// the count includes junk no merchant accepts and the trip looks satisfiable when it is not.
 		/// </summary>
-		public static void SellAllItems()
+		public static WoWItem[] ResolveSellPayload()
 		{
-			ItemQuality qualityMask = ItemQuality.None;
-			Profile? currentProfile = ProfileManager.CurrentProfile;
+			if (!TryBuildSellFilter(false, out ItemQuality qualityMask, out List<string> protectedNames, out List<uint> protectedIds))
+				return Array.Empty<WoWItem>();
 
+			var payload = new List<WoWItem>();
+			foreach (WoWItem item in ObjectManager.Me.BagItems)
+			{
+				ItemInfo? info = item?.ItemInfo;
+				if (info == null || info.SellPrice <= 0)
+					continue;
+				if ((qualityMask & (ItemQuality)(1 << (int)info.Quality)) == ItemQuality.None)
+					continue;
+				if (protectedIds.Contains(item.Entry))
+					continue;
+				if (!string.IsNullOrEmpty(item.Name) && protectedNames.Contains(item.Name.ToLower()))
+					continue;
+				payload.Add(item);
+			}
+			return payload.ToArray();
+		}
+
+		/// <summary>
+		/// The quality mask + protection sets SellAllItems sells by. Extracted so the gate and the
+		/// executor cannot drift into two policies. False when there is no profile to read a mask from.
+		/// </summary>
+		private static bool TryBuildSellFilter(bool verbose, out ItemQuality qualityMask, out List<string> protectedNames, out List<uint> protectedIds)
+		{
+			qualityMask = ItemQuality.None;
+			protectedNames = new List<string>();
+			protectedIds = new List<uint>();
+
+			Profile? currentProfile = ProfileManager.CurrentProfile;
 			if (currentProfile == null)
-				return;
+				return false;
 
 			if (currentProfile.SellGrey)
 				qualityMask |= ItemQuality.Poor;
@@ -213,9 +249,6 @@ namespace Styx.Logic
 				qualityMask |= ItemQuality.Rare;
 			if (currentProfile.SellPurple)
 				qualityMask |= ItemQuality.Epic;
-
-			var protectedNames = new List<string>();
-			var protectedIds = new List<uint>();
 
 			protectedNames.AddRange(ProtectedItemsManager.GetAllItemNames());
 			protectedIds.AddRange(ProtectedItemsManager.GetAllItemIds());
@@ -246,7 +279,8 @@ namespace Styx.Logic
 				var args = new SellItemsEventArgs
 				{
 					NameExceptions = new List<string>(),
-					IdExceptions = new List<uint>()
+					IdExceptions = new List<uint>(),
+					Verbose = verbose
 				};
 
 				foreach (Delegate handler in OnVendorItems.GetInvocationList())
@@ -278,10 +312,17 @@ namespace Styx.Logic
 					args.NameExceptions.Clear();
 					args.IdExceptions.Clear();
 				}
-
-				protectedNames.AddRange(args.NameExceptions);
-				protectedIds.AddRange(args.IdExceptions);
 			}
+			return true;
+		}
+
+		/// <summary>
+		/// Sells all items according to profile settings.
+		/// </summary>
+		public static void SellAllItems()
+		{
+			if (!TryBuildSellFilter(true, out ItemQuality qualityMask, out List<string> protectedNames, out List<uint> protectedIds))
+				return;
 
 			_merchantFrame.SellItemQualities(qualityMask, protectedNames, protectedIds);
 			ForceSell = false;
