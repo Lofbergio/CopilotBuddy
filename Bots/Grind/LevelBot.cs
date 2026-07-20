@@ -1603,15 +1603,38 @@ namespace Bots.Grind
             return _cachedAmmoClass != WoWItemProjectileClass.None && _cachedAmmoCount < AmmoLowThreshold;
         }
 
+        // A hunter who can't restock keeps grinding — in melee, badly — and the edge-triggered decision
+        // log would state that once and stay silent for the rest of the night. This is the one case
+        // worth repeating: unmissable in a morning log review, too rare to flood it.
+        private static readonly TimeSpan DryHunterWarnEvery = TimeSpan.FromMinutes(5);
+        private static DateTime _dryHunterWarnedAt = DateTime.MinValue;
+
+        private static void WarnHunterCannotRestock(bool broke)
+        {
+            if (DateTime.Now - _dryHunterWarnedAt < DryHunterWarnEvery)
+                return;
+            _dryHunterWarnedAt = DateTime.Now;
+
+            Logging.Write(System.Drawing.Color.Red,
+                "[Ammo] {0} {1}s left and no restock available ({2}) — {3}",
+                _cachedAmmoCount, _cachedAmmoClass, broke ? "not enough coin" : "no reachable vendor stocks them",
+                _cachedAmmoCount == 0 ? "Auto Shot is dead, this hunter is meleeing." : "she goes dry soon.");
+        }
+
         private static bool NeedToBuy()
         {
             // Hunter ammo outranks the 1g comfort gate below — no ammo = no Auto Shot = no hunter,
             // and low-level ammo costs coppers. Pocket change + a resolvable ammo vendor is enough.
-            if (HunterAmmoLow() && StyxWoW.Me.Coinage >= 1000
-                && ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Ammo) != null)
+            if (HunterAmmoLow())
             {
-                LogDecision("buy", string.Format("[NeedToBuy] YES - hunter ammo low ({0} rounds left)", _cachedAmmoCount));
-                return true;
+                bool broke = StyxWoW.Me.Coinage < 1000;
+                Vendor ammoVendor = ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Ammo);
+                if (!broke && ammoVendor != null)
+                {
+                    LogDecision("buy", string.Format("[NeedToBuy] YES - hunter ammo low ({0} rounds left)", _cachedAmmoCount));
+                    return true;
+                }
+                WarnHunterCannotRestock(broke);
             }
 
             // HB 4.3.4: Minimum 1 gold required to buy

@@ -160,6 +160,11 @@ namespace Styx.Logic
 			OnRepairItems?.Invoke(null, EventArgs.Empty);
 			_merchantFrame.RepairAllItems();
 			ForceRepair = false;
+
+			// Repair is its own errand branch, so without this a hunter could stand at an open merchant
+			// stocking her exact ammo and walk away dry. Every merchant window is a chance to top up —
+			// that's what keeps the dedicated ammo trip rare.
+			BuyAmmoIfNeeded();
 		}
 
 		/// <summary>
