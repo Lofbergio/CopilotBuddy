@@ -206,6 +206,15 @@ namespace Styx.Logic.Questing
 		}
 
 		/// <summary>
+		/// Force the next <see cref="GetCompletedQuests"/> to re-query the server. Call this after OUR OWN
+		/// turn-in: the completed set is a SERVER-QUERIED cache held for a minute, so without this it keeps
+		/// reporting the quest as not-yet-completed, and any planner that screens on "already done"
+		/// re-targets the quest it just handed in (live: q319 'A Favor for Evershine', whose giver and ender
+		/// are the same NPC, was re-wanted as a pickup 15s after being turned in).
+		/// </summary>
+		public static void InvalidateCompletedQuestCache() => _completedQuestCacheTime = DateTime.MinValue;
+
+		/// <summary>
 		/// Checks if the completed quest cache should be refreshed.
 		/// </summary>
 		private static bool ShouldRefreshCompletedQuestCache()

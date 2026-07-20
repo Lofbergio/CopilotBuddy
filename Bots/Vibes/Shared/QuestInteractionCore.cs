@@ -245,6 +245,9 @@ namespace Bots.Vibes.Shared
             }
 
             Logging.Write("{0} TurnIn q{1} '{2}' OK.", logTag, questId, questName);
+            // The completed set is a server-queried cache held for a MINUTE — we just changed it, so tell
+            // it. Otherwise a planner screening on "already done" keeps re-targeting this very quest.
+            Styx.Logic.Questing.QuestLog.InvalidateCompletedQuestCache();
             HandleChainedOffer((uint)questId, logTag, acceptChainedOffer, me);
             return QuestInteractOutcome.Success;
         }
