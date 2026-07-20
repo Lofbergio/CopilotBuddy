@@ -27,6 +27,7 @@ namespace VibeParty
 		private static Dictionary<int, QuestEntry>? _questById;
 		private static Dictionary<int, List<QuestGiverEntry>>? _giversByQuest;
 		private static Dictionary<int, List<QuestEnderEntry>>? _endersByQuest;
+		private static Dictionary<int, List<int>>? _questsByExclusiveGroup;   // positive groups only ("one of these, ever")
 		private static bool _loadFailed;
 
 		// Refresh outputs: entry → work items; rebuilt when the inputs change.
@@ -64,8 +65,15 @@ namespace VibeParty
 				return;
 			}
 			_questById = new Dictionary<int, QuestEntry>();
+			_questsByExclusiveGroup = new Dictionary<int, List<int>>();
 			foreach (QuestEntry q in _db.Quests)
+			{
 				_questById[q.Id] = q;
+				if (q.ExclusiveGroup <= 0) continue;   // negative = any-of prereq semantics, not a gate
+				if (!_questsByExclusiveGroup.TryGetValue(q.ExclusiveGroup, out var grp))
+					_questsByExclusiveGroup[q.ExclusiveGroup] = grp = new List<int>();
+				grp.Add(q.Id);
+			}
 			_giversByQuest = new Dictionary<int, List<QuestGiverEntry>>();
 			foreach (QuestGiverEntry g in _db.QuestGivers)
 			{
@@ -138,6 +146,7 @@ namespace VibeParty
 				if (q.AllowableRaces != 0 && (q.AllowableRaces & raceMask) == 0) continue;
 				if (q.MinLevel > myLevel) continue;
 				if (!PrereqsMet(q, doneHistory)) continue;
+				if (!ExclusiveGroupOpen(q, myLogIds, doneHistory)) continue;
 
 				bool anyNpcGiver = false;
 				if (_giversByQuest!.TryGetValue((int)id, out var givers))
@@ -162,6 +171,27 @@ namespace VibeParty
 			if (!_businessByEntry.TryGetValue(entry, out var list))
 				_businessByEntry[entry] = list = new List<QuestWork>();
 			list.Add(work);
+		}
+
+		/// <summary>
+		/// Mirror of the server's SatisfyQuestExclusiveGroup. A POSITIVE `exclusive_group` means "only ONE
+		/// quest of this group, ever" — the server refuses the rest the moment a sibling is started or
+		/// rewarded (375 quests here: Goblin-vs-Gnome Engineering in group 3526, the level-bracketed
+		/// Warsong repeatables in 8372). A NEGATIVE group is "any-of" PREREQUISITE semantics resolved
+		/// through the prev-quest chain, never a takeability gate on its own — so it passes here.
+		/// Screening this is what stops the follower walking to a giver the server will never serve.
+		/// </summary>
+		private static bool ExclusiveGroupOpen(QuestEntry q, HashSet<uint> myLogIds, HashSet<uint> done)
+		{
+			if (q.ExclusiveGroup <= 0) return true;
+			if (_questsByExclusiveGroup == null
+				|| !_questsByExclusiveGroup.TryGetValue(q.ExclusiveGroup, out var siblings)) return true;
+			foreach (int sib in siblings)
+			{
+				if (sib == q.Id) continue;
+				if (myLogIds.Contains((uint)sib) || done.Contains((uint)sib)) return false;
+			}
+			return true;
 		}
 
 		// AC semantics: positive prereq ids must be completed; negative ("active or complete") and
