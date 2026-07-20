@@ -2770,30 +2770,68 @@ namespace VibeParty
 		private static bool TradeOpen()
 			=> Lua.GetReturnVal<int>("return (TradeFrame and TradeFrame:IsShown()) and 1 or 0", 0) == 1;
 
-		// Synchronous trade: open with the requester, place water, accept. The requester auto-accepts
-		// (OnTradeShouldAccept, party-member gate) and re-accepts when our item lands. Per-requester cooldown after.
+		// UnitName('npc') is the trade partner while a trade window is open (3.3.5a TradeFrame) — the
+		// same truth the recipient auto-accept gates on.
+		private static string TradePartnerName()
+			=> TradeOpen() ? (Lua.GetReturnVal<string>("return UnitName('npc') or ''", 0) ?? "") : "";
+
+		// Synchronous VERIFIED trade: open with the requester, confirm the partner, place water, accept,
+		// confirm the items left our bags. The requester auto-accepts (OnTradeShouldAccept, party-member
+		// gate) and re-accepts when our item lands. Per-requester cooldown after every attempt.
+		// ⚠ Never assume a step landed (fleet start 2026-07-20): an unverified handoff opened with the
+		// LEADER instead of the requester — the leader auto-accepts any all-water trade — and "handed 20
+		// water" was logged for trades that never completed; the leader collected ~2 stacks while the
+		// named requester stayed dry. Every step below reads world truth before proceeding.
 		private void TryDeliverWater(WoWPlayer requester)
 		{
 			if (StyxWoW.Me.IsMoving) WoWMovement.MoveStop();
 			if (requester.Distance > WaterTradeRange) return;
 			_partyWater!.SendOffer(requester.Guid);   // tell them to hold still
 
-			if (!TradeOpen())
+			// The delivery owns its trade window start-to-finish. A pre-existing window (leftover timed-out
+			// attempt, or a human trading the mage) has an unknown partner and unknown slot state — close it
+			// LOUD and start fresh; reusing it is how water landed on the wrong member.
+			if (TradeOpen())
 			{
-				requester.Target();
-				Lua.DoString("InitiateTrade('target')");
-				if (!WaitFrame(TradeOpen, 2500))
-				{
-					_partyWater.Served(requester.Guid);   // cooldown, then retry — never a silent drop
-					Logging.Write(System.Drawing.Color.Aqua, "[VibeParty] trade with {0} never opened — will retry after cooldown.", requester.Name);
-					return;
-				}
+				string holder = TradePartnerName();
+				Logging.Write(System.Drawing.Color.Aqua, "[VibeParty] closing a leftover trade with {0} before serving {1}.",
+					holder.Length != 0 ? holder : "?", requester.Name);
+				Lua.DoString("CloseTrade()");
+				if (!WaitFrame(() => !TradeOpen(), 1500)) return;   // still open — retry next tick
+			}
+
+			// Target() silently no-ops when the unit can't be selected — wait on the selection edge, or
+			// InitiateTrade('target') fires at whatever we WERE targeting.
+			requester.Target();
+			if (!WaitFrame(() => StyxWoW.Me.CurrentTargetGuid == requester.Guid, 1000))
+			{
+				_partyWater.Served(requester.Guid);
+				Logging.Write(System.Drawing.Color.Aqua, "[VibeParty] could not target {0} for the trade — will retry after cooldown.", requester.Name);
+				return;
+			}
+			Lua.DoString("InitiateTrade('target')");
+			if (!WaitFrame(TradeOpen, 2500))
+			{
+				_partyWater.Served(requester.Guid);   // cooldown, then retry — never a silent drop
+				Logging.Write(System.Drawing.Color.Aqua, "[VibeParty] trade with {0} never opened — will retry after cooldown.", requester.Name);
+				return;
+			}
+			// The window belongs to whoever the client OPENED it with, not to who we asked for — verify.
+			string partner = TradePartnerName();
+			if (partner != requester.Name)
+			{
+				Lua.DoString("CloseTrade()");
+				_partyWater.Served(requester.Guid);
+				Logging.Write(System.Drawing.Color.Red, "[VibeParty] trade opened with {0} instead of {1} — closed it, will retry after cooldown.",
+					partner.Length != 0 ? partner : "?", requester.Name);
+				return;
 			}
 
 			// Give one full STACK (20) by COUNT, splitting bag stacks as needed to assemble it. All conjured
 			// drinks in bag count (stale ranks get purged lazily).
+			int before = PartyWater.ConjuredWaterCount();
 			int given = Lua.GetReturnVal<int>(
-				"local reserve=5 local giveMax=20 local total=0 " +
+				"local reserve=" + PartyWater.ReserveForSelf + " local giveMax=" + PartyWater.WaterStackGive + " local total=0 " +
 				"for b=0,4 do for s=1,GetContainerNumSlots(b) do local l=GetContainerItemLink(b,s) if l and string.find(l,'Conjured') and string.find(l,'Water') then local _,c=GetContainerItemInfo(b,s) total=total+(c or 1) end end end " +
 				"local give=math.min(giveMax,total-reserve) local given=0 local slot=1 " +
 				"if give>0 then for b=0,4 do for s=1,GetContainerNumSlots(b) do if given<give and slot<=6 then local l=GetContainerItemLink(b,s) if l and string.find(l,'Conjured') and string.find(l,'Water') then local _,c=GetContainerItemInfo(b,s) c=c or 1 local take=math.min(c,give-given) if take==c then PickupContainerItem(b,s) else SplitContainerItem(b,s,take) end ClickTradeButton(slot) slot=slot+1 given=given+take end end end end end " +
@@ -2807,9 +2845,19 @@ namespace VibeParty
 			}
 			StyxWoW.Sleep(300);
 			Lua.DoString("AcceptTrade()");
-			WaitFrame(() => !TradeOpen(), 3000);
+			// Success is world truth, not intent: the window closed AND the water left our bags. `given`
+			// counts placement ATTEMPTS — on a locked slot or an unaccepted trade it is fiction.
+			bool closed = WaitFrame(() => !TradeOpen(), 3000);
+			bool transferred = closed && WaitFrame(() => PartyWater.ConjuredWaterCount() < before, 1500);
 			_partyWater.Served(requester.Guid);
-			Logging.Write(System.Drawing.Color.Aqua, "[VibeParty] handed {0} water to {1}.", given, requester.Name);
+			if (transferred)
+				Logging.Write(System.Drawing.Color.Aqua, "[VibeParty] handed {0} water to {1}.", before - PartyWater.ConjuredWaterCount(), requester.Name);
+			else
+			{
+				Lua.DoString("CloseTrade()");
+				Logging.Write(System.Drawing.Color.Red, "[VibeParty] trade with {0} did not complete ({1}) — will retry after cooldown.",
+					requester.Name, closed ? "no items left our bags" : "window never closed");
+			}
 		}
 
 		// Live, DB-free mirror of VibeGrinder's aggro-bubble danger model (WoWUnit.GetAggroRange): true if any

@@ -89,6 +89,10 @@ namespace VibeParty
 		private void OnWaterRequest(PartyMessage msg)
 		{
 			if (!ulong.TryParse(msg.Payload, out ulong req) || req == 0 || req == _self) return;
+			// A request arriving during the post-delivery cooldown was SENT before the delivery landed —
+			// it is answered, not new (a still-low requester re-asks within RequestEvery anyway). Without
+			// this, the resurrected entry outlives the cooldown (90s stale window) and double-serves.
+			if (_serveCd.TryGetValue(req, out long cd) && DateTime.UtcNow.Ticks < cd) return;
 			_requests[req] = DateTime.UtcNow.Ticks;   // pure data
 		}
 
