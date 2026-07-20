@@ -124,14 +124,15 @@ namespace Styx.Logic.Inventory
         }
 
         /// <summary>
-        /// Gets whether there are items to mail.
+        /// Profile-quality-mask half of the mail payload. ⚠ NOT the whole answer — the full payload is
+        /// this UNIONED with the OnMailItems subscribers (which is how the Vibes bots contribute, their
+        /// profiles carrying no mail qualities at all). Ask <see cref="Styx.Logic.Vendors.ResolveMailPayload"/>
+        /// for the real thing; a gate built on this alone counts a different set than the executor sends.
         /// </summary>
-        public static bool HaveItemsToMail => GetItemsToMail().Length != 0;
-
-        /// <summary>
-        /// Gets items that should be mailed.
-        /// </summary>
-        public static WoWItem[] GetItemsToMail()
+        /// <param name="verbose">Log per-item accept/reject. FALSE when merely ASKING whether anything
+        /// would mail — this runs per tick from the mail gate, and the rejects (every soulbound item in
+        /// bags, every pass) drown the log otherwise.</param>
+        public static WoWItem[] GetItemsToMail(bool verbose = false)
         {
             var items = new List<WoWItem>();
             var allItems = StyxWoW.Me?.CarriedItems;
@@ -139,9 +140,9 @@ namespace Styx.Logic.Inventory
 
             foreach (var item in allItems)
             {
-                if (ShouldMailItem(item))
+                if (ShouldMailItem(item, verbose))
                 {
-                    Logging.Write($"Mailing {item.Name}");
+                    if (verbose) Logging.Write($"Mailing {item.Name}");
                     items.Add(item);
                 }
             }
@@ -152,7 +153,7 @@ namespace Styx.Logic.Inventory
         /// <summary>
         /// Determines if an item should be mailed.
         /// </summary>
-        private static bool ShouldMailItem(WoWItem item)
+        private static bool ShouldMailItem(WoWItem item, bool verbose)
         {
             Profile currentProfile = ProfileManager.CurrentProfile;
             string itemName = item.Name.ToLower();
@@ -169,37 +170,37 @@ namespace Styx.Logic.Inventory
             // Standard mail check
             if (item.IsSoulbound)
             {
-                Logging.WriteDebug("Can't mail item:{0}. Item is soulbound", item.Name);
+                if (verbose) Logging.WriteDebug("Can't mail item:{0}. Item is soulbound", item.Name);
                 return false;
             }
             if (item.IsConjured)
             {
-                Logging.WriteDebug("Can't mail item:{0}. Item is conjured", item.Name);
+                if (verbose) Logging.WriteDebug("Can't mail item:{0}. Item is conjured", item.Name);
                 return false;
             }
 
             // Check protected items
             if (ProtectedItemsManager.Contains(item.Entry))
             {
-                Logging.WriteDebug("Can't mail item:{0}. Item is a protected item", item.Name);
+                if (verbose) Logging.WriteDebug("Can't mail item:{0}. Item is a protected item", item.Name);
                 return false;
             }
             if (ProtectedItemsManager.Contains(item.Name.ToLower()))
             {
-                Logging.WriteDebug("Can't mail item:{0}. Item is a protected item", item.Name);
+                if (verbose) Logging.WriteDebug("Can't mail item:{0}. Item is a protected item", item.Name);
                 return false;
             }
 
             // Check item quality
             if (!currentProfile.MailQualities.Contains(item.Quality))
             {
-                Logging.WriteDebug("Can't mail item:{0}. Item doesn't meet the itemqualitys specified in the profile", item.Name);
+                if (verbose) Logging.WriteDebug("Can't mail item:{0}. Item doesn't meet the itemqualitys specified in the profile", item.Name);
                 return false;
             }
 
             if (item.ItemInfo.Bond == WoWItemBondType.Quest)
             {
-                Logging.WriteDebug("Can't mail item:{0}. Item is a questitem", item.Name);
+                if (verbose) Logging.WriteDebug("Can't mail item:{0}. Item is a questitem", item.Name);
                 return false;
             }
 
@@ -213,7 +214,7 @@ namespace Styx.Logic.Inventory
             var result = Lua.GetReturnValues(luaCheck, "hax.lua");
             if (result[0] != "true")
             {
-                Logging.WriteDebug("Can't mail item:{0}. Item is equipped", item.Name);
+                if (verbose) Logging.WriteDebug("Can't mail item:{0}. Item is equipped", item.Name);
                 return false;
             }
 

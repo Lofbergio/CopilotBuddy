@@ -118,10 +118,18 @@ namespace Styx.Logic
 		/// <summary>
 		/// Mails all items that should be mailed.
 		/// </summary>
-		public static void MailAllItems()
+		/// <summary>
+		/// THE answer to "what would we mail right now" — the profile-quality set unioned with every
+		/// OnMailItems subscriber's contribution. Both the mail GATE and the mail EXECUTOR must ask this
+		/// one function: a gate that counts a different set than the executor attaches produces a log line
+		/// that LIES, which is worse than the silent empty run it replaced. Pure apart from the optional
+		/// logging — subscribers only append to the args.
+		/// </summary>
+		/// <param name="verbose">Log per-item detail. FALSE from the gate (it runs per tick).</param>
+		public static WoWItem[] ResolveMailPayload(bool verbose = false)
 		{
 			var items = new List<WoWItem>();
-			items.AddRange(InventoryManager.GetItemsToMail());
+			items.AddRange(InventoryManager.GetItemsToMail(verbose));
 
 			if (OnMailItems != null)
 			{
@@ -148,7 +156,24 @@ namespace Styx.Logic
 				}
 			}
 
-			_mailFrame.SendMailWithManyAttachments(LevelbotSettings.Instance.MailRecipient, 0, items.ToArray());
+			return items.ToArray();
+		}
+
+		public static void MailAllItems()
+		{
+			WoWItem[] items = ResolveMailPayload(verbose: true);
+			if (items.Length == 0)
+			{
+				// The gate is supposed to make this unreachable. If it fires, the gate and this executor
+				// disagree about the payload — say so loudly rather than sending an empty mail.
+				Logging.Write(System.Drawing.Color.Orange,
+					"[Mail] asked to mail with an empty payload — the mail gate and ResolveMailPayload disagree.");
+				ForceMail = false;
+				return;
+			}
+
+			Logging.Write("Mailing {0} item(s) to {1}.", items.Length, LevelbotSettings.Instance.MailRecipient);
+			_mailFrame.SendMailWithManyAttachments(LevelbotSettings.Instance.MailRecipient, 0, items);
 			ForceMail = false;
 		}
 

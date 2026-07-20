@@ -1717,11 +1717,21 @@ namespace Bots.Grind
             bool levelOk = me.Level >= currentProfile.MinMailLevel;
             bool near = dist < 200.0;
             bool bagsFull = totalBags > 0 && freeBags < totalBags * MailFreeSlotsPressurePct / 100.0;
-            bool need = levelOk && (near || bagsFull);
+            bool worthATrip = levelOk && (near || bagsFull);
+
+            // PAYLOAD is the precondition, and it goes LAST so the per-tick cost is only paid once every
+            // cheap gate already said yes. Without it this decided from geometry alone: standing anywhere
+            // in a town is "within 200yd of a mailbox", so it answered YES forever regardless of cargo —
+            // the bot walked to the mailbox, sent nothing, and re-fired at the next merchant (sell → mail
+            // → repair → mail, log 2026-07-19_1857_Bart). Ask the EXECUTOR's own resolver rather than a
+            // private guess, so the gate can never count a different set than MailAllItems attaches.
+            int payload = worthATrip ? Vendors.ResolveMailPayload().Length : 0;
+            bool need = worthATrip && payload > 0;
+
             LogDecision("mail", string.Format(
-                "[NeedToMail] {0} — level {1}>=min{2}:{3} AND (closestMailbox {4:F0}yd<200:{5} OR free {6}/{7} <{8}%:{9})",
+                "[NeedToMail] {0} — level {1}>=min{2}:{3} AND (closestMailbox {4:F0}yd<200:{5} OR free {6}/{7} <{8}%:{9}) AND payload {10}",
                 need ? "YES" : "no", me.Level, currentProfile.MinMailLevel, levelOk, dist, near,
-                freeBags, totalBags, MailFreeSlotsPressurePct, bagsFull));
+                freeBags, totalBags, MailFreeSlotsPressurePct, bagsFull, payload));
             return need;
         }
 
