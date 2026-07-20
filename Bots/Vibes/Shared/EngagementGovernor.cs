@@ -164,9 +164,23 @@ namespace Bots.Vibes.Shared
             ulong peelGuid = _host.PeelGuid;
             WoWUnit peel = peelGuid != 0 ? FindCandidate(units, peelGuid) : null;
             if (peel != null && !peel.Dead && peel.Distance <= Targeting.PullDistance * 1.5)
+            {
+                // The peel owns the target now. Release any grind commitment rather than leaving it
+                // parked: its give-up clock is a running Stopwatch, so a held pin would expire against a
+                // mob we deliberately walked away from.
+                if (_committedGuid != 0) DropCommit();
                 PinGuid(units, peelGuid);
-            else if (!_host.OnServiceRun)
-                ApplyPullCommitment(units, me, hostiles);
+            }
+            else
+            {
+                // ⚠ ALWAYS runs — only ACQUISITION is gated on the errand. Skipping the whole method during
+                // a service run froze the commitment while _committedTimer kept ticking, so the first tick
+                // after the errand saw an expired clock and fired GIVE UP + a 2m blacklist against a mob
+                // that never failed us; with _committedProgressed still false, the 240m EXPERIMENTAL BAN
+                // was reachable the same way. Validation must keep resolving; acquisition must not start a
+                // pull we have no intention of walking to.
+                ApplyPullCommitment(units, me, hostiles, acquire: !_host.OnServiceRun);
+            }
         }
 
         // Live hostiles from the object manager — NOT just the current target list. An un-aggroed camp
@@ -545,9 +559,19 @@ namespace Bots.Vibes.Shared
         /// Engagement commitment — once we COMMIT to a mob, pin it to the top of the score so it stays
         /// FirstUnit, and only re-pick when it's dead, gone, or proven unreachable. Quality scoring above
         /// still chooses the initial commit; after that, stability beats re-optimising.
+        ///
+        /// Two halves with different lifetimes:
+        ///   VALIDATE (safety drops + the held-commitment block) runs EVERY tick, errand or not. It is what
+        ///   resolves and releases a commitment; freezing it does not pause the give-up Stopwatch, it just
+        ///   defers the expiry to a tick where the mob is long gone.
+        ///   ACQUIRE (the path-defense preempt and the acquire tail) runs only when <paramref name="acquire"/>
+        ///   is set — i.e. NOT during a vendor/mail errand. Starting a pull we have no intention of walking
+        ///   to is what manufactures the give-ups: commit a roadside mob, close no distance for the whole
+        ///   trip, expire, blacklist, repeat, and accrue toward the entry ban.
         /// </summary>
+        /// <param name="acquire">False on a service run: validate what we hold, start nothing new.</param>
         private void ApplyPullCommitment(List<Targeting.TargetPriority> units,
-                                         WoWUnit me, List<WoWUnit> hostiles)
+                                         WoWUnit me, List<WoWUnit> hostiles, bool acquire)
         {
             IVibeTuning s = Tuning;
 
@@ -583,8 +607,9 @@ namespace Bots.Vibes.Shared
             bool opened = HasOpenedOnCommit(me);
 
             // Path defense (never walk a far commitment past a mob that's about to body-pull us). See
-            // VibeGrinder CLAUDE.md "Path-defense preempt".
-            if (_committedGuid != 0 && !opened)
+            // VibeGrinder CLAUDE.md "Path-defense preempt". ACQUIRING — it re-commits to the threat, and on
+            // an errand TransitPeel already owns path threats, so it stays off there.
+            if (acquire && _committedGuid != 0 && !opened)
             {
                 WoWUnit held = FindCandidate(units, _committedGuid);
                 double heldDist = held != null && !held.Dead ? held.Location.Distance(me.Location) : double.MaxValue;
@@ -715,7 +740,7 @@ namespace Bots.Vibes.Shared
             // Acquire: commit to the NEAREST acceptable candidate (tiered), not the highest-scored one.
             // Rest BEFORE pulling: don't START a new pull while resting OR while we need to (both required —
             // RestNeeded catches the entry tick, IsResting catches the sticky recovery band).
-            if (_committedGuid == 0 && !_host.IsResting && !_host.RestNeeded(me))
+            if (acquire && _committedGuid == 0 && !_host.IsResting && !_host.RestNeeded(me))
             {
                 float buryFloor = -s.NeutralNearHostileVeto * 0.5f;   // below this = a buried neutral; skip it
                 // Lookahead: validate the pick is PATHABLE before committing (one GeneratePath per acquire,

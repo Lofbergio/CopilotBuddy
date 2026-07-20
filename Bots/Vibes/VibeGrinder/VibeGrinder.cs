@@ -753,6 +753,11 @@ namespace Bots.VibeGrinder
                     _vendorRun = true;
                     _vendorRunType = BotPoi.Current.Type;   // for the abort escalation — the POI thrashes by abort time
                     _vendorWatchdog.Restart();
+                    // Release the grind commitment at the COMMIT edge. The give-up clock is a running
+                    // Stopwatch — a pin carried into a multi-minute errand expires against a mob we chose
+                    // to walk away from, blacklisting it and accruing toward its entry ban. Stop the clock
+                    // by not having one, rather than by freezing it.
+                    _governor?.DropCommit();
                     Logging.Write(System.Drawing.Color.Khaki,
                         "[VibeGrinder/Vendor] COMMIT — {0} run; grind/rest/roam suspended until done.", BotPoi.Current.Type);
                     // Trek safety for the errand leg: bend the route around red/pack aggro bubbles.
