@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Styx;
 using Styx.Helpers;
+using Styx.Logic.Pathing;
 using VibeQuester;
 
 namespace VibeParty
@@ -205,6 +206,33 @@ namespace VibeParty
 		}
 
 		public static bool EntryHasBusiness(uint entry) => _businessByEntry.ContainsKey(entry);
+
+		/// <summary>Nearest game-object ender spawn for this quest ON the given map (gameobject_spawns,
+		/// the same source VibeQuester uses), or false when none exists there. Distance-2D against
+		/// <paramref name="from"/> so the caller can bound the trek.</summary>
+		/// <param name="hasGoEnder">True when the quest HAS a game-object ender at all. Lets the caller tell
+		/// "this is simply a creature turn-in" (the overwhelming majority — must stay silent) apart from
+		/// "its GO ender has no usable spawn", which is a real dead end worth reporting.</param>
+		public static bool TryNearestGameObjectEnder(int questId, int mapId, WoWPoint from, out int goEntry, out WoWPoint loc, out bool hasGoEnder)
+		{
+			goEntry = 0; loc = WoWPoint.Empty; hasGoEnder = false;
+			if (_db == null || _endersByQuest == null || !_endersByQuest.TryGetValue(questId, out var enders)) return false;
+			double bestDist = double.MaxValue;
+			foreach (QuestEnderEntry e in enders)
+			{
+				if (e.EnderType != QuestObjectType.GameObject) continue;
+				hasGoEnder = true;
+				if (!_db.GameObjectSpawns.TryGetValue(e.EnderId.ToString(), out var spawns)) continue;
+				foreach (SpawnPoint sp in spawns)
+				{
+					if (sp.Map != mapId) continue;
+					var p = new WoWPoint((float)sp.X, (float)sp.Y, (float)sp.Z);
+					double d = from.Distance2D(p);
+					if (d < bestDist) { bestDist = d; goEntry = e.EnderId; loc = p; }
+				}
+			}
+			return goEntry != 0;
+		}
 
 		/// <summary>Work at this entry, turn-ins first (they unlock chained pickups server-side).</summary>
 		public static List<QuestWork> BusinessAt(uint entry)

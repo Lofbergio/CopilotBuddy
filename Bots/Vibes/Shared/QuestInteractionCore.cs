@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Styx;
 using Styx.Helpers;
 using Styx.Logic.Inventory.Frames.Gossip;
@@ -361,7 +362,72 @@ namespace Bots.Vibes.Shared
             return 0;
         }
 
-        private static bool OpenInteraction(WoWObject entity, int questId, string logTag)
+        /// <summary>One entry exactly as the NPC PRESENTS it. Driving off this (QuickQuest's model)
+        /// instead of a bot-side prediction is what makes a refusal structurally impossible: a quest
+        /// the NPC won't serve never appears in the list, so there is no failure to remember.</summary>
+        public struct PresentedQuest
+        {
+            public string Title;
+            public bool IsComplete;   // actives only; the CLIENT's own flag, not our inference
+        }
+
+        /// <summary>Active (held) quests the OPEN frame presents, with the client's own isComplete.
+        /// Read by TITLE: the greeting API carries no ids on 3.3.5a and the gossip memory wrapper can
+        /// read empty while the Lua counts are non-zero (docs/gotchas.md).</summary>
+        public static List<PresentedQuest> PresentedActives()
+        {
+            if (GreetingShown())
+                // ⚠ Treat an ABSENT second return as complete: 3.3.5a's GetActiveTitle may return the title
+                // only. The caller gates on OUR OWN quest log's isComplete (the documented completion truth)
+                // anyway, so deferring to it is safe — whereas assuming "not complete" would silently starve
+                // every turn-in at a multi-quest greeting giver. An explicit false/0 is still honoured.
+                return ParsePresented(Lua.GetReturnVal<string>(
+                    "local r='' for i=1,GetNumActiveQuests() do local t,c=GetActiveTitle(i) "
+                    + "r=r..(t or '')..'\\1'..((c==nil or (c and c~=0)) and '1' or '0')..'\\2' end return r", 0U));
+            // ⚠ GetGossip*Quests() returns the client's LAST-RECEIVED gossip block, which closing a frame
+            // does not clear — reading it while a direct detail/progress panel is open would attribute the
+            // PREVIOUS NPC's quests to this one. Only trust it while the gossip frame is actually up; direct
+            // panels are owned by the caller's ShownQuestId fallback.
+            if (!GossipFrame.Instance.IsVisible) return new List<PresentedQuest>();
+            // Gossip actives are (title, level, isTrivial, isComplete) on stock 3.3.5a; the stride is derived
+            // from the arg COUNT (select('#') — a table literal would truncate a trailing nil) so a server
+            // returning a wider tuple still reads the last field.
+            return ParsePresented(Lua.GetReturnVal<string>(
+                "local r='' local n=GetNumGossipActiveQuests() local c=select('#',GetGossipActiveQuests()) "
+                + "local q={GetGossipActiveQuests()} "
+                + "if n>0 and c>=n then local s=math.floor(c/n) for i=0,n-1 do "
+                + "r=r..(q[i*s+1] or '')..'\\1'..((q[i*s+s]==nil or (q[i*s+s] and q[i*s+s]~=0)) and '1' or '0')..'\\2' end end return r", 0U));
+        }
+
+        /// <summary>Available (offerable) quests the OPEN frame presents.</summary>
+        public static List<PresentedQuest> PresentedAvailables()
+        {
+            if (GreetingShown())
+                return ParsePresented(Lua.GetReturnVal<string>(
+                    "local r='' for i=1,GetNumAvailableQuests() do r=r..(GetAvailableTitle(i) or '')..'\\1'..'0'..'\\2' end return r", 0U));
+            if (!GossipFrame.Instance.IsVisible) return new List<PresentedQuest>();   // stale-block guard, see PresentedActives
+            return ParsePresented(Lua.GetReturnVal<string>(
+                "local r='' local n=GetNumGossipAvailableQuests() local c=select('#',GetGossipAvailableQuests()) "
+                + "local q={GetGossipAvailableQuests()} "
+                + "if n>0 and c>=n then local s=math.floor(c/n) for i=0,n-1 do r=r..(q[i*s+1] or '')..'\\1'..'0'..'\\2' end end return r", 0U));
+        }
+
+        private static List<PresentedQuest> ParsePresented(string? raw)
+        {
+            var list = new List<PresentedQuest>();
+            foreach (string tok in (raw ?? "").Split('\x02'))
+            {
+                if (tok.Length == 0) continue;
+                int cut = tok.IndexOf('\x01');
+                if (cut <= 0) continue;
+                list.Add(new PresentedQuest { Title = tok.Substring(0, cut), IsComplete = tok.Substring(cut + 1) == "1" });
+            }
+            return list;
+        }
+
+        /// <summary>Open the entity's frame (public so a caller can READ the presented lists before
+        /// deciding what to do). Re-entrant: returns true immediately when a frame is already up.</summary>
+        public static bool OpenInteraction(WoWObject entity, int questId, string logTag)
         {
             if (GossipFrame.Instance.IsVisible || QuestFrame.Instance.IsVisible)
                 return true;   // already open (retry pass)
