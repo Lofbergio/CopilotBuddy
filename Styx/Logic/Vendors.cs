@@ -367,7 +367,7 @@ namespace Styx.Logic
 					// Banning on it permanently burned both Thelsamar vendors, which each stocked bullets,
 					// and sent the hunter to Ironforge (log 2026-07-20_1745).
 					if (shelf.Classified)
-						BanFromAmmoErrand(needed, shelf.CarriesClass);
+						BanFromAmmoErrand(needed, shelf.CarriesClass, shelf.UsableSoldOut);
 					else
 						Logging.Write(System.Drawing.Color.Orange,
 							"[Ammo] couldn't read {0}'s shelf ({1} items; item cache cold and no VendorStock.db) — "
@@ -377,18 +377,22 @@ namespace Styx.Logic
 				}
 				int bestIndex = shelf.Index;
 				string bestName = shelf.Name;
-				int bestStack = shelf.StackSize;
+				int bestPerPurchase = Math.Max(1, shelf.PerPurchase);
 
-				int stacks = (AmmoRestockTarget - have + bestStack - 1) / bestStack;
+				// BuyMerchantItem's second arg counts PURCHASES, each yielding PerPurchase rounds — the
+				// old code passed the stack size as the count, asking for stack² rounds and tripping the
+				// not-enough-money guard instead of buying anything.
+				int purchases = (AmmoRestockTarget - have + bestPerPurchase - 1) / bestPerPurchase;
 				int bought = 0;
-				for (int i = 0; i < stacks; i++)
+				for (int i = 0; i < purchases; i++)
 				{
-					if (!_merchantFrame.BuyItem(bestIndex, bestStack))
+					if (!_merchantFrame.BuyItem(bestIndex, 1))
 						break;   // out of money — keep what we got
 					bought++;
 				}
 				if (bought > 0)
-					Logging.Write("Restocked ammo: {0} x{1} stack(s) of {2} (had {3} rounds).", bestName, bought, bestStack, have);
+					Logging.Write("Restocked ammo: {0} x{1} purchase(s) of {2} (had {3} rounds).",
+						bestName, bought, bestPerPurchase, have);
 			}
 			catch (Exception ex)
 			{
@@ -408,9 +412,10 @@ namespace Styx.Logic
 		{
 			public int Index = -1;          // merchant slot to buy from, -1 = nothing to buy
 			public string Name;
-			public int StackSize = DefaultAmmoStackSize;
+			public int PerPurchase = DefaultAmmoStackSize;  // rounds one BuyMerchantItem call yields
 			public bool Classified;         // we established what this vendor stocks
 			public bool CarriesClass;       // stocks this projectile class at SOME level (maybe above ours)
+			public bool UsableSoldOut;      // stocks ammo we could use, but it isn't on the shelf now
 		}
 
 		/// <summary>
@@ -436,21 +441,23 @@ namespace Styx.Logic
 			if (usable.Count == 0)
 				return;
 
-			var onShelf = new Dictionary<uint, int>();
-			foreach (var mi in _merchantFrame.GetAllMerchantItems())
-				onShelf[mi.ItemId] = mi.Index;
+			var onShelf = new Dictionary<uint, MerchantShelfItem>();
+			foreach (var si in _merchantFrame.GetShelfViaLua())
+				onShelf[si.ItemId] = si;
 
 			foreach (var item in usable)
 			{
-				if (!onShelf.TryGetValue(item.ItemId, out int index))
+				if (!onShelf.TryGetValue(item.ItemId, out MerchantShelfItem slot))
 					continue;   // limited-stock row that is currently sold out
-				shelf.Index = index;
+				shelf.Index = slot.Index;
 				shelf.Name = item.Name;
-				// The client cache knows the stack size when it's warm; otherwise the WotLK ammo constant holds.
-				ItemInfo info = ItemInfo.FromId(item.ItemId);
-				shelf.StackSize = info != null ? Math.Max(1, info.MaxStackSize) : DefaultAmmoStackSize;
+				shelf.PerPurchase = slot.QuantityPerPurchase;
 				return;
 			}
+
+			// The server says he stocks ammo we can use, but it isn't on the shelf — a genuinely
+			// different verdict from "all above our level", and it must not be reported as that.
+			shelf.UsableSoldOut = true;
 		}
 
 		/// <summary>
@@ -479,7 +486,7 @@ namespace Styx.Logic
 				bestReq = info.RequiredLevel;
 				shelf.Index = mi.Index;
 				shelf.Name = info.Name;
-				shelf.StackSize = Math.Max(1, info.MaxStackSize);
+				shelf.PerPurchase = Math.Max(1, mi.Quantity);
 			}
 		}
 
@@ -490,8 +497,19 @@ namespace Styx.Logic
 		/// Exhausting the candidates is the terminating case, not a failure: NeedToBuy already gates
 		/// the ammo run on a non-null ammo vendor, so it simply stops asking.
 		/// </summary>
-		private static void BanFromAmmoErrand(WoWItemProjectileClass needed, bool carriesClass)
+		private static void BanFromAmmoErrand(WoWItemProjectileClass needed, bool carriesClass, bool usableSoldOut)
 		{
+			// Sold out is not a verdict about the VENDOR — limited-stock rows restock on a server timer,
+			// and banning him would send us past a shop that will have bullets again in minutes.
+			if (usableSoldOut)
+			{
+				Logging.Write(System.Drawing.Color.Orange,
+					"[Ammo] {0} stocks {1}s we can use but none are on the shelf right now (limited stock) — "
+					+ "not blacklisting; he restocks.",
+					_merchantFrame.Merchant?.Name ?? "this merchant", needed);
+				return;
+			}
+
 			var vm = ProfileManager.CurrentProfile?.VendorManager;
 			WoWUnit merchant = _merchantFrame.Merchant;
 			Vendor vendor = merchant != null

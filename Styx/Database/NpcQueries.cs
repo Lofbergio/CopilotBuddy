@@ -32,27 +32,12 @@ namespace Styx.Database
 
         private static bool _initialized = false;
 
-        // Navigation caches - same as HB 4.3.4 dictionary_0 / dictionary_1
-        // Keyed by NPC entry, NOT NpcResult: NpcResult is a class with no Equals/GetHashCode, so a
-        // Dictionary<NpcResult,bool> used reference equality — every query builds fresh NpcResult objects,
-        // so the cache NEVER hit and CanNavigateFully (a full Detour pathfind) ran for every candidate on
-        // every call (×4 vendor types per roam tick → severe FPS drop while roaming). Entry-keyed = real cache.
-        // Positives are stable (mesh connectivity), but negatives EXPIRE: CanNavigateFully fails on
-        // partial paths, which happen legitimately from far/unloaded tiles — a permanently cached false
-        // hid the CLOSEST trainer for the whole session (bot ran 1300yd past Tuluun to Firmanvaar, 2026-07-10).
-        // The vendor path no longer uses this: it measures real walk distance with GeneratePath, which
-        // answers reachability as a side effect. Trainers still resolve first-navigable-wins.
-        private static readonly Dictionary<int, (bool ok, DateTime when)> _trainerNavCache = new Dictionary<int, (bool, DateTime)>();
-        private static readonly TimeSpan NavNegativeTtl = TimeSpan.FromMinutes(3);
-
-        private static bool CanNavigateCached(Dictionary<int, (bool ok, DateTime when)> cache, int entry, WoWPoint from, WoWPoint to)
-        {
-            if (cache.TryGetValue(entry, out var c) && (c.ok || DateTime.UtcNow - c.when < NavNegativeTtl))
-                return c.ok;
-            bool canNav = Navigator.CanNavigateFully(from, to);
-            cache[entry] = (canNav, DateTime.UtcNow);
-            return canNav;
-        }
+        // The old per-entry CanNavigateFully cache is gone: both resolvers now measure real walk distance
+        // with GeneratePath, which answers reachability as a side effect, and the result memo below covers
+        // the cost the cache existed for. Its cautionary tale still applies to anything that caches a
+        // reachability NEGATIVE — CanNavigateFully fails on partial paths from far/unloaded tiles, and a
+        // permanently cached false hid the CLOSEST trainer for a whole session (bot ran 1300yd past Tuluun
+        // to Firmanvaar, 2026-07-10).
 
         // data.bin `faction` is a faction-TEMPLATE id. WoWFaction.RelationTo reads Neutral for
         // everything here (gotchas.md: player side is template-less) — the DBC-correct check is
@@ -183,13 +168,18 @@ namespace Styx.Database
             // (starting-area 6, village 15, city 40-70), and tier-limited servers teach NOTHING at an
             // outgrown trainer (BuyAll buys 0 and the training silently "succeeds"). Fall back to the
             // old HB rule when the map has no such trainer (e.g. high-level chars, sparse maps).
+            // Deliberately NOT subject to MaxVendorTravelYards. Class trainers live in cities, so any
+            // cap tight enough to bound a restock trip (vendors are everywhere) would stop a levelling
+            // character training at all — a worse failure than the walk it prevents. Trainers get the
+            // shortest-real-walk pick; the distance itself is the cost of the errand.
             NpcResult result = QueryNearestTrainer(mapId, searchLocation, searchClass, (int)StyxWoW.Me.Level, excludeEntries);
             if (result == null)
                 result = QueryNearestTrainer(mapId, searchLocation, searchClass, StyxWoW.Me.Level > 10 ? 10 : 0, excludeEntries);
             return result;
         }
 
-        private static NpcResult QueryNearestTrainer(uint mapId, WoWPoint searchLocation, WoWClass searchClass, int minLevel, HashSet<int> excludeEntries)
+        private static NpcResult QueryNearestTrainer(uint mapId, WoWPoint searchLocation, WoWClass searchClass, int minLevel,
+                                                     HashSet<int> excludeEntries)
         {
             WoWPoint location = StyxWoW.Me.Location;
 
@@ -203,6 +193,7 @@ namespace Styx.Database
 
             if (reader == null) return null;
 
+            var viable = new List<NpcResult>();
             while (reader.Read())
             {
                 NpcResult result = new NpcResult(reader);
@@ -212,12 +203,12 @@ namespace Styx.Database
                     continue; // [DND] placeholder/disabled NPC, not a real trainer
                 if ((result.NpcFlags & 32U) != 0U && IsFactionUsable(result.Faction))
                 {
-                    if (!CanNavigateCached(_trainerNavCache, result.Entry, location, result.Location))
-                        continue;
-                    return result;
+                    viable.Add(result);
+                    if (viable.Count >= WalkCandidates)
+                        break;
                 }
             }
-            return null;
+            return NearestByWalk(viable, location, UnitNPCFlags.ClassTrainer, false, out _);
         }
 
         /// <summary>
@@ -241,27 +232,25 @@ namespace Styx.Database
             if (_getNearestNpcCmd == null) return null;
 
             WoWClass myClass = StyxWoW.Me.Class;
+            WoWPoint location = StyxWoW.Me.Location;
+
+            // Memo sits ABOVE the trainer branch: that path measures walks too, and is asked just as
+            // often. Level is part of the key because it decides which trainer tier qualifies and which
+            // stock is usable — the one input here that changes on its own during a run.
+            var memoKey = (mapId, npcFlags,
+                           (int)(location.X / ResolveBucketYd), (int)(location.Y / ResolveBucketYd),
+                           excludeEntries?.Count ?? 0, requireEntries?.Count ?? -1, (int)StyxWoW.Me.Level);
+            if (_resolveMemo.TryGetValue(memoKey, out NpcResult memoised))
+                return memoised;
 
             // If looking for class trainer, use specialized query
             if ((npcFlags & UnitNPCFlags.ClassTrainer) != UnitNPCFlags.None)
-            {
-                return GetNearestTrainer(myFaction, mapId, searchLocation, myClass, excludeEntries);
-            }
-
-            WoWPoint location = StyxWoW.Me.Location;
-            var memoKey = (mapId, npcFlags,
-                           (int)(location.X / ResolveBucketYd), (int)(location.Y / ResolveBucketYd),
-                           excludeEntries?.Count ?? 0, requireEntries?.Count ?? -1);
-            if (_resolveMemo.TryGetValue(memoKey, out NpcResult memoised))
-                return memoised;
+                return Memoise(memoKey, GetNearestTrainer(myFaction, mapId, searchLocation, myClass, excludeEntries));
 
             using var reader = OpenNearestNpcReader(mapId, npcFlags, searchLocation, requireEntries);
 
             if (reader == null)
-            {
-                _resolveMemo[memoKey] = null;
-                return null;
-            }
+                return Memoise(memoKey, null);
 
             var viable = new List<NpcResult>();
 
@@ -290,13 +279,7 @@ namespace Styx.Database
                         break;
                 }
             }
-            NpcResult picked = NearestByWalk(viable, location, npcFlags);
-            // An overnight run crosses a lot of buckets; the memo is a speed cache, not a record worth
-            // keeping, so drop it wholesale rather than growing without bound.
-            if (_resolveMemo.Count > ResolveMemoMaxEntries)
-                _resolveMemo.Clear();
-            _resolveMemo[memoKey] = picked;
-            return picked;
+            return Memoise(memoKey, NearestByWalk(viable, location, npcFlags));
         }
 
         // How many straight-line-nearest candidates get their real walk measured. Straight line is a
@@ -311,8 +294,19 @@ namespace Styx.Database
         // bucketed because the answer cannot meaningfully change while we stand still and fight.
         private const float ResolveBucketYd = 50f;
         private const int ResolveMemoMaxEntries = 512;
-        private static readonly Dictionary<(uint map, UnitNPCFlags flags, int bx, int by, int excl, int req), NpcResult> _resolveMemo =
-            new Dictionary<(uint, UnitNPCFlags, int, int, int, int), NpcResult>();
+        private static readonly Dictionary<(uint map, UnitNPCFlags flags, int bx, int by, int excl, int req, int level), NpcResult> _resolveMemo =
+            new Dictionary<(uint, UnitNPCFlags, int, int, int, int, int), NpcResult>();
+
+        private static NpcResult Memoise(
+            (uint, UnitNPCFlags, int, int, int, int, int) key, NpcResult result)
+        {
+            // An overnight run crosses a lot of buckets; this is a speed cache, not a record worth
+            // keeping, so drop it wholesale rather than growing without bound.
+            if (_resolveMemo.Count > ResolveMemoMaxEntries)
+                _resolveMemo.Clear();
+            _resolveMemo[key] = result;
+            return result;
+        }
 
         /// <summary>
         /// Picks the candidate with the shortest ACTUAL walk, rejecting anything past the travel budget.
@@ -324,7 +318,22 @@ namespace Styx.Database
         /// </summary>
         private static NpcResult NearestByWalk(List<NpcResult> candidates, WoWPoint from, UnitNPCFlags npcFlags)
         {
-            float budget = CharacterSettings.Instance.MaxVendorTravelYards;
+            return NearestByWalk(candidates, from, npcFlags, true, out _);
+        }
+
+        /// <param name="applyBudget">
+        /// False defers the cap to the caller. The trainer path needs that: it resolves in two passes
+        /// (level-appropriate tier, then any tier), and rejecting an over-budget GOOD trainer inside
+        /// pass 1 would hand the job to pass 2, which happily returns a nearby OUTGROWN trainer that
+        /// teaches nothing and reports success. The cap belongs on the final pick, not on each pass.
+        /// </param>
+        /// <param name="walkYd">Walk distance of the returned candidate, so a deferred budget check
+        /// doesn't have to pathfind all over again.</param>
+        private static NpcResult NearestByWalk(List<NpcResult> candidates, WoWPoint from, UnitNPCFlags npcFlags,
+                                               bool applyBudget, out float walkYd)
+        {
+            walkYd = 0f;
+            float budget = applyBudget ? CharacterSettings.Instance.MaxVendorTravelYards : 0f;
             NpcResult best = null;
             float bestWalk = float.MaxValue;
             NpcResult nearestOverBudget = null;
@@ -366,6 +375,7 @@ namespace Styx.Database
                     "[Vendors] nearest {0} is {1} at {2:F0}yd walk — past the {3:F0}yd travel budget, skipping the trip.",
                     npcFlags, nearestOverBudget.Name, nearestOverBudgetWalk, budget);
 
+            walkYd = best != null ? bestWalk : 0f;
             return best;
         }
 

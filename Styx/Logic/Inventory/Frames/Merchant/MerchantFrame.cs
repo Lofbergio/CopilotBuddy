@@ -258,6 +258,59 @@ namespace Styx.Logic.Inventory.Frames.Merchant
         }
 
         /// <summary>
+        /// The open shelf as the GAME reports it: slot index, item id, and quantity PER PURCHASE.
+        ///
+        /// Read via Lua, not the memory struct, on purpose. `MerchantItemData` declares 40 bytes while
+        /// `GetMerchantItemAtIndex` strides 32 — one of the two is wrong, and if the stride is, every
+        /// slot after the first yields a garbage item id. Nothing caught it because every other working
+        /// consumer here (food/drink) already reads through Lua. The item link is unambiguous, so this
+        /// sidesteps the question rather than betting on it.
+        ///
+        /// An EMPTY list means the call failed — never read it as an empty shelf.
+        /// </summary>
+        public List<MerchantShelfItem> GetShelfViaLua()
+        {
+            var shelf = new List<MerchantShelfItem>();
+            // NO inline Lua (`--`) comments: the executor collapses the script to fewer lines, so a
+            // comment swallows the rest of the chunk including the return. Same trap as BuyBestFoodDrink.
+            const string lua = @"
+local ok,res = pcall(function()
+local n = GetMerchantNumItems()
+local out = ''
+for i=1,n do
+  local id = 0
+  local link = GetMerchantItemLink(i)
+  if link then id = tonumber(string.match(link,'item:(%d+)')) or 0 end
+  local _,_,_,qty = GetMerchantItemInfo(i)
+  out = out .. i .. ':' .. id .. ':' .. (qty or 1) .. ';'
+end
+return out
+end)
+if ok then return res else return '' end";
+
+            string raw;
+            try { raw = Lua.GetReturnVal<string>(lua, 0); }
+            catch (Exception ex)
+            {
+                Logging.WriteDebug("[Merchant] shelf read failed: {0}", ex.Message);
+                return shelf;
+            }
+            if (string.IsNullOrEmpty(raw))
+                return shelf;
+
+            foreach (string entry in raw.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string[] parts = entry.Split(':');
+                if (parts.Length < 3) continue;
+                if (!int.TryParse(parts[0], out int index)) continue;
+                if (!uint.TryParse(parts[1], out uint itemId) || itemId == 0) continue;
+                if (!int.TryParse(parts[2], out int qty) || qty <= 0) qty = 1;
+                shelf.Add(new MerchantShelfItem { Index = index, ItemId = itemId, QuantityPerPurchase = qty });
+            }
+            return shelf;
+        }
+
+        /// <summary>
         /// True once every merchant slot's item TEMPLATE (class/subclass/spells) has loaded into the client
         /// item cache. The merchant knows item IDs the instant it opens, but ItemInfo.FromId reads the async
         /// client cache — scanning before it fills returns null for every item (→ "sells no food/water" →
@@ -503,5 +556,13 @@ if ok then return res else return '||ERR|'..tostring(res) end", usesMana ? "true
         }
 
         public static readonly MerchantFrame Instance;
+    }
+
+    /// <summary>One slot of an open merchant window, as the game's own merchant API reports it.</summary>
+    public class MerchantShelfItem
+    {
+        public int Index;                 // 1-based, what BuyMerchantItem expects
+        public uint ItemId;
+        public int QuantityPerPurchase;   // BuyMerchantItem(index, n) yields n * this many items
     }
 }

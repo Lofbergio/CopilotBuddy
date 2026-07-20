@@ -172,16 +172,23 @@ return f..'|'..d";
         public static int GetAmmoCount(WoWItemProjectileClass projectile)
         {
             if (projectile == WoWItemProjectileClass.None) return 0;
-            int total = 0;
-            try { total = Lua.GetReturnVal<int>("return GetInventoryItemCount('player', 0) or 0", 0); }
+            int loaded = 0;
+            try { loaded = Lua.GetReturnVal<int>("return GetInventoryItemCount('player', 0) or 0", 0); }
             catch { /* frame not ready — bag count still answers */ }
+
+            int inBags = 0;
             foreach (var it in ObjectManager.Me.BagItems)
             {
                 var info = it != null ? it.ItemInfo : null;
                 if (info != null && info.ItemClass == WoWItemClass.Projectile && info.ProjectileClass == projectile)
-                    total += (int)it.StackCount;
+                    inBags += (int)it.StackCount;
             }
-            return total;
+
+            // A reported count of exactly 2x the real one means these two overlap — i.e. BagItems is
+            // enumerating the loaded ammo slot as well. Logged split so the next occurrence identifies
+            // which half is lying instead of leaving it to inference.
+            Styx.Helpers.Logging.WriteDebug("[Ammo] census: ammo slot {0} + bags {1} = {2} {3}s", loaded, inBags, loaded + inBags, projectile);
+            return loaded + inBags;
         }
 
         // Sum StackCount across every bag item whose Entry is a detected food/drink. The scan can list an entry
