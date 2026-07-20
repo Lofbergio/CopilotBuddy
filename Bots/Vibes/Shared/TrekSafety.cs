@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
-using Bots.VibeGrinder.Data;
-using Bots.VibeGrinder.Selection;
+using Bots.Vibes.Shared.GrindData;
 using Styx;
 using Styx.Helpers;
 using Styx.Logic.Pathing;

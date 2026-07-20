@@ -7,6 +7,7 @@ using Styx.Logic.Pathing;
 using Styx.Helpers;
 using Styx.WoWInternals.WoWObjects;
 using Bots.Vibes.Shared.QuestData;
+using Bots.Vibes.Shared.GrindData;
 
 namespace Bots.Vibes.VibeQuester2.Planning
 {

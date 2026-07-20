@@ -15,6 +15,7 @@ using Styx.Logic.Profiles;
 using Styx.WoWInternals;
 using Styx.WoWInternals.WoWObjects;
 using TreeSharp;
+using Bots.Vibes.Shared.GrindData;
 
 namespace Bots.VibeGrinder.Supervision
 {

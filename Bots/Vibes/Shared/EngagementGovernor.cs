@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using Bots.VibeGrinder.Data;
+using Bots.Vibes.Shared.GrindData;
 using Styx;
 using Styx.Helpers;
 using Styx.Logic;
@@ -25,20 +25,11 @@ namespace Bots.Vibes.Shared
     /// </summary>
     public class EngagementGovernor
     {
-        private static IVibeTuning _tuning;
-
-        /// <summary>
-        /// The tuning this governor reads. The owning botbase assigns it in Start(). Static because
-        /// several of the pull helpers below are static and are called from the bots' own weighting
-        /// passes — this replaces a hard read of VibeGrinderSettings.Instance, which is precisely what
-        /// made "shared" code depend on one concrete bot.
-        /// Throws rather than defaulting: silently grinding on default thresholds is how a bot dies.
-        /// </summary>
+        /// <summary>Tuning for this governor. Forwards to the suite-wide holder — see VibeTuning.</summary>
         public static IVibeTuning Tuning
         {
-            get => _tuning ?? throw new System.InvalidOperationException(
-                "EngagementGovernor.Tuning is unset — the owning botbase must assign it in Start().");
-            set => _tuning = value;
+            get => VibeTuning.Current;
+            set => VibeTuning.Current = value;
         }
 
         /// <summary>

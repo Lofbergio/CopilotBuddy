@@ -16,6 +16,7 @@ using Styx.WoWInternals.WoWObjects;
 using TreeSharp;
 using Bots.Vibes.Shared.QuestData;
 using Action = System.Action;
+using Bots.Vibes.Shared.GrindData;
 
 namespace Bots.Vibes.VibeQuester2.Execution
 {

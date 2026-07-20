@@ -9,6 +9,7 @@ using Styx.Logic.Pathing;
 using TreeSharp;
 using Bots.Vibes.Shared.QuestData;
 using Action = TreeSharp.Action;
+using Bots.Vibes.Shared.GrindData;
 
 namespace Bots.Vibes.VibeQuester2
 {

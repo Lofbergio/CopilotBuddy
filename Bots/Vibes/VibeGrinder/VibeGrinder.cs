@@ -1,6 +1,6 @@
 using System.Windows.Forms;
 using Bots.Grind;
-using Bots.VibeGrinder.Data;
+using Bots.Vibes.Shared.GrindData;
 using Bots.VibeGrinder.Selection;
 using Bots.VibeGrinder.Supervision;
 using Bots.VibeGrinder.Synthesis;
@@ -280,7 +280,7 @@ namespace Bots.VibeGrinder
             // Shared pull pipeline — fresh per Start (session-scoped strikes/bans reset by construction).
             // Tuning is supplied, not imported: the governor lives in Shared/ and must not know which bot
             // owns it. VibeQuester2 inherits this assignment; a future non-subclass bot brings its own.
-            EngagementGovernor.Tuning = VibeGrinderSettings.Instance;
+            VibeTuning.Current = VibeGrinderSettings.Instance;
             EngagementGovernor.Tag = Name;   // VQ2 overrides Name, so its lines stop reading "[VibeGrinder/…]"
             _governor = new EngagementGovernor(this);
 

@@ -50,6 +50,11 @@ namespace Bots.Vibes.Shared
         bool EnableExperimentalDropBan { get; }
         int ExperimentalDropBanMinutes { get; }
 
+        // ---- Spatial query shaping (grind-data repository) ----
+        /// <summary>Vertical band a spawn query accepts around the query point — keeps a cave or an
+        /// upper deck out of a ground-level result.</summary>
+        float SpotQueryZBand { get; }
+
         // ---- Curves (methods, not knobs: the shape is the tuning) ----
         /// <summary>How many hostiles we'll accept in one fight at this caution level.</summary>
         int MaxFightCompany(double caution);

@@ -8,6 +8,7 @@ using Styx.Logic.POI;
 using Styx.Logic.Profiles;
 using Styx.WoWInternals;
 using Styx.WoWInternals.WoWObjects;
+using Bots.Vibes.Shared.GrindData;
 
 namespace Bots.Vibes.Shared
 {
