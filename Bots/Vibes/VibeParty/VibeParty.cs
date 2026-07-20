@@ -3160,44 +3160,46 @@ namespace VibeParty
 				}
 			}
 
-			if (GossipFrame.Instance.IsVisible) GossipFrame.Instance.Close();
-			else if (QuestFrame.Instance.IsVisible) QuestFrame.Instance.Close();
+			CloseQuestFrames();
 
 			if (turnedIn > 0) Logging.Write("VibeParty: Turned in {0} quest(s) at {1}.", turnedIn, npc.Name);
 			if (pickedUp > 0) Logging.Write("VibeParty: Picked up {0} quest(s) at {1}.", pickedUp, npc.Name);
 
 			if (turnedIn == 0 && pickedUp == 0 && retries > 0)
 			{
-				// Transient (frame never opened / log lag): escalate like the old no-frame ladder so a
-				// ghost NPC can't orbit us forever, while a lag blip still retries quickly.
-				int fails = _turnInFrameFails.TryGetValue(npc.Guid, out int f) ? f + 1 : 1;
-				_turnInFrameFails[npc.Guid] = fails;
-				Logging.Write(System.Drawing.Color.Orange,
-					"VibeParty: quest visit at {0} made no progress (attempt {1}) — will retry.", npc.Name, fails);
-				if (fails >= 6)
-				{
-					_turnInDeadNpc.Add(npc.Guid);
-					Logging.Write("VibeParty: {0} has made no progress in {1} visits — giving up on it this session.", npc.Name, fails);
-					PublishAlert(false, "gave up on quest NPC " + npc.Name + " after " + fails + " stalled visits");
-				}
-				int cooldownSec = fails >= 2 ? 120 : 15;
-				_turnInCooldown[npc.Guid] = DateTime.UtcNow.AddSeconds(cooldownSec);
-				// The retry must approach tighter (NeedTightApproach); +12s of travel budget past the
-				// cooldown covers the ≤1yd close-in plus a stuck-jiggle before the fallback kicks in.
-				_turnInCloseUntil[npc.Guid] = DateTime.UtcNow.AddSeconds(cooldownSec + 12);
+				NoProgressAtNpc(npc);
 				return;
 			}
 			_turnInFrameFails.Remove(npc.Guid);
 			_turnInCloseUntil.Remove(npc.Guid);
-
-			if (turnedIn == 0 && pickedUp == 0 && refused > 0)
-			{
-				// Everything the ledger predicted got a server "no" — the ledger re-screens as our
-				// state changes, so a longer cooldown (not a session latch) is enough.
-				_turnInCooldown[npc.Guid] = DateTime.UtcNow.AddSeconds(60);
-				return;
-			}
 			SetTurnInCooldown(npc.Guid);
+		}
+
+		private static void CloseQuestFrames()
+		{
+			if (GossipFrame.Instance.IsVisible) GossipFrame.Instance.Close();
+			else if (QuestFrame.Instance.IsVisible) QuestFrame.Instance.Close();
+		}
+
+		// The ONE failure ladder we keep, and it's about REACHING the NPC, not about any quest: the frame
+		// never opened / nothing advanced. A ghost or unreachable NPC must not orbit us forever.
+		private static void NoProgressAtNpc(WoWUnit npc)
+		{
+			int fails = _turnInFrameFails.TryGetValue(npc.Guid, out int f) ? f + 1 : 1;
+			_turnInFrameFails[npc.Guid] = fails;
+			Logging.Write(System.Drawing.Color.Orange,
+				"VibeParty: quest visit at {0} made no progress (attempt {1}) — will retry.", npc.Name, fails);
+			if (fails >= 6)
+			{
+				_turnInDeadNpc.Add(npc.Guid);
+				Logging.Write("VibeParty: {0} has made no progress in {1} visits — giving up on it this session.", npc.Name, fails);
+				PublishAlert(false, "gave up on quest NPC " + npc.Name + " after " + fails + " stalled visits");
+			}
+			int cooldownSec = fails >= 2 ? 120 : 15;
+			_turnInCooldown[npc.Guid] = DateTime.UtcNow.AddSeconds(cooldownSec);
+			// The retry must approach tighter (NeedTightApproach); +12s of travel budget past the
+			// cooldown covers the ≤1yd close-in plus a stuck-jiggle before the fallback kicks in.
+			_turnInCloseUntil[npc.Guid] = DateTime.UtcNow.AddSeconds(cooldownSec + 12);
 		}
 
 		// Turn-in trace — the debug channel that answers "what the fuck did the quester decide".
