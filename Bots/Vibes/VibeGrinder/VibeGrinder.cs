@@ -772,9 +772,15 @@ namespace Bots.VibeGrinder
             if (_vendorWatchdog.Elapsed.TotalSeconds > s.VendorRunAbortSeconds && !me.OnTaxi)
             {
                 Logging.Write(System.Drawing.Color.Orange,
-                    "[VibeGrinder/Vendor] ABORT — errand didn't complete in {0}s; resuming grind.", s.VendorRunAbortSeconds);
+                    "[VibeGrinder/Vendor] ABORT — {0} errand didn't complete in {1}s; resuming grind.",
+                    _vendorRunType, s.VendorRunAbortSeconds);
                 EscalateVendorAbort();
                 EndVendorRun();
+                // Drop the POI we just abandoned. Without this "resuming grind" was a lie: the POI still
+                // pointed at the failed target, PoiIsVendorType saw it on the very next tick and re-latched
+                // the same errand with a fresh watchdog, so the abort only ever bought another
+                // VendorRunAbortSeconds against the same wall. Matches RejectVendor, which already clears.
+                BotPoi.Clear("VibeGrinder: vendor errand aborted");
                 return false;
             }
 
@@ -797,6 +803,20 @@ namespace Bots.VibeGrinder
         /// it (timed for vendors, session for mailboxes) so the resolver picks a different one; a completed
         /// errand (DONE) resets the streak. Bounded and self-healing — never suppresses the NEED itself.
         /// </summary>
+        /// <summary>The vendor kind an errand POI was serving. Unknown for anything without a vendor
+        /// flavour (Mail has no Vendor entry at all — that path blacklists the mailbox instead).</summary>
+        private static Styx.Logic.Profiles.Vendor.VendorType VendorTypeForPoi(PoiType poi)
+        {
+            switch (poi)
+            {
+                case PoiType.Sell:   return Styx.Logic.Profiles.Vendor.VendorType.Sell;
+                case PoiType.Repair: return Styx.Logic.Profiles.Vendor.VendorType.Repair;
+                case PoiType.Buy:    return Styx.Logic.Profiles.Vendor.VendorType.Food;
+                case PoiType.Train:  return Styx.Logic.Profiles.Vendor.VendorType.Train;
+                default:             return Styx.Logic.Profiles.Vendor.VendorType.Unknown;
+            }
+        }
+
         private void EscalateVendorAbort()
         {
             uint failed = _vendorCheckedEntry;
@@ -811,10 +831,14 @@ namespace Bots.VibeGrinder
             var profile = Styx.Logic.Profiles.ProfileManager.CurrentProfile;
             if (failed != 0 && profile?.VendorManager != null)
             {
+                // Record the errand we ACTUALLY failed, not a hardcoded Repair. The ban itself is
+                // entry-wide (an unreachable or unaffordable NPC is unreachable for every errand), but a
+                // forged type makes the record and the log lie about what went wrong.
                 profile.VendorManager.Blacklist.Add(
-                    new Styx.Logic.Profiles.Vendor((int)failed, "abort-streak", Styx.Logic.Profiles.Vendor.VendorType.Repair, WoWPoint.Empty));
+                    new Styx.Logic.Profiles.Vendor((int)failed, "abort-streak", VendorTypeForPoi(_vendorRunType), WoWPoint.Empty));
                 Logging.Write(System.Drawing.Color.Orange,
-                    "[VibeGrinder/Vendor] ABORT ×2 on vendor entry {0} — blacklisting it (timed); the resolver picks another.", failed);
+                    "[VibeGrinder/Vendor] ABORT ×2 on the {0} errand at entry {1} — blacklisting it (timed); the resolver picks another.",
+                    _vendorRunType, failed);
             }
             else if (_vendorRunType == PoiType.Mail && profile?.MailboxManager != null)
             {
