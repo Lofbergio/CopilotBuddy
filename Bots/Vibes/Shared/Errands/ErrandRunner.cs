@@ -655,6 +655,10 @@ namespace Bots.Vibes.Shared.Errands
                     if (MerchantFrame.Instance.MerchantNumItems > 0)
                     {
                         TreeRoot.StatusText = "Buying items";
+                        // BuyItems reads BotPoi.Current.AsVendor and skips the food branch for anything
+                        // that isn't a Food/Restock vendor — so at a stop whose POI wears its Sell face,
+                        // it would buy ammo and silently walk away without the food we came for.
+                        BotPoi.Current = stop.ToPoi(Wanted(stop, ErrandKind.Buy) ? ErrandKind.Buy : ErrandKind.Ammo);
                         Vendors.BuyItems();
                         _outstanding.Remove(ErrandKind.Buy);
                         _outstanding.Remove(ErrandKind.Ammo);
