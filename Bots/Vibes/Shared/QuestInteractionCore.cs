@@ -100,8 +100,7 @@ namespace Bots.Vibes.Shared
                     QuestFrame.Instance.Close();
                     return QuestInteractOutcome.NotOffered;
                 }
-                Lua.DoString("SelectAvailableQuest({0})", gi);
-                if (!WaitState(() => ShownQuestId() != 0 || !QuestFrame.Instance.IsVisible, FrameOpenTimeoutMs))
+                if (!SelectAndAwaitDetail("SelectAvailableQuest(" + gi + ")"))
                     return QuestInteractOutcome.Retry;
             }
 
@@ -184,8 +183,10 @@ namespace Bots.Vibes.Shared
                         QuestFrame.Instance.Close();
                         return QuestInteractOutcome.NotOffered;
                     }
-                    Lua.DoString("SelectActiveQuest({0})", gi);
-                    WaitState(() => ShownQuestId() != 0 || !QuestFrame.Instance.IsVisible, FrameOpenTimeoutMs);
+                    // Same edge-wait as the pickup path: the greeting hides before the QUEST_PROGRESS packet
+                    // lands, so polling `ShownQuestId() != 0` here is satisfied INSTANTLY by the previous
+                    // frame's id and the check below then rejects our own turn-in as "wrong quest".
+                    SelectAndAwaitDetail("SelectActiveQuest(" + gi + ")");
                     continue;
                 }
 
@@ -274,6 +275,35 @@ namespace Bots.Vibes.Shared
             }
         }
 
+        /// <summary>
+        /// Fire a list-select and wait for the server's NEW panel to actually arrive.
+        /// ⚠ Never poll `ShownQuestId() != 0` for this: `CurrentShownQuestId` is a memory read that keeps
+        /// the PREVIOUS frame's id, so a stale non-zero satisfies the poll instantly and the caller then
+        /// compares against last frame's quest. Live: selecting 'The Perfect Stout' (315) read 413
+        /// ('Shimmer Stout', the chain's next quest) 131ms later and aborted as "wrong quest". The EDGE is
+        /// the truth — QUEST_DETAIL/QUEST_PROGRESS fire when the panel genuinely changes (doctrine rule 2).
+        /// </summary>
+        private static bool SelectAndAwaitDetail(string selectLua)
+        {
+            using (var detail = new LuaEventWait("QUEST_DETAIL"))
+            using (var progress = new LuaEventWait("QUEST_PROGRESS"))
+            {
+                Lua.DoString(selectLua);
+                DateTime deadline = DateTime.UtcNow.AddMilliseconds(FrameOpenTimeoutMs);
+                while (DateTime.UtcNow < deadline)
+                {
+                    // Wait(0) is not a free poll — an unset event still pumps ProcessPendingEvents and
+                    // sleeps ~30ms, so a loop pass costs ~80ms. That granularity is fine here.
+                    if (detail.Wait(50) || progress.Wait(0)) return true;
+                    // ⚠ Safe for the GREETING selects that call this: the QuestFrame container stays up
+                    // across the panel swap. Do NOT reuse this bail for the GOSSIP selects — gossip→detail
+                    // leaves BOTH frames closed for one round trip and this would abort a healthy select.
+                    if (!QuestFrame.Instance.IsVisible && !GossipFrame.Instance.IsVisible) return false;
+                }
+                return false;
+            }
+        }
+
         private static bool GreetingShown()
             => Lua.GetReturnVal<int>("return (QuestFrameGreetingPanel and QuestFrameGreetingPanel:IsShown()) and 1 or 0", 0U) == 1;
 
@@ -340,14 +370,15 @@ namespace Bots.Vibes.Shared
             return 0;
         }
 
-        /// <summary>CurrentShownQuestId is a memory read that can report 0 with a panel open —
-        /// GetQuestID() is the client's own answer (docs/gotchas.md).</summary>
+        /// <summary>The id of the quest shown on a DETAIL/PROGRESS/REWARD panel (memory read).
+        /// The greeting panel shows no single quest → force 0 so callers take the title-driven
+        /// greeting path (a stale memory id must not masquerade as the shown quest). ⚠ 3.3.5a has
+        /// NO GetQuestID() Lua (added in Cata 4.0.1) — the old fallback threw on every call
+        /// (Lua status=2 spam on every greeting turn-in) and never returned a usable value.</summary>
         public static uint ShownQuestId()
         {
-            uint shown = QuestFrame.Instance.CurrentShownQuestId;
-            if (shown == 0 && QuestFrame.Instance.IsVisible)
-                shown = (uint)Lua.GetReturnVal<int>("return GetQuestID() or 0", 0U);
-            return shown;
+            if (GreetingShown()) return 0;
+            return QuestFrame.Instance.CurrentShownQuestId;
         }
 
         /// <summary>Bounded STATE poll (frames/log are state — doctrine rule 1).</summary>
