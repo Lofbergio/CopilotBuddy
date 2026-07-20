@@ -47,8 +47,39 @@ namespace Bots.Vibes.Shared
         // enough to ride a lag spike, short enough not to stall every non-chained turn-in.
         public const int ChainedOfferTimeoutMs = 1200;
 
+        /// <summary>
+        /// TRUE while this class is deliberately driving a quest frame. The quest frame has exactly ONE
+        /// owner at a time: event handlers (QUEST_DETAIL auto-accept, share confirms) exist only for frames
+        /// the bot did NOT open, and must stand down while a transaction is in flight — otherwise they race
+        /// it, accepting or closing the same frame from two places. Live symptom of the race: a pickup
+        /// closed the frame as "wrong quest" while the QUEST_DETAIL handler simultaneously logged
+        /// "Accepting shared quest" for a quest nobody shared, and only a human click broke the tie.
+        /// </summary>
+        public static bool IsDriving { get; private set; }
+
+        /// <summary>
+        /// Take ownership of the quest frame for a whole EPISODE, not just one transaction. A caller that
+        /// opens the frame itself (to read the presented lists) must hold this across the open+read+act
+        /// span: otherwise the frame it opened raises QUEST_DETAIL while nobody claims ownership, the
+        /// unsolicited-offer handler arms for a frame the caller is about to handle, and a tick later it
+        /// answers an already-closed frame from a stale id. Nesting-safe: only the outermost scope releases.
+        /// </summary>
+        public static IDisposable Drive() => new DriveScope();
+
+        private sealed class DriveScope : IDisposable
+        {
+            private readonly bool _outermost;
+            public DriveScope() { _outermost = !IsDriving; IsDriving = true; }
+            public void Dispose() { if (_outermost) IsDriving = false; }
+        }
+
         /// <summary>Accept one quest by id at a live giver. Caller guarantees interact range.</summary>
         public static QuestInteractOutcome PickUp(WoWObject giver, int questId, string questName, string logTag)
+        {
+            using (Drive()) return PickUpCore(giver, questId, questName, logTag);
+        }
+
+        private static QuestInteractOutcome PickUpCore(WoWObject giver, int questId, string questName, string logTag)
         {
             LocalPlayer me = StyxWoW.Me;
             if (me == null || giver == null) return QuestInteractOutcome.Retry;
@@ -129,6 +160,12 @@ namespace Bots.Vibes.Shared
         /// follow-up detail frame (null = always decline).
         /// </summary>
         public static QuestInteractOutcome TurnIn(WoWObject ender, int questId, string questName, string logTag,
+            Func<uint, bool> acceptChainedOffer)
+        {
+            using (Drive()) return TurnInCore(ender, questId, questName, logTag, acceptChainedOffer);
+        }
+
+        private static QuestInteractOutcome TurnInCore(WoWObject ender, int questId, string questName, string logTag,
             Func<uint, bool> acceptChainedOffer)
         {
             LocalPlayer me = StyxWoW.Me;

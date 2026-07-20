@@ -1168,13 +1168,26 @@ namespace VibeParty
 		// quest-starter item — both mirror-intent, so accept.
 		private void OnQuestDetail(object sender, LuaEventArgs e)
 		{
+			// ONE owner per frame. This handler exists for offers we did NOT open (a real share, a
+			// quest-starter item, a server-pushed chain) — if the visit loop is mid-transaction it owns the
+			// frame and will accept/decline itself. Arming here too made the two race: the pickup closed the
+			// frame as "wrong quest" while this path logged "Accepting shared quest" for an unshared quest,
+			// and only a human right-click settled it (live 2026-07-19, Rejold Barleybrew q315/q413).
+			if (QuestInteractionCore.IsDriving) return;
 			_pendingQuestAccept = true;
 		}
 
-		// Phase 1 (follower) — auto-confirm quests the leader shares. Escort / auto-accept shares
-		// raise QUEST_ACCEPT_CONFIRM instead of QUEST_DETAIL; always on like the detail accept.
+		// Phase 1 (follower) — auto-confirm quests the leader shares. Escort / auto-accept shares raise
+		// QUEST_ACCEPT_CONFIRM instead of QUEST_DETAIL.
+		// ⚠ The ONE accept path that cannot ask ShouldAcceptOffer: this is a StaticPopup, not the quest
+		// frame, so there is no readable quest id — the event carries only a NAME. It stays safe by
+		// CONSTRUCTION rather than by policy: a share confirm can only originate from someone already in
+		// our party, and the party is our own toons formed around the leader. Do NOT copy this exemption
+		// anywhere an id IS readable, and if a quest ever slips in through here, gate it on the name
+		// against the leader's quest titles rather than widening the exemption.
 		private void OnQuestAcceptConfirm(object sender, LuaEventArgs e)
 		{
+			if (QuestInteractionCore.IsDriving) return;   // the visit transaction owns the frame
 			Lua.DoString("ConfirmAcceptQuest()");
 		}
 
