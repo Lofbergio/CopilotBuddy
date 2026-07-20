@@ -5,6 +5,7 @@ using Bots.VibeGrinder.Selection;
 using Bots.VibeGrinder.Supervision;
 using Bots.VibeGrinder.Synthesis;
 using Bots.Vibes.Shared;
+using Bots.Vibes.Shared.Errands;
 using Styx;
 using Styx.Helpers;
 using Styx.Logic;
@@ -56,9 +57,10 @@ namespace Bots.VibeGrinder
         private WoWPoint _restSpot = WoWPoint.Empty;   // committed safe-rest destination (picked once per rest)
         private bool _restParked;               // positioning decision made for this rest — stop re-picking (see SafeRestReposition)
         private bool _drowning;                  // surfacing latch — log once per drowning episode (see SurfaceIfDrowning)
-        private bool _vendorRun;                // committed vendor-errand latch (see UpdateVendorRun) — stable across the thrashing vendor POI
-        private DateTime _vendorHoldUntil = DateTime.MinValue;   // hold the latch this long past the last vendor-POI/combat tick (rides out peel fights + brief POI gaps)
-        private readonly System.Diagnostics.Stopwatch _vendorWatchdog = new System.Diagnostics.Stopwatch();   // abort a stuck errand (unreachable vendor / broke)
+        // The errand owner: demand → tour → transact. It absorbed the old _vendorRun latch, its sticky
+        // hold and its watchdog — the latch existed to stabilise gates that read a thrashing POI, and a
+        // trip that owns the slot has nothing to stabilise against.
+        private ErrandRunner _errands;
         private DateTime _engageUntil = DateTime.MinValue;   // ENGAGING activity latch held until here (see Engaging + CLAUDE.md "Stateful inter-spot movement")
         // Set by PREEMPT DENIED / ABORT approach (Targeting pulse); consumed in Pulse() — _engageUntil
         // itself is written ONLY in Pulse() (invariant). Without this, EngageHold's 3s grace holds us
@@ -66,13 +68,6 @@ namespace Bots.VibeGrinder
         private bool _breakEngageGrace;
         private DateTime _restSkipLogAt = DateTime.MinValue;   // throttles the rest-SKIP diagnostic (condition holds many ticks)
 
-        private uint _vendorCheckedEntry;       // last vendor entry that passed the enemy-territory safety check (re-check when it changes)
-        // Abort-streak escalation (2026-07-06: 61 COMMITs / 30 ABORTs against one wedged repair run all
-        // night — an errand that keeps aborting must change TARGET, not just retry). Deliberately NOT
-        // reset by ClearVendorRunState: the streak must survive the abort's own state reset to count it.
-        private uint _vendorAbortEntry;         // vendor entry of the last abort (streak is per-entry)
-        private int _vendorAbortStreak;         // consecutive aborts on that entry (or on Mail when entry==0)
-        private PoiType _vendorRunType;         // errand type captured at COMMIT (POI may be anything by abort time)
         private const int RestHysteresisPct = 12;  // resume at Min*+this (modest hysteresis), NOT a flat 85% top-off
         private const int RestMaxSeconds = 60;  // safety cap: if not recovered by now, give up resting and resume
                                                 // (60 not 45: a no-drink mana caster recovers mana on natural regen
@@ -135,7 +130,7 @@ namespace Bots.VibeGrinder
                         // drink AND run; re-deciding "repair" 60x/sec; the 3-min repair-deferral). Once latched this
                         // branch OWNS the tick: travel + transact, single-pulling only what's in the path, and the
                         // grind/rest/roam below are preempted. Strict by design — one errand at a time, see it through.
-                        new Decorator(ctx => UpdateVendorRun(),
+                        new Decorator(ctx => _errands != null && _errands.Update(),
                             new PrioritySelector(
                                 // CombatBehavior FIRST and unconditional — it drives the pre-combat PULL (CanPull->
                                 // PullBehavior), so a peeled path threat actually gets engaged. (It was gated on
@@ -145,8 +140,8 @@ namespace Bots.VibeGrinder
                                 // low so a long hostile vendor trek isn't a death march, and the pull still runs.
                                 LevelBot.CreateCombatBehavior(),
                                 new Decorator(ctx => !StyxWoW.Me.Combat, new Action(ctx => TransitPeel())), // else set a Kill POI on the in-range path hostile — single-pull it, don't body-pull
-                                LevelBot.CreateVendorBehavior(),                                            // else travel to + transact with the vendor
-                                new Action(ctx => RunStatus.Success))),                                     // hold the tick while latched (don't fall through to grind in a brief idle gap)
+                                _errands != null ? _errands.Behavior() : new Action(ctx => RunStatus.Failure), // else travel the tour + transact at the stop
+                                new Action(ctx => RunStatus.Success))),                                     // hold the tick while committed (don't fall through to grind in a brief idle gap)
                         // Safe-rest positioning: before Singular sits to eat/drink in the middle of a camp,
                         // back off to a clear spot. Returns Failure (→ falls through to normal combat/rest)
                         // when already clear, boxed in, in combat, or not resting — so it can't deadlock.
@@ -166,13 +161,10 @@ namespace Bots.VibeGrinder
                         // is over = nothing alive has us targeted (a fled runner still targets us → still blocked).
                         new Decorator(ctx => !OnVendorRun() && (!StyxWoW.Me.Combat || NoLiveAttackers()),
                             LevelBot.CreateLootBehavior()),
-                        // NOT dead code: the one-tick "decide to vendor" bootstrap. LevelBot detects the sell/
-                        // repair/mail need and sets the first vendor POI HERE; UpdateVendorRun() latches on it
-                        // next tick and the vendor-mode branch (top of this selector) owns the rest of the
-                        // errand. (A TransitPeel Decorator that used to sit above this line was unreachable —
-                        // the latched vendor-mode branch already owns every OnVendorRun tick — and was removed;
-                        // peeling happens inside that branch.)
-                        LevelBot.CreateVendorBehavior(),
+                        // (No "decide to vendor" bootstrap here any more. LevelBot's vendor tree needed one
+                        // because deciding and servicing were siblings in one selector — the decide chain had
+                        // to run somewhere to produce the first POI. ErrandRunner.Update() above IS the
+                        // decision, so the errand branch is entered on the tick a demand appears.)
                         // Rest commitment: while we've decided to rest and aren't topped off yet, OWN the tick so
                         // Relocate/Roam below cannot pull us off the rest spot to grind — the rest↔roam oscillation.
                         // The actual eat/drink happens above in CombatBehavior's not-in-combat RestBehavior.
@@ -247,13 +239,6 @@ namespace Bots.VibeGrinder
             _resting = false;
             _restSpot = WoWPoint.Empty;
             _restParked = false;
-            _vendorRun = false;
-            _vendorHoldUntil = DateTime.MinValue;
-            _vendorWatchdog.Reset();
-            _vendorCheckedEntry = 0;
-            _vendorAbortEntry = 0;
-            _vendorAbortStreak = 0;
-            _vendorRunType = PoiType.None;
             _engageUntil = DateTime.MinValue;
             _breakEngageGrace = false;
             _safeRest.Reset();
@@ -264,6 +249,19 @@ namespace Bots.VibeGrinder
             _synth = new GrindAreaSynthesizer(_mailboxes);
             _selector = new SpotSelector(_factions);
             _supervisor = new GrindSupervisor(_selector, _synth, _factions);
+
+            _errands = new ErrandRunner(_factions, Name);
+            // The give-up clock is a running Stopwatch, so a pull commitment carried into a multi-minute
+            // errand comes back already expired and blacklists a mob that never failed us — we simply went
+            // shopping. Stop the clock by not having one.
+            _errands.OnCommit = dest =>
+            {
+                _governor?.DropCommit();
+                var here = StyxWoW.Me;
+                if (here != null)
+                    TrekSafety.MarkLeg(_factions, here.Location, dest, here.Level, here.MapId, "errand leg");
+            };
+            _errands.OnEnd = EndErrandLeg;
             // Hard dead-man's switch: when the supervisor force-escapes a stall, drop every commitment latch
             // so nothing re-grabs the trap we're fleeing (pull/peel target, rest, vendor errand).
             _supervisor.OnForceEscape = () =>
@@ -271,7 +269,7 @@ namespace Bots.VibeGrinder
                 _governor?.DropCommit();
                 _peelGuid = 0;
                 _resting = false;
-                ClearVendorRunState();   // ALL vendor state, not just the latch — see ClearVendorRunState
+                _errands?.Cancel();
             };
             _restGovernor = new RestGovernor();   // dynamic rest thresholds; SafeRest reads these
             _restGovernor.SuppressedFloorHealth = VibeGrinderSettings.Instance.EmergencyMinHealth;   // vendor-run survival floor
@@ -626,7 +624,7 @@ namespace Bots.VibeGrinder
         // --- IEngagementHost: the shared pull pipeline's view of this botbase ---
         bool IEngagementHost.RestNeeded(WoWUnit me) => RestNeeded(me);
         bool IEngagementHost.IsResting => _resting;
-        bool IEngagementHost.OnServiceRun => _vendorRun;
+        bool IEngagementHost.OnServiceRun => OnVendorRun();
         ulong IEngagementHost.PeelGuid => _peelGuid;
         double IEngagementHost.CrowdCautionFactor => _supervisor?.CrowdCautionFactor ?? 1.0;
         void IEngagementHost.RequestBreakEngageGrace() => _breakEngageGrace = true;
@@ -672,10 +670,10 @@ namespace Bots.VibeGrinder
             return false;
         }
 
-        // Stable "we're on a vendor errand" state — the COMMITTED latch, not the live POI. Every vendor gate
-        // (loot suppression, TransitPeel, grind-pull disable, rest suppression) reads this so they don't flicker
-        // with the per-tick vendor POI. Set/held/cleared by UpdateVendorRun.
-        private bool OnVendorRun() => _vendorRun;
+        // "We're on an errand" — the trip's own state, not the live POI. Every errand gate (loot
+        // suppression, TransitPeel, grind-pull disable, rest suppression) reads this, so none of them
+        // flickers with a POI that combat and looting borrow.
+        private bool OnVendorRun() => _errands != null && _errands.Active;
 
         // --- Subclass seams (VibeQuester v2) ---
         /// <summary>False while a subclass activity owns the bot: gates the spot bootstrap and the
@@ -694,182 +692,12 @@ namespace Bots.VibeGrinder
         /// <summary>Force the grind bootstrap to re-pick a spot (a subclass activity replaced the area).</summary>
         protected void InvalidateGrindSpot() => _spotInstalled = false;
 
-        // Is the LIVE POI a vendor-errand type? (The raw, thrashing signal UpdateVendorRun turns into a latch.)
-        private static bool PoiIsVendorType()
-        {
-            switch (BotPoi.Current.Type)
-            {
-                case PoiType.Sell:
-                case PoiType.Repair:
-                case PoiType.Mail:
-                case PoiType.Buy:
-                case PoiType.Train:
-                case PoiType.Fly:
-                    return true;
-                default:
-                    return false;
-            }
-        }
-
         /// <summary>
-        /// Vendor-run commitment latch (the "do this errand, THEN go back to grinding" fix). The vendor POI is
-        /// re-asserted/stolen every tick (combat, rest, roam all write the one POI slot), so deriving vendor-run
-        /// state straight from it makes every vendor gate flicker — that's why the bot tried to drink AND run,
-        /// and re-decided "repair" 60x/sec for 3 minutes before actually going. So: latch ON the first tick a
-        /// vendor POI appears, HOLD through transient Kill POIs (peel fights) and brief POI gaps, and clear only
-        /// when the errand truly finishes (no vendor POI / no combat for the hold window) or aborts (watchdog).
-        /// Returns whether vendor mode is active — also used as the Root vendor-branch gate, so it ticks every frame.
+        /// The return leg: re-mark hazards from here back to the grind spot (the errand-leg marks are for
+        /// a route we are no longer on). Falls back to a plain clear when no spot is installed.
         /// </summary>
-        private bool UpdateVendorRun()
+        private void EndErrandLeg()
         {
-            var me = StyxWoW.Me;
-            if (me == null) return _vendorRun;
-
-            bool poiIsVendor = PoiIsVendorType();
-            var s = VibeGrinderSettings.Instance;
-
-            // Safety-screen EVERY distinct vendor the resolver lands on — the initial pick AND any mid-errand
-            // swap (GetClosestVendor re-runs as we move and drops an unreachable one, e.g. Razbo -> Zulrg). Without
-            // re-checking on change, a switched-to vendor in enemy territory slipped through. VendorLocationSafe
-            // blacklists an unsafe vendor + clears its POI; we then stop treating it as a vendor POI this tick so
-            // the resolver re-picks. Entry 0 (mailbox/flight) has its own faction-safety upstream — skip it here.
-            if (poiIsVendor && BotPoi.Current.Entry != 0 && (uint)BotPoi.Current.Entry != _vendorCheckedEntry)
-            {
-                if (VendorLocationSafe())
-                    _vendorCheckedEntry = (uint)BotPoi.Current.Entry;
-                else
-                    poiIsVendor = false;   // unsafe → POI cleared inside VendorLocationSafe; resolver re-picks next tick
-            }
-
-            // Refresh the hold window while actively on the errand: a vendor POI is up, OR we're mid peel-fight
-            // (combat transiently flips the POI to Kill — don't let that look like "errand done").
-            if (poiIsVendor || (_vendorRun && me.Combat))
-                _vendorHoldUntil = DateTime.UtcNow.AddSeconds(s.VendorRunStickySeconds);
-
-            if (!_vendorRun)
-            {
-                if (poiIsVendor)
-                {
-                    _vendorRun = true;
-                    _vendorRunType = BotPoi.Current.Type;   // for the abort escalation — the POI thrashes by abort time
-                    _vendorWatchdog.Restart();
-                    // Release the grind commitment at the COMMIT edge. The give-up clock is a running
-                    // Stopwatch — a pin carried into a multi-minute errand expires against a mob we chose
-                    // to walk away from, blacklisting it and accruing toward its entry ban. Stop the clock
-                    // by not having one, rather than by freezing it.
-                    _governor?.DropCommit();
-                    Logging.Write(System.Drawing.Color.Khaki,
-                        "[VibeGrinder/Vendor] COMMIT — {0} run; grind/rest/roam suspended until done.", BotPoi.Current.Type);
-                    // Trek safety for the errand leg: bend the route around red/pack aggro bubbles.
-                    TrekSafety.MarkLeg(_factions, me.Location, BotPoi.Current.Location, me.Level, me.MapId, "vendor leg");
-                }
-                return _vendorRun;
-            }
-
-            // Committed. Hard backstop: an errand that can't complete (vendor unreachable / blacklisted / can't
-            // afford repair) must not wedge us in vendor mode forever — abort and resume grinding.
-            // Don't abort while airborne on a taxi — a long flight is legit and FlightTravelCheck owns it.
-            if (_vendorWatchdog.Elapsed.TotalSeconds > s.VendorRunAbortSeconds && !me.OnTaxi)
-            {
-                Logging.Write(System.Drawing.Color.Orange,
-                    "[VibeGrinder/Vendor] ABORT — {0} errand didn't complete in {1}s; resuming grind.",
-                    _vendorRunType, s.VendorRunAbortSeconds);
-                EscalateVendorAbort();
-                EndVendorRun();
-                // Drop the POI we just abandoned. Without this "resuming grind" was a lie: the POI still
-                // pointed at the failed target, PoiIsVendorType saw it on the very next tick and re-latched
-                // the same errand with a fresh watchdog, so the abort only ever bought another
-                // VendorRunAbortSeconds against the same wall. Matches RejectVendor, which already clears.
-                BotPoi.Clear("VibeGrinder: vendor errand aborted");
-                return false;
-            }
-
-            // Done: the hold window lapsed — no vendor POI and no combat for VendorRunStickySeconds, i.e. the
-            // transaction finished and nothing re-triggered it. Resume grinding (and rest then, if still low).
-            if (DateTime.UtcNow > _vendorHoldUntil)
-            {
-                Logging.Write(System.Drawing.Color.Khaki, "[VibeGrinder/Vendor] DONE — errand complete; resuming grind.");
-                _vendorAbortStreak = 0;   // a completed errand proves the target works
-                _vendorAbortEntry = 0;
-                EndVendorRun();
-                return false;
-            }
-            return true;
-        }
-
-        /// <summary>
-        /// Two consecutive aborts on the same errand target = the TARGET is the problem (unreachable,
-        /// unaffordable, wedged approach) — retrying it forever is the 2026-07-06 all-night loop. Blacklist
-        /// it (timed for vendors, session for mailboxes) so the resolver picks a different one; a completed
-        /// errand (DONE) resets the streak. Bounded and self-healing — never suppresses the NEED itself.
-        /// </summary>
-        /// <summary>The vendor kind an errand POI was serving. Unknown for anything without a vendor
-        /// flavour (Mail has no Vendor entry at all — that path blacklists the mailbox instead).</summary>
-        private static Styx.Logic.Profiles.Vendor.VendorType VendorTypeForPoi(PoiType poi)
-        {
-            switch (poi)
-            {
-                case PoiType.Sell:   return Styx.Logic.Profiles.Vendor.VendorType.Sell;
-                case PoiType.Repair: return Styx.Logic.Profiles.Vendor.VendorType.Repair;
-                case PoiType.Buy:    return Styx.Logic.Profiles.Vendor.VendorType.Food;
-                case PoiType.Train:  return Styx.Logic.Profiles.Vendor.VendorType.Train;
-                default:             return Styx.Logic.Profiles.Vendor.VendorType.Unknown;
-            }
-        }
-
-        private void EscalateVendorAbort()
-        {
-            uint failed = _vendorCheckedEntry;
-            bool sameTarget = failed != 0 ? failed == _vendorAbortEntry : _vendorRunType == PoiType.Mail && _vendorAbortEntry == 0 && _vendorAbortStreak > 0;
-            _vendorAbortStreak = sameTarget ? _vendorAbortStreak + 1 : 1;
-            _vendorAbortEntry = failed;
-
-            if (_vendorAbortStreak < 2)
-                return;
-            _vendorAbortStreak = 0;
-
-            var profile = Styx.Logic.Profiles.ProfileManager.CurrentProfile;
-            if (failed != 0 && profile?.VendorManager != null)
-            {
-                // Record the errand we ACTUALLY failed, not a hardcoded Repair. The ban itself is
-                // entry-wide (an unreachable or unaffordable NPC is unreachable for every errand), but a
-                // forged type makes the record and the log lie about what went wrong.
-                profile.VendorManager.Blacklist.Add(
-                    new Styx.Logic.Profiles.Vendor((int)failed, "abort-streak", VendorTypeForPoi(_vendorRunType), WoWPoint.Empty));
-                Logging.Write(System.Drawing.Color.Orange,
-                    "[VibeGrinder/Vendor] ABORT ×2 on the {0} errand at entry {1} — blacklisting it (timed); the resolver picks another.",
-                    _vendorRunType, failed);
-            }
-            else if (_vendorRunType == PoiType.Mail && profile?.MailboxManager != null)
-            {
-                var mb = profile.MailboxManager.GetClosestMailbox();
-                if (mb != null)
-                {
-                    profile.MailboxManager.Blacklist.Add(mb);
-                    Logging.Write(System.Drawing.Color.Orange,
-                        "[VibeGrinder/Vendor] ABORT ×2 on the mail errand — blacklisting the mailbox at {0} for this session; the resolver picks another.", mb.Location);
-                }
-            }
-        }
-
-        // One reset for ALL vendor-run state — shared by EndVendorRun and OnForceEscape so the two can't
-        // drift as fields get added. OnForceEscape used to reset only _vendorRun; the stale
-        // _vendorCheckedEntry then silently skipped VendorLocationSafe for a later same-entry vendor
-        // (audit 2026-07-05). Deliberately does NOT touch _vendorAbortStreak/_vendorAbortEntry — the
-        // abort escalation must survive its own errand's reset to count consecutive failures.
-        private void ClearVendorRunState()
-        {
-            _vendorRun = false;
-            _vendorHoldUntil = DateTime.MinValue;
-            _vendorWatchdog.Reset();
-            _vendorCheckedEntry = 0;
-        }
-
-        private void EndVendorRun()
-        {
-            ClearVendorRunState();
-            // Trek safety for the RETURN leg: re-mark hazards from here back to the grind spot (the vendor-leg
-            // marks are for a route we're no longer on). Falls back to a plain clear when no spot is installed.
             var me = StyxWoW.Me;
             var area = StyxWoW.AreaManager?.CurrentGrindArea;
             if (me != null && area?.CurrentHotSpot != null)
@@ -877,80 +705,6 @@ namespace Bots.VibeGrinder
             else
                 TrekSafety.Clear();
         }
-
-        /// <summary>
-        /// Is the resolved vendor somewhere we can actually, safely shop? Vendor resolution is distance- +
-        /// faction-reaction-based over the whole CONTINENT, so it sends us into trouble two ways — both visible
-        /// at selection time (no wasted trek) from GrindMobs.db (every creature's faction + level + spawn pos):
-        ///   (1) ENEMY TERRITORY — a knot of player-hostile spawns around the vendor (the DB flags sell/repair
-        ///       NPCs inside opposing-faction camps, e.g. Prospector Khazgorm at the Alliance dig site Bael Modan).
-        ///   (2) HIGHER-LEVEL ZONE — surrounding wild mobs average well above our level (the "nearest" vendor is
-        ///       one zone over: a lvl-21 Barrens toon routed into Dustwallow Marsh, dead at the border).
-        /// Either ⇒ blacklist the vendor (same list the "could not find vendor" path uses, honored by every later
-        /// GetClosestVendor) + clear the POI, so the resolver re-picks the next-nearest. Distance is NOT a gate —
-        /// a FAR same-level/safe vendor is fine; nearest-first among the OK ones keeps us in/near the current zone.
-        /// </summary>
-        private bool VendorLocationSafe()
-        {
-            var s = VibeGrinderSettings.Instance;
-            var me = StyxWoW.Me;
-            if (_factions == null || me == null) return true;   // no faction data yet → fail-safe (don't block)
-            uint map = me.MapId;
-            WoWPoint loc = BotPoi.Current.Location;
-
-            if (s.VendorHostileThreshold > 0)
-            {
-                int hostiles = GrindMobsRepository.HostileSpawnCountNear(map, loc, s.VendorHostileRadius, _factions);
-                if (hostiles >= s.VendorHostileThreshold)
-                    return RejectVendor("{0} hostile spawns within {1:F0}yd (enemy territory)", hostiles, s.VendorHostileRadius);
-            }
-
-            if (s.VendorAreaLevelMargin > 0)
-            {
-                float areaLevel = GrindMobsRepository.AverageAttackableLevelNear(map, loc, s.VendorAreaScanRadius, _factions, Selection.SpotSelector.ImmuneUnitFlagMask);
-                if (areaLevel > me.Level + s.VendorAreaLevelMargin)
-                    return RejectVendor("area avg level {0:F0} >> mine {1} (higher-level zone)", areaLevel, me.Level);
-            }
-
-            // TOPOLOGY: geometrically near ≠ reachably near. The core resolver picks by straight-line 3D
-            // distance over the whole continent, so a vendor 200yd straight DOWN (Yarley inside the
-            // Caverns of Time canyon, Z=-205, 2026-07-05) "beats" Gadgetzan while the real walk is the
-            // entire spiral descent. One pathfind per newly-resolved vendor (this method is keyed by
-            // _vendorCheckedEntry): no/partial path, or walk length far beyond the straight line ⇒ reject;
-            // the TTL'd blacklist makes the resolver re-pick the next-nearest.
-            if (s.VendorDetourFactor > 0)
-            {
-                float straight = (float)me.Location.Distance(loc);
-                if (straight > 50f)
-                {
-                    WoWPoint[] path = Navigator.GeneratePath(me.Location, loc);
-                    if (path == null || path.Length == 0)
-                        return RejectVendor("no nav path to it");
-                    float shortfall = (float)path[path.Length - 1].Distance(loc);
-                    if (shortfall > 25f)
-                        return RejectVendor("partial path (ends {0:F0}yd short)", shortfall);
-                    float walk = 0f;
-                    for (int i = 1; i < path.Length; i++)
-                        walk += (float)path[i - 1].Distance(path[i]);
-                    if (walk > System.Math.Max(s.VendorDetourMinYd, straight * s.VendorDetourFactor))
-                        return RejectVendor("walk {0:F0}yd vs {1:F0}yd straight (canyon/cave detour)", walk, straight);
-                }
-            }
-            return true;
-        }
-
-        private bool RejectVendor(string reasonFmt, params object[] args)
-        {
-            Logging.Write(System.Drawing.Color.Orange,
-                "[VibeGrinder/Vendor] SKIP {0} ({1}) — {2}; blacklisting, re-routing.",
-                BotPoi.Current.Name, BotPoi.Current.Type, string.Format(reasonFmt, args));
-            var vm = ProfileManager.CurrentProfile?.VendorManager;
-            if (vm != null && BotPoi.Current.AsVendor != null)
-                vm.Blacklist.Add(BotPoi.Current.AsVendor);
-            BotPoi.Clear("vendor unsafe (enemy territory / higher-level zone)");
-            return false;
-        }
-
 
         // "The fight is actually over" while Me.Combat still lingers (server leave-combat timer holds the
         // flag ~5.5s past the last kill): nothing alive has us or the pet targeted. A fled runner still
@@ -1076,7 +830,7 @@ namespace Bots.VibeGrinder
             Navigator.PathPrecision = System.Math.Clamp(me.MovementInfo.CurrentSpeed * 0.15f, 1.5f, 10f);
             if (_restGovernor != null)
             {
-                _restGovernor.Suppressed = _vendorRun;        // no resting mid-errand (the routine's pull still runs)
+                _restGovernor.Suppressed = OnVendorRun();     // no resting mid-errand (the routine's pull still runs)
                 _restGovernor.RoutineRestLatch = _resting;    // the routine's rest totem drops only inside a REAL rest
             }
             _restGovernor?.Pulse(me);
@@ -1135,11 +889,13 @@ namespace Bots.VibeGrinder
                     protectedCount++;
                     if (action == DispositionAction.Mail) willMail++;
                 }
-                Logging.WriteDebug("[VibeGrinder] disposition: {0} [{1}/{2}{3}] -> {4}",
-                    item.Name, item.ItemInfo?.ItemClass, item.ItemInfo?.Quality,
-                    item.IsSoulbound ? "/SB" : "", action);
+                if (args.Verbose)
+                    Logging.WriteDebug("[VibeGrinder] disposition: {0} [{1}/{2}{3}] -> {4}",
+                        item.Name, item.ItemInfo?.ItemClass, item.ItemInfo?.Quality,
+                        item.IsSoulbound ? "/SB" : "", action);
             }
-            if (protectedCount > 0)
+            // Silent when the caller is a gate: the payload resolvers run every tick of an errand.
+            if (protectedCount > 0 && args.Verbose)
                 Logging.Write("[VibeGrinder] Vendor sweep: protecting {0} item(s) from sale ({1} queued to mail, rest kept).",
                     protectedCount, willMail);
         }
@@ -1164,7 +920,7 @@ namespace Bots.VibeGrinder
                     queued++;
                 }
             }
-            if (queued > 0)
+            if (queued > 0 && args.Verbose)
                 Logging.Write("[VibeGrinder] Mail run: queuing {0} valuable item(s) for the bank.", queued);
         }
 
