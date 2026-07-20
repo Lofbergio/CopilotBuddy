@@ -625,9 +625,11 @@ namespace VibeParty
 			}
 		}
 
-		// The command state followers mirror — faithful to the legacy LeaderPlugin.Pulse minus its private
-		// IncludeTargetsFilter (the follower's assist keys on LeaderTargetGuid = our live target, not the Kill
-		// message's TargetGuid, so a human leader's current target is all we need).
+		// The command state followers mirror. Combat intent travels ONLY as the LeaderTargetGuid /
+		// LeaderInCombat fields (the assist tiers read those): the message stays "FollowLeader" through the
+		// leader's fights so FollowLeader()'s combat approach/hold keeps driving the follower. The retired
+		// "Kill" message routed followers into a separate leader-distance-gated arm that duplicated the
+		// assist logic — and left NO active branch for a follower standing outside that gate.
 		private static BotMessage BuildLeaderCommand()
 		{
 			LocalPlayer me = StyxWoW.Me;
@@ -635,12 +637,7 @@ namespace VibeParty
 			string type;
 			ulong targetGuid = 0;
 			PoiType poi = BotPoi.Current.Type;
-			if (me.Combat && me.CurrentTarget != null && !me.CurrentTarget.Dead)
-			{
-				type = "Kill";
-				targetGuid = me.CurrentTargetGuid;
-			}
-			else if ((poi == PoiType.Repair || poi == PoiType.Sell)
+			if ((poi == PoiType.Repair || poi == PoiType.Sell)
 				&& BotPoi.Current.AsObject != null && BotPoi.Current.AsObject.WithinInteractRange)
 			{
 				type = "Vendor";
@@ -2047,24 +2044,7 @@ namespace VibeParty
 									}
 								})),
 							new SwitchArgument<string>("FollowLeader",
-								new TreeSharp.Action(ctx => FollowLeader())),
-							new SwitchArgument<string>("Kill",
-								new Decorator(
-									ctx => LeaderLocation.Distance(StyxWoW.Me.Location) <= Targeting.PullDistance,
-									new Sequence(
-										ctx => _botMessage != null ? ObjectManager.GetObjectByGuid<WoWUnit>(_botMessage.TargetGuid) : null,
-										new Decorator(
-											ctx => ctx != null && ctx is WoWUnit && ((WoWUnit)ctx).BaseAddress != 0U && ((WoWUnit)ctx).Distance <= 40.0,
-											new Sequence(
-												new DecoratorContinue(ctx => StyxWoW.Me.CurrentTarget != (WoWUnit)ctx,
-													new TreeSharp.Action(ctx => ((WoWUnit)ctx).Target())),
-												new TreeSharp.Action(ctx => BotPoi.Current = new BotPoi((WoWUnit)ctx, PoiType.Kill)),
-												new TreeSharp.Action(ctx => Logging.WriteDebug("VibeParty: Killing something"))
-											)
-										)
-									)
-								)
-							)
+								new TreeSharp.Action(ctx => FollowLeader()))
 						),
 						// if too far from leader → navigate there
 						new Decorator(
@@ -2305,17 +2285,19 @@ namespace VibeParty
 		}
 
 		// smethod_57 — in-combat condition
-		// true when: have a target AND (not mounted AND in combat, or party member in combat within pull range,
-		//             or pet is in combat)
+		// true when: have a target AND (not mounted AND (in own combat, or an assist target in engage range)),
+		//            or pet is in combat
 		private static bool IsInCombatState()
 		{
 			if (Targeting.Instance.FirstUnit == null) return false;
 			if (!StyxWoW.Me.Mounted)
 			{
 				if (StyxWoW.Me.Combat) return true;
-				if (StyxWoW.Me.PartyMembers.Any(p => p.Combat)
-					&& LeaderLocation.Distance(StyxWoW.Me.Location) <= Targeting.PullDistance)
-					return true;
+				// Anchored on the FIGHT, not the leader: an assist target (leader's pull or party defense)
+				// within engage range IS our fight wherever the leader stands. A distance-to-LEADER gate here
+				// starves any follower outside it — it stands silent until the mob walks over and hits it.
+				WoWUnit? assist = LeaderAssistTarget();
+				if (assist != null && assist.Distance <= DefenseEngageRange) return true;
 			}
 			return StyxWoW.Me.GotAlivePet && StyxWoW.Me.Pet!.Combat;
 		}
