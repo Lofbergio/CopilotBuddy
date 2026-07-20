@@ -55,6 +55,23 @@ namespace Bots.Vibes.Shared
         /// upper deck out of a ground-level result.</summary>
         float SpotQueryZBand { get; }
 
+        // ---- Errands (see Shared/Errands) ----
+        /// <summary>Abandon a trip that has not finished in this long. GeneratePath sees neither a
+        /// world wedge nor a transaction the server refuses, so the trip needs a clock of its own.</summary>
+        int VendorRunAbortSeconds { get; }
+        /// <summary>Reject a stop with at least VendorHostileThreshold player-hostile spawns within
+        /// this radius — it sits in enemy territory.</summary>
+        float VendorHostileRadius { get; }
+        int VendorHostileThreshold { get; }
+        /// <summary>Reject a stop whose surrounding wild mobs average more than VendorAreaLevelMargin
+        /// above our level — "nearest" is continent-wide and the next zone up is lethal.</summary>
+        float VendorAreaScanRadius { get; }
+        int VendorAreaLevelMargin { get; }
+        /// <summary>Reject a stop whose WALK is this many times its straight-line distance (past the
+        /// floor). Geometrically near is not reachably near.</summary>
+        float VendorDetourFactor { get; }
+        float VendorDetourMinYd { get; }
+
         // ---- Curves (methods, not knobs: the shape is the tuning) ----
         /// <summary>How many hostiles we'll accept in one fight at this caution level.</summary>
         int MaxFightCompany(double caution);
