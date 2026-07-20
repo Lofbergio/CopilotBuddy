@@ -65,6 +65,16 @@ namespace Bots.Vibes.Shared.Errands
             }
         }
 
+        /// <summary>
+        /// The NPC entries that can actually serve this kind, from the server's vendor stock — the
+        /// inventory half of the flag above. Null = unconstrained (the kind doesn't depend on stock, or
+        /// VendorStock.db is absent); empty = nobody qualifies, which is a real answer, not a missing one.
+        /// </summary>
+        public static System.Collections.Generic.HashSet<int> RequiredStock(ErrandKind kind)
+        {
+            return VendorTypeExtensions.RequiredStockEntries(Vendor(kind));
+        }
+
         /// <summary>The errand a blacklist entry should be scoped to. Entry-wide (Unknown) would cost us
         /// the sell vendor because a barren General Supplies NPC still buys loot.</summary>
         public static Vendor.VendorType Vendor(ErrandKind kind)

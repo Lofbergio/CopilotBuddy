@@ -234,12 +234,17 @@ namespace Styx.Logic.Profiles
                             HashSet<int> excluded = Blacklist != null && Blacklist.Count > 0
                                 ? Blacklist.ExcludedEntries(type)
                                 : null;
+                            // Constrain to NPCs the server says actually stock what this errand needs.
+                            // The npcflag alone routes us to vendors that can't serve us (the AmmoVendor
+                            // livelock); intersecting with real stock makes that trip impossible.
+                            HashSet<int> required = type.RequiredStockEntries();
                             NpcResult nearestNpc = NpcQueries.GetNearestNpc(
                                 StyxWoW.Me.FactionTemplate.Faction,
                                 StyxWoW.Me.MapId,
                                 StyxWoW.Me.Location,
                                 type.AsNpcFlag(),
-                                excluded);
+                                excluded,
+                                required);
                             if (nearestNpc != null)
                             {
                                 return new Vendor(nearestNpc.Entry, nearestNpc.Name, type, nearestNpc.Location);

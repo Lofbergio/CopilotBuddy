@@ -35,6 +35,7 @@ namespace Styx.Helpers
         private int _lootRadius;
         private string _mailRecipient;
         private int _mountDistance;
+        private int _maxVendorTravelYards;
         private string _mountName;
         private string _flyingMountName;
         private bool _ressAtSpiritHealers;
@@ -364,6 +365,24 @@ namespace Styx.Helpers
             {
                 _findVendorsAutomatically = value;
                 OnPropertyChanged(nameof(FindVendorsAutomatically));
+            }
+        }
+
+        /// <summary>
+        /// Longest WALK (path length, not straight line) the bot will accept to reach an auto-resolved
+        /// vendor. Beyond it the errand is abandoned and the bot keeps grinding rather than touring the
+        /// continent. 1000yd is ~2.5min round trip at run speed — about the point where a restock costs
+        /// more than the grinding it interrupts. 0 disables the cap.
+        /// </summary>
+        [Setting]
+        [DefaultValue(1000)]
+        public int MaxVendorTravelYards
+        {
+            get => _maxVendorTravelYards;
+            set
+            {
+                _maxVendorTravelYards = value;
+                OnPropertyChanged(nameof(MaxVendorTravelYards));
             }
         }
 

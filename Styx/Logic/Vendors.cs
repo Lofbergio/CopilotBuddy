@@ -354,48 +354,132 @@ namespace Styx.Logic
 					return;
 
 				// Best = highest RequiredLevel we can use (ammo grades scale strictly by level).
-				// carriesClass tracks whether the class is stocked AT ALL, so the two ways to come up
-				// empty stay distinguishable below — they expire differently.
-				int bestIndex = -1, bestReq = -1;
-				bool carriesClass = false;
-				ItemInfo bestInfo = null;
-				foreach (var mi in _merchantFrame.GetAllMerchantItems())
+				// carriesClass distinguishes the two ways to come up empty — they expire differently.
+				var shelf = new AmmoShelf();
+				ReadAmmoShelfFromStockDb(needed, shelf);
+				if (!shelf.Classified)
+					ReadAmmoShelfFromItemCache(needed, shelf);
+
+				if (shelf.Index < 0)
 				{
-					ItemInfo info = ItemInfo.FromId(mi.ItemId);
-					if (info == null || info.ItemClass != WoWItemClass.Projectile || info.ProjectileClass != needed)
-						continue;
-					carriesClass = true;
-					if (info.RequiredLevel > StyxWoW.Me.Level || info.RequiredLevel <= bestReq)
-						continue;
-					bestReq = info.RequiredLevel;
-					bestIndex = mi.Index;
-					bestInfo = info;
-				}
-				if (bestIndex < 0)
-				{
-					// The open merchant window is the authority on stock — the AmmoVendor npcflag that
-					// routed us here is only a UI hint (General Supplies NPCs carry it and sell no
-					// projectiles). Record the refusal against the NPC or the ammo errand re-resolves
-					// this same nearest vendor every tick: 164 POI round-trips in 28s, log 2026-07-20_1029.
-					BanFromAmmoErrand(needed, carriesClass);
+					// Only a CLASSIFIED look at the shelf may condemn a vendor. Unclassified means we
+					// couldn't READ the shelf (cold client item cache) — our failure, not a server fact.
+					// Banning on it permanently burned both Thelsamar vendors, which each stocked bullets,
+					// and sent the hunter to Ironforge (log 2026-07-20_1745).
+					if (shelf.Classified)
+						BanFromAmmoErrand(needed, shelf.CarriesClass);
+					else
+						Logging.Write(System.Drawing.Color.Orange,
+							"[Ammo] couldn't read {0}'s shelf ({1} items; item cache cold and no VendorStock.db) — "
+							+ "leaving it unjudged rather than blacklisting a vendor that may well stock {2}s.",
+							_merchantFrame.Merchant?.Name ?? "this merchant", _merchantFrame.MerchantNumItems, needed);
 					return;
 				}
+				int bestIndex = shelf.Index;
+				string bestName = shelf.Name;
+				int bestStack = shelf.StackSize;
 
-				int stack = Math.Max(1, bestInfo.MaxStackSize);
-				int stacks = (AmmoRestockTarget - have + stack - 1) / stack;
+				int stacks = (AmmoRestockTarget - have + bestStack - 1) / bestStack;
 				int bought = 0;
 				for (int i = 0; i < stacks; i++)
 				{
-					if (!_merchantFrame.BuyItem(bestIndex, stack))
+					if (!_merchantFrame.BuyItem(bestIndex, bestStack))
 						break;   // out of money — keep what we got
 					bought++;
 				}
 				if (bought > 0)
-					Logging.Write("Restocked ammo: {0} x{1} stack(s) of {2} (had {3} rounds).", bestInfo.Name, bought, stack, have);
+					Logging.Write("Restocked ammo: {0} x{1} stack(s) of {2} (had {3} rounds).", bestName, bought, bestStack, have);
 			}
 			catch (Exception ex)
 			{
 				Logging.WriteException(ex);
+			}
+		}
+
+		// Ammo stacks are 200 in WotLK for every grade; only used when the item cache can't tell us.
+		private const int DefaultAmmoStackSize = 200;
+
+		/// <summary>
+		/// What we managed to learn about the open merchant's ammo shelf. Classified is the load-bearing
+		/// field: it separates "read the shelf, it has nothing for us" from "couldn't read the shelf",
+		/// and ONLY the former may blacklist a vendor.
+		/// </summary>
+		private sealed class AmmoShelf
+		{
+			public int Index = -1;          // merchant slot to buy from, -1 = nothing to buy
+			public string Name;
+			public int StackSize = DefaultAmmoStackSize;
+			public bool Classified;         // we established what this vendor stocks
+			public bool CarriesClass;       // stocks this projectile class at SOME level (maybe above ours)
+		}
+
+		/// <summary>
+		/// Reads the shelf from VendorStock.db — the SERVER's own npc_vendor list for this NPC — and
+		/// locates the item in the open window by id. Merchant item ids come from a direct memory read,
+		/// so this path never consults the async client item cache that made a stocked vendor look barren.
+		/// No-op (leaves Classified false) when there is no stock data.
+		/// </summary>
+		private static void ReadAmmoShelfFromStockDb(WoWItemProjectileClass needed, AmmoShelf shelf)
+		{
+			WoWUnit merchant = _merchantFrame.Merchant;
+			if (merchant == null || !Styx.Database.VendorStock.IsAvailable)
+				return;
+
+			int cls = Styx.Database.VendorStock.ItemClassProjectile;
+			// Any level first: "stocks none at all" and "stocks only grades above us" are different
+			// verdicts with different lifetimes — we out-level the second one, never the first.
+			shelf.CarriesClass = Styx.Database.VendorStock.ItemsAt((int)merchant.Entry, cls, (int)needed, int.MaxValue).Count > 0;
+			shelf.Classified = true;
+
+			// Ordered best-usable-first (highest required level we can actually use).
+			var usable = Styx.Database.VendorStock.ItemsAt((int)merchant.Entry, cls, (int)needed, (int)StyxWoW.Me.Level);
+			if (usable.Count == 0)
+				return;
+
+			var onShelf = new Dictionary<uint, int>();
+			foreach (var mi in _merchantFrame.GetAllMerchantItems())
+				onShelf[mi.ItemId] = mi.Index;
+
+			foreach (var item in usable)
+			{
+				if (!onShelf.TryGetValue(item.ItemId, out int index))
+					continue;   // limited-stock row that is currently sold out
+				shelf.Index = index;
+				shelf.Name = item.Name;
+				// The client cache knows the stack size when it's warm; otherwise the WotLK ammo constant holds.
+				ItemInfo info = ItemInfo.FromId(item.ItemId);
+				shelf.StackSize = info != null ? Math.Max(1, info.MaxStackSize) : DefaultAmmoStackSize;
+				return;
+			}
+		}
+
+		/// <summary>
+		/// Fallback for when VendorStock.db is absent: classify from the client item cache, but only once
+		/// it has actually filled. A cache that never warms leaves Classified false, so the caller cannot
+		/// mistake "couldn't read it" for "stocks nothing".
+		/// </summary>
+		private static void ReadAmmoShelfFromItemCache(WoWItemProjectileClass needed, AmmoShelf shelf)
+		{
+			// ~3s budget for the cache to fill, matching the food path's retry.
+			for (int attempt = 0; attempt < 6 && !_merchantFrame.AllMerchantItemsCached(); attempt++)
+				StyxWoW.Sleep(500);
+			if (!_merchantFrame.AllMerchantItemsCached())
+				return;
+
+			shelf.Classified = true;
+			int bestReq = -1;
+			foreach (var mi in _merchantFrame.GetAllMerchantItems())
+			{
+				ItemInfo info = ItemInfo.FromId(mi.ItemId);
+				if (info == null || info.ItemClass != WoWItemClass.Projectile || info.ProjectileClass != needed)
+					continue;
+				shelf.CarriesClass = true;
+				if (info.RequiredLevel > StyxWoW.Me.Level || info.RequiredLevel <= bestReq)
+					continue;
+				bestReq = info.RequiredLevel;
+				shelf.Index = mi.Index;
+				shelf.Name = info.Name;
+				shelf.StackSize = Math.Max(1, info.MaxStackSize);
 			}
 		}
 

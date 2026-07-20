@@ -190,6 +190,12 @@ namespace Bots.Vibes.Shared.Errands
             var byEntry = new Dictionary<int, ErrandStop>();
             VendorManager vm = profile.VendorManager;
 
+            // Resolved once per plan: both the candidate query AND the "also serves" merge below need it,
+            // and each lookup is a DB round-trip on first use.
+            var stockByKind = new Dictionary<ErrandKind, HashSet<int>>();
+            foreach (ErrandKind k in ErrandKinds.NpcKinds)
+                stockByKind[k] = ErrandKinds.RequiredStock(k);
+
             foreach (ErrandKind kind in ErrandKinds.NpcKinds)
             {
                 if (!kinds.Contains(kind)) continue;
@@ -222,15 +228,19 @@ namespace Bots.Vibes.Shared.Errands
                     : null;
 
                 foreach (NpcResult npc in NpcQueries.GetNearbyNpcs(me.MapId, me.Location, ErrandKinds.Flag(kind),
-                                                                   CandidatesPerKind, excluded))
+                                                                   CandidatesPerKind, excluded, stockByKind[kind]))
                 {
                     ErrandStop stop = Merge(byEntry, npc.Entry, npc.Name, npc.Location, kind);
                     // The row carries the whole mask, so record every OTHER errand this NPC could also
                     // serve. Without this a sell+repair vendor found by the sell query would look like a
                     // sell-only stop and the repair demand would plan a second walk.
+                    // Flag AND stock: crediting a stop with an errand on the flag alone re-imports the
+                    // AmmoVendor lie through the side door — the tour would call the ammo errand served
+                    // at a vendor holding no projectiles and skip the one that does.
                     foreach (ErrandKind other in ErrandKinds.NpcKinds)
                         if (other != ErrandKind.Train && kinds.Contains(other)
-                            && (npc.NpcFlags & (uint)ErrandKinds.Flag(other)) != 0)
+                            && (npc.NpcFlags & (uint)ErrandKinds.Flag(other)) != 0
+                            && (stockByKind[other] == null || stockByKind[other].Contains(npc.Entry)))
                             stop.Serves.Add(other);
                 }
             }
