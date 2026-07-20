@@ -1452,19 +1452,27 @@ namespace Bots.Grind
 
         private static bool NeedToSell()
         {
-            if (StyxWoW.Me == null) return false;
+            if (StyxWoW.Me == null || ProfileManager.CurrentProfile == null) return false;
             // HB 4.3.4 smethod_11 — no FindVendorsAutomatically check
-            if (ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Sell) == null)
+            uint free = StyxWoW.Me.FreeNormalBagSlots;
+            int min = ProfileManager.CurrentProfile.MinFreeBagSlots;
+            bool need = Vendors.ForceSell || free <= min;
+            // Want gates where (see NeedToBuy). One terminal log per branch, so the shared dedupe key
+            // can't alternate between two messages and spam a tick apart.
+            if (!need)
+            {
+                LogDecision("sell", string.Format("[NeedToSell] no — freeNormalBags {0} <= min {1}:{2} (force={3})",
+                    free, min, free <= min, Vendors.ForceSell));
+                return false;
+            }
+            if (ProfileManager.CurrentProfile.VendorManager?.GetClosestVendor(Vendor.VendorType.Sell) == null)
             {
                 LogDecision("sell", "[NeedToSell] no — no sell vendor known for this area");
                 return false;
             }
-            uint free = StyxWoW.Me.FreeNormalBagSlots;
-            int min = ProfileManager.CurrentProfile.MinFreeBagSlots;
-            bool need = Vendors.ForceSell || free <= min;
-            LogDecision("sell", string.Format("[NeedToSell] {0} — freeNormalBags {1} <= min {2}:{3} (force={4})",
-                need ? "YES" : "no", free, min, free <= min, Vendors.ForceSell));
-            return need;
+            LogDecision("sell", string.Format("[NeedToSell] YES — freeNormalBags {0} <= min {1} (force={2})",
+                free, min, Vendors.ForceSell));
+            return true;
         }
 
         private static bool NeedToTrain()
@@ -1472,15 +1480,21 @@ namespace Bots.Grind
             // HB 4.3.4 smethod_12
             if (!CharacterSettings.Instance.TrainNewSkills && !Vendors.ForceTrainer)
                 return false;
+            bool need = Vendors.ForceTrainer || Vendors.NeedClassTraining;
+            if (!need)   // want gates where — see NeedToBuy
+            {
+                LogDecision("train", string.Format("[NeedToTrain] no — needClassTraining={0} (force={1})",
+                    Vendors.NeedClassTraining, Vendors.ForceTrainer));
+                return false;
+            }
             if (ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Train) == null)
             {
                 LogDecision("train", "[NeedToTrain] no — no trainer vendor known for this area");
                 return false;
             }
-            bool need = Vendors.ForceTrainer || Vendors.NeedClassTraining;
-            LogDecision("train", string.Format("[NeedToTrain] {0} — needClassTraining={1} (force={2})",
-                need ? "YES" : "no", Vendors.NeedClassTraining, Vendors.ForceTrainer));
-            return need;
+            LogDecision("train", string.Format("[NeedToTrain] YES — needClassTraining={0} (force={1})",
+                Vendors.NeedClassTraining, Vendors.ForceTrainer));
+            return true;
         }
 
         // Weapon-proficiency training (user 2026-07-12): >1g spare and a weapon master within 500yd that
@@ -1513,15 +1527,10 @@ namespace Bots.Grind
 
         private static bool NeedToRepair()
         {
-            if (StyxWoW.Me == null) return false;
+            if (StyxWoW.Me == null || ProfileManager.CurrentProfile == null) return false;
             // HB 4.3.4 smethod_13 — no FindVendorsAutomatically check
             if (Vendors.RepairDisabled)
                 return false;
-            if (ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Repair) == null)
-            {
-                LogDecision("repair", "[NeedToRepair] no — no repair vendor known for this area");
-                return false;
-            }
 
             // HB 4.3.4: update repair cost periodically
             if (_repairCostTimer.IsFinished)
@@ -1557,9 +1566,20 @@ namespace Bots.Grind
             // consecutive low polls before committing; ForceRepair bypasses (explicit intent).
             _lowDuraPolls = low ? _lowDuraPolls + 1 : 0;
             bool need = Vendors.ForceRepair || _lowDuraPolls >= 2;
-            LogDecision("repair", string.Format("[NeedToRepair] {0} — durability {1:F0}% <= min {2:F0}%:{3} (confirm {4}/2, force={5})",
-                need ? "YES" : "no", dura * 100, minDura * 100, low, _lowDuraPolls, Vendors.ForceRepair));
-            return need;
+            if (!need)   // want gates where — see NeedToBuy
+            {
+                LogDecision("repair", string.Format("[NeedToRepair] no — durability {0:F0}% <= min {1:F0}%:{2} (confirm {3}/2, force={4})",
+                    dura * 100, minDura * 100, low, _lowDuraPolls, Vendors.ForceRepair));
+                return false;
+            }
+            if (ProfileManager.CurrentProfile.VendorManager?.GetClosestVendor(Vendor.VendorType.Repair) == null)
+            {
+                LogDecision("repair", "[NeedToRepair] no — no repair vendor known for this area");
+                return false;
+            }
+            LogDecision("repair", string.Format("[NeedToRepair] YES — durability {0:F0}% <= min {1:F0}% (confirm {2}/2, force={3})",
+                dura * 100, minDura * 100, _lowDuraPolls, Vendors.ForceRepair));
+            return true;
         }
 
         /// <summary>
@@ -1645,6 +1665,25 @@ namespace Bots.Grind
                 return true;
             }
 
+            bool usesMana = StyxWoW.Me.PowerType == WoWPowerType.Mana || StyxWoW.Me.Class == WoWClass.Druid;
+            // Buy only when a category is EMPTY (GetBest == null) - i.e. you ran out, not merely low.
+            bool needDrink = usesMana && Consumable.GetBestDrink(false) == null && CharacterSettings.Instance.DrinkAmount > 0;
+            bool needFood = Consumable.GetBestFood(false) == null && CharacterSettings.Instance.FoodAmount > 0;
+            bool need = needDrink || needFood;
+
+            // WANT gates WHERE — the demand test is local and free, the vendor resolve is up to
+            // WalkCandidates Detour pathfinds. Asking where to shop before asking whether we shop at all made
+            // a zero-consumable character (FoodAmount and DrinkAmount both 0, a deliberate setup) pay that
+            // resolve once per 50yd memo bucket forever, for an answer it could never act on.
+            if (!need)
+            {
+                LogDecision("buy", string.Format(
+                    "[NeedToBuy] no - needDrink={0} (have {1}/want {2}), needFood={3} (have {4}/want {5})",
+                    needDrink, Consumable.GetDrinkCount(), CharacterSettings.Instance.DrinkAmount,
+                    needFood, Consumable.GetFoodCount(), CharacterSettings.Instance.FoodAmount));
+                return false;
+            }
+
             var foodVendor = ProfileManager.CurrentProfile?.VendorManager?.GetClosestVendor(Vendor.VendorType.Food);
             if (foodVendor == null)
             {
@@ -1652,16 +1691,11 @@ namespace Bots.Grind
                 return false;
             }
 
-            bool usesMana = StyxWoW.Me.PowerType == WoWPowerType.Mana || StyxWoW.Me.Class == WoWClass.Druid;
-            // Buy only when a category is EMPTY (GetBest == null) - i.e. you ran out, not merely low.
-            bool needDrink = usesMana && Consumable.GetBestDrink(false) == null && CharacterSettings.Instance.DrinkAmount > 0;
-            bool needFood = Consumable.GetBestFood(false) == null && CharacterSettings.Instance.FoodAmount > 0;
-            bool need = needDrink || needFood;
             LogDecision("buy", string.Format(
-                "[NeedToBuy] {0} - needDrink={1} (have {2}/want {3}), needFood={4} (have {5}/want {6}), vendor={7}",
-                need ? "YES" : "no", needDrink, Consumable.GetDrinkCount(), CharacterSettings.Instance.DrinkAmount,
+                "[NeedToBuy] YES - needDrink={0} (have {1}/want {2}), needFood={3} (have {4}/want {5}), vendor={6}",
+                needDrink, Consumable.GetDrinkCount(), CharacterSettings.Instance.DrinkAmount,
                 needFood, Consumable.GetFoodCount(), CharacterSettings.Instance.FoodAmount, foodVendor.Name));
-            return need;
+            return true;
         }
 
         // Hand-off between the mail decorator and its ActionSetPoi — the tick ctx is NOT a dictionary

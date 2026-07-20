@@ -369,15 +369,33 @@ namespace Styx.Database
             }
 
             // Silence here would read as "there are no vendors", which is a different problem with a
-            // different fix. Say which NPC we declined and how far it was.
+            // different fix. Say which NPC we declined and how far it was — but say it about the OUTCOME,
+            // not per resolve: the memo above is bucketed by position, so a bot merely walking around
+            // re-resolves and would re-narrate the same standing verdict every bucket. Reporting per
+            // (flag, NPC) means a different NPC still speaks up, and finding one in budget re-arms it.
             if (best == null && nearestOverBudget != null)
-                Logging.Write(System.Drawing.Color.Orange,
-                    "[Vendors] nearest {0} is {1} at {2:F0}yd walk — past the {3:F0}yd travel budget, skipping the trip.",
-                    npcFlags, nearestOverBudget.Name, nearestOverBudgetWalk, budget);
+            {
+                if (!_overBudgetReported.TryGetValue(npcFlags, out int said) || said != nearestOverBudget.Entry)
+                {
+                    _overBudgetReported[npcFlags] = nearestOverBudget.Entry;
+                    Logging.Write(System.Drawing.Color.Orange,
+                        "[Vendors] nearest {0} is {1} at {2:F0}yd walk — past the {3:F0}yd travel budget, skipping the trip.",
+                        npcFlags, nearestOverBudget.Name, nearestOverBudgetWalk, budget);
+                }
+            }
+            else if (best != null)
+            {
+                _overBudgetReported.Remove(npcFlags);
+            }
 
             walkYd = best != null ? bestWalk : 0f;
             return best;
         }
+
+        // Last over-budget NPC reported per capability flag — a log-dedupe on the stated verdict, not
+        // decision state: nothing reads it to decide anything, and it clears the moment a vendor of that
+        // flag comes into budget.
+        private static readonly Dictionary<UnitNPCFlags, int> _overBudgetReported = new Dictionary<UnitNPCFlags, int>();
 
         // Detour returns its best effort rather than failing, so a path ending this far from the target
         // is a partial path, not an arrival. Same tolerance the Vibes errand screener uses.
