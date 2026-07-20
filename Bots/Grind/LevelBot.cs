@@ -1590,9 +1590,15 @@ namespace Bots.Grind
             if (StyxWoW.Me == null || StyxWoW.Me.Class != WoWClass.Hunter) return false;
             if (DateTime.Now >= _ammoCensusAt)
             {
+                WoWItemProjectileClass was = _cachedAmmoClass;
                 _cachedAmmoClass = Consumable.NeededAmmoClass();
                 _cachedAmmoCount = Consumable.GetAmmoCount(_cachedAmmoClass);
                 _ammoCensusAt = DateTime.Now.AddSeconds(10);
+
+                // Ranged weapon swapped (gun ⇄ bow): every "stocks no <old class>" verdict the vendor
+                // blacklist holds is now meaningless, so drop them and let the resolver re-evaluate.
+                if (was != WoWItemProjectileClass.None && was != _cachedAmmoClass)
+                    ProfileManager.CurrentProfile?.VendorManager?.Blacklist.RemovePurpose(Vendor.VendorType.Ammo);
             }
             return _cachedAmmoClass != WoWItemProjectileClass.None && _cachedAmmoCount < AmmoLowThreshold;
         }

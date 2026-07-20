@@ -283,13 +283,17 @@ namespace Styx.Logic
 					return;
 
 				// Best = highest RequiredLevel we can use (ammo grades scale strictly by level).
+				// carriesClass tracks whether the class is stocked AT ALL, so the two ways to come up
+				// empty stay distinguishable below — they expire differently.
 				int bestIndex = -1, bestReq = -1;
+				bool carriesClass = false;
 				ItemInfo bestInfo = null;
 				foreach (var mi in _merchantFrame.GetAllMerchantItems())
 				{
 					ItemInfo info = ItemInfo.FromId(mi.ItemId);
 					if (info == null || info.ItemClass != WoWItemClass.Projectile || info.ProjectileClass != needed)
 						continue;
+					carriesClass = true;
 					if (info.RequiredLevel > StyxWoW.Me.Level || info.RequiredLevel <= bestReq)
 						continue;
 					bestReq = info.RequiredLevel;
@@ -298,7 +302,11 @@ namespace Styx.Logic
 				}
 				if (bestIndex < 0)
 				{
-					Logging.WriteDebug("[Ammo] merchant stocks no usable {0}s ({1} items).", needed, _merchantFrame.MerchantNumItems);
+					// The open merchant window is the authority on stock — the AmmoVendor npcflag that
+					// routed us here is only a UI hint (General Supplies NPCs carry it and sell no
+					// projectiles). Record the refusal against the NPC or the ammo errand re-resolves
+					// this same nearest vendor every tick: 164 POI round-trips in 28s, log 2026-07-20_1029.
+					BanFromAmmoErrand(needed, carriesClass);
 					return;
 				}
 
@@ -318,6 +326,42 @@ namespace Styx.Logic
 			{
 				Logging.WriteException(ex);
 			}
+		}
+
+		/// <summary>
+		/// Records that the open merchant can't serve an ammo restock, so the resolver moves to the
+		/// next-nearest instead of re-picking this one. Scoped to the Ammo errand only — a barren
+		/// General Supplies NPC still buys our loot, and GetClosestVendor(Sell) must keep finding it.
+		/// Exhausting the candidates is the terminating case, not a failure: NeedToBuy already gates
+		/// the ammo run on a non-null ammo vendor, so it simply stops asking.
+		/// </summary>
+		private static void BanFromAmmoErrand(WoWItemProjectileClass needed, bool carriesClass)
+		{
+			var vm = ProfileManager.CurrentProfile?.VendorManager;
+			WoWUnit merchant = _merchantFrame.Merchant;
+			Vendor vendor = merchant != null
+				? new Vendor(merchant, Vendor.VendorType.Ammo)
+				: BotPoi.Current?.AsVendor;
+
+			if (vm == null || vendor == null)
+			{
+				Logging.WriteDebug("[Ammo] merchant stocks no usable {0}s ({1} items) — no vendor context to record it against.",
+					needed, _merchantFrame.MerchantNumItems);
+				return;
+			}
+
+			// Stock is static for the session, so "carries no {0}s at all" can't change under us — a TTL
+			// would just re-walk us here on a timer. All-too-high-level IS transient (we out-level it),
+			// so that one expires. A ranged-weapon swap invalidates both; LevelBot clears them on that edge.
+			if (carriesClass)
+				vm.Blacklist.Add(vendor, Vendor.VendorType.Ammo);
+			else
+				vm.Blacklist.AddPermanent(vendor, Vendor.VendorType.Ammo);
+
+			Logging.Write(System.Drawing.Color.Orange,
+				"[Ammo] {0} stocks no usable {1}s ({2} items, {3}) — skipping it for ammo runs; the resolver picks another.",
+				vendor.Name, needed, _merchantFrame.MerchantNumItems,
+				carriesClass ? "all above our level, will retry" : "carries none at all");
 		}
 
 		/// <summary>
