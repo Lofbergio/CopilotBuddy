@@ -1469,7 +1469,8 @@ namespace VibeParty
 		// (anything written post-attach needs a /reload), and the Interface folder is junction-
 		// shared across clients (followers + the play client would all load it). The command table
 		// lives HERE so the panel can never drift from the OnPartyChat switch. Each row is a
-		// BUTTON that sends its command to party chat; /vp toggles, Escape closes, drag to move.
+		// BUTTON that sends its command to party chat; /vp toggles, drag to move (Escape does NOT
+		// close it — see the UISpecialFrames note in ShowLeaderCommandPanel).
 		// Descriptions stay apostrophe-free (they land inside single-quoted Lua strings).
 		private static bool _leaderPanelShown;
 		// Order names, no prefix — the transport is the PartyBus ("Order" messages), never chat.
@@ -1546,9 +1547,13 @@ namespace VibeParty
 			}
 
 			// The frame survives bot restarts within one client session — reuse, don't duplicate
-			// (re-injection would orphan a ghost frame; #1 injected-UI trap). The slash handler
-			// registers BEFORE the reuse early-return so restarts install the current handler;
-			// /vp always re-centers on show, so an off-screen drag is one /vp from recovered.
+			// (re-injection would orphan a ghost frame; #1 injected-UI trap). The slash handler and the
+			// UISpecialFrames de-registration run BEFORE the reuse early-return, so a bot restart both
+			// installs the current handler and fixes up a frame injected by an older build.
+			// ⚠ DELIBERATELY NOT in UISpecialFrames: Escape is the user's "clear every other panel"
+			// reflex, and it must not take the command panel down with them. /vp is the only toggle.
+			// Every show — first injection, bot restart, /vp — re-centers: the panel must land where
+			// the user is looking, and it doubles as the recovery from an off-screen drag.
 			string lua = $$$"""
 				SLASH_VIBEPARTY1 = '/vp'
 				SlashCmdList['VIBEPARTY'] = function()
@@ -1560,17 +1565,24 @@ namespace VibeParty
 						VibePartyPanel:Show()
 					end
 				end
-				if VibePartyPanel then VibePartyPanel:Show() return end
+				for i = #UISpecialFrames, 1, -1 do
+					if UISpecialFrames[i] == 'VibePartyPanel' then tremove(UISpecialFrames, i) end
+				end
+				if VibePartyPanel then
+					VibePartyPanel:ClearAllPoints()
+					VibePartyPanel:SetPoint('CENTER', UIParent, 'CENTER', 0, 0)
+					VibePartyPanel:Show()
+					return
+				end
 				local f = CreateFrame('Frame', 'VibePartyPanel', UIParent)
 				f:SetWidth(340) f:SetHeight(280)
-				f:SetPoint('RIGHT', UIParent, 'RIGHT', -40, 0)
+				f:SetPoint('CENTER', UIParent, 'CENTER', 0, 0)
 				f:SetFrameStrata('MEDIUM') f:SetToplevel(true) f:SetClampedToScreen(true)
 				f:SetBackdrop({bgFile='Interface\\Buttons\\WHITE8X8', edgeFile='Interface\\Buttons\\WHITE8X8', edgeSize=1})
 				f:SetBackdropColor(0.055, 0.055, 0.06, 0.55) f:SetBackdropBorderColor(0, 0, 0, 0.9)
 				f:SetMovable(true) f:EnableMouse(true) f:RegisterForDrag('LeftButton')
 				f:SetScript('OnDragStart', function() f:StartMoving() end)
 				f:SetScript('OnDragStop', function() f:StopMovingOrSizing() end)
-				tinsert(UISpecialFrames, 'VibePartyPanel')
 				VibePartyPanelQueue = VibePartyPanelQueue or {}
 				local function Send(order) table.insert(VibePartyPanelQueue, order) end
 				local function Btn(parent, w, h, label, plain)
