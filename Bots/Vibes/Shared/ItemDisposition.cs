@@ -1,4 +1,6 @@
 using Styx;
+using Styx.Combat.CombatRoutine;
+using Styx.Logic.Combat;
 using Styx.WoWInternals.WoWObjects;
 
 namespace Bots.Vibes.Shared
@@ -24,6 +26,11 @@ namespace Bots.Vibes.Shared
         /// <summary>Mailing is usable when a recipient is set — one switch, in General settings, for
         /// every bot. See <see cref="MailboxService.MailingConfigured"/>.</summary>
         private static bool MailingConfigured => MailboxService.MailingConfigured;
+
+        /// <summary>This character eats trade-goods meat via its pet — a hunter who has trained Feed Pet.
+        /// Asked of the spellbook rather than the level, so an untamed low hunter doesn't hoard yet.</summary>
+        private static bool CanFeedAPet
+            => StyxWoW.Me != null && StyxWoW.Me.Class == WoWClass.Hunter && SpellManager.HasSpell("Feed Pet");
 
         public static DispositionAction Classify(WoWItem item)
         {
@@ -53,7 +60,19 @@ namespace Bots.Vibes.Shared
             switch (info.ItemClass)
             {
                 case WoWItemClass.TradeGoods:
-                    desired = info.TradeGoodsClass == WoWItemTradeGoodsClass.Meat ? S.MeatAction : S.TradeGoodsAction;
+                    if (info.TradeGoodsClass == WoWItemTradeGoodsClass.Meat && CanFeedAPet)
+                    {
+                        // A hunter's pet food is class kit, exactly like ammo above — an unhappy pet loses
+                        // damage and only FEEDING fixes it (Mend Pet does not). GoodVibes can only feed
+                        // trade-goods Meat (its diet match is GetItemInfo's subtype against GetPetFoodTypes,
+                        // and consumable "Food & Drink" never matches a pet diet), so MeatAction=Vendor was
+                        // selling the one item class the hunter can eat: she fed 9 times, hit a vendor run,
+                        // and starved for the rest of the night. Unconditional Keep, not a reserve — the
+                        // vendor sweep protects by item ENTRY, so a partial "keep N, sell the surplus" can't
+                        // be expressed here; ammo sets the precedent for hoarding essential kit.
+                        return DispositionAction.Keep;
+                    }
+                    desired = S.TradeGoodsAction;
                     break;
                 case WoWItemClass.Recipe:
                 case WoWItemClass.Gem:
