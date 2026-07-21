@@ -891,18 +891,25 @@ namespace Styx.Logic.Combat
 			XButton2 = 16U
 		}
 
-		private enum MouseButtonByte : byte { Left = 0, Right = 1 }
-		
+		// Layout verified by disassembling 0x80C340 (2026-07-21): it reads five dwords from the argument
+		// pointer — [+0,+4] copied as a contiguous 8-byte pair (the GUID), then [+8,+12,+16] as a contiguous
+		// 12-byte triple (X,Y,Z). GUID FIRST. The old Location-first layout put the X/Y floats where the
+		// GUID belonged and Z+padding where the position belonged, so it could not have worked even at the
+		// correct address. The function takes exactly ONE pointer — there is no button field.
 		[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
 		private struct TerrainClickInfo
 		{
-			public WoWPoint Location;
 			public ulong TargetGuid;
-			public MouseButtonByte Button;
+			public float X, Y, Z;
 		}
-		
-		// Spell_C__HandleTerrainClick function address (WoW 3.3.5a)
-		private const uint Spell_C__HandleTerrainClick = 0x80B740; // 8438592U
+
+		// Spell_C__HandleTerrainClick (WoW 3.3.5a). 0x80C340 == 8438592 — the same decimal already sitting
+		// in Patchables/GlobalOffsets.cs, and the same decimal the old comment here claimed. The previous
+		// literal 0x80B740 is this function's FILE OFFSET (0x40B740) pasted onto the VA prefix: it lands
+		// mid-function, so the call ran with no prologue on a bogus stack and access-violated (0xC0000005)
+		// while this wrapper read a stale return slot and reported success. Nothing had ever called it
+		// until GoodVibes' ground AoE in 2026-07, which is why it went unnoticed.
+		private const uint Spell_C__HandleTerrainClick = 0x80C340; // 8438592U
 
 		public static bool ClickRemoteLocation(WoWPoint location)
 		{
@@ -917,9 +924,10 @@ namespace Styx.Logic.Combat
 
 			var click = new TerrainClickInfo
 			{
-				Location = location,
 				TargetGuid = 0UL,
-				Button = MouseButtonByte.Left
+				X = location.X,
+				Y = location.Y,
+				Z = location.Z
 			};
 
 			try
