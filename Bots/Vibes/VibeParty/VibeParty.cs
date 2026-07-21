@@ -66,7 +66,7 @@ namespace VibeParty
 					CreateEventBehavior(),                            // method_5
 					CreateLootBehavior(),                             // method_3
 					CreateTurnInBehavior(),                           // Phase 2 — turn in at the leader's NPC (creature enders)
-					CreateGoTurnInBehavior(),                         // Phase 2 — turn in at a GAME OBJECT ender (barrels/altars)
+					CreateGoVisitBehavior(),                          // Phase 2 — turn in / pick up at a GAME OBJECT (corpses/altars/barrels)
 					CreateUseQuestStarterBehavior(),                  // Phase 1: use drop-only quest-starter items in bags
 					CreateWaterServiceBehavior(),                     // Mage: conjure + hand out water on request (downtime)
 					new Decorator(ctx => !StyxWoW.Me.IsInInstance && !Battlegrounds.IsInsideBattleground, LevelBot.CreateVendorBehavior()),
@@ -2989,7 +2989,7 @@ namespace VibeParty
 						new Sequence(
 							new TreeSharp.Action(ctx => TreeRoot.StatusText = "Moving to turn in at " + _turnInNpc!.Name),
 							new NavigationAction(ctx => _turnInNpc!.Location))),
-					new TreeSharp.Action(ctx => { VisitQuestNpc(_turnInNpc!); return RunStatus.Success; })
+					new TreeSharp.Action(ctx => { VisitQuestEntity(_turnInNpc!); return RunStatus.Success; })
 				));
 		}
 
@@ -3005,58 +3005,58 @@ namespace VibeParty
 		}
 
 		// ──────────────────────────────────────────────────────────────────────
-		// Game-object turn-ins (barrels/altars) — the ender is a WoWGameObject, not a creature
+		// Game-object quest interaction (corpses/altars/barrels) — the ender/giver is a WoWGameObject
 		// ──────────────────────────────────────────────────────────────────────
 
-		// A GO ender carries NO QuestGiverStatus "?" a follower can read, so the ONLY signal is "I hold a
-		// quest complete-in-log whose DB ender is this GO, and its spawn sits near me". Bounded to
-		// TurnInVicinity so a follower never treks off after a distant object and abandons the leader;
-		// reachability is probed BEFORE committing (CanReach), so an unreachable GO is never attempted
-		// and needs no memory of having failed. Parallel to the creature turn-in path (which stays
-		// untouched — its "?" model doesn't apply to objects).
-		private static Composite CreateGoTurnInBehavior()
+		// A GO carries NO QuestGiverStatus "?" a follower can read, so the signal is the ledger: "a nearby
+		// GO whose DB row is an ender for a held completable quest (log-complete OR a discover quest the log
+		// never flags — The Lost Pilot) or a giver for a wanted one (A Pilot's Revenge)". Bounded to
+		// TurnInVicinity so a follower never treks off and abandons the leader; reachability is probed
+		// BEFORE committing (CanReach), so an unreachable GO is never attempted and needs no failure memory.
+		// The visit itself is the SAME frame-reading transaction as the creature path (VisitQuestEntity) —
+		// it asks the object what it presents instead of trusting the log flag, which is what breaks the
+		// discover-quest deadlock (isComplete stays nil; interacting with the corpse is what completes it).
+		private static Composite CreateGoVisitBehavior()
 		{
-			return new Decorator(ctx => WantGoTurnIn(),
+			return new Decorator(ctx => WantGoVisit(),
 				new PrioritySelector(
-					new Decorator(ctx => !_goTurnInObj!.WithinInteractRange,
+					new Decorator(ctx => !_goVisitObj!.WithinInteractRange,
 						new Sequence(
-							new TreeSharp.Action(ctx => TreeRoot.StatusText = "Moving to turn in at " + _goTurnInObj!.Name),
+							new TreeSharp.Action(ctx => TreeRoot.StatusText = "Quest object: " + _goVisitObj!.Name),
 							new TreeSharp.Action(ctx => MoveToGameObject()))),
-					new TreeSharp.Action(ctx => { VisitQuestGameObject(_goTurnInObj!, _goTurnInQuestId, _goTurnInTitle); return RunStatus.Success; })
+					new TreeSharp.Action(ctx => { VisitQuestEntity(_goVisitObj!); return RunStatus.Success; })
 				));
 		}
 
-		// Resolve a live GO ender for a complete-in-log quest this tick (sets _goTurnInObj for the children).
-		private static bool WantGoTurnIn()
+		// Resolve a live GO with quest business near us this tick (sets _goVisitObj for the children). The
+		// ledger's GoBusiness already screened held-completable turn-ins + wanted pickups (and excluded
+		// repeatables), so this only has to find the nearest present, reachable object. Relies on WantTurnIn
+		// having refreshed the ledger earlier this tick (it runs above us in the tree, out of combat).
+		private static bool WantGoVisit()
 		{
-			_goTurnInObj = null;
+			_goVisitObj = null;
 			LocalPlayer me = StyxWoW.Me;
 			if (me.Combat || !FollowerQuestLedger.Loaded) return false;
 
 			List<string>? blocked = null;
-			foreach (var kv in CompletedQuestsLua())
+			var seen = new HashSet<int>();
+			foreach (GoWork w in FollowerQuestLedger.GoBusiness)
 			{
-				uint qid = kv.Key;
-				if (QuestBlocked(qid)) continue;
-				if (!FollowerQuestLedger.TryNearestGameObjectEnder((int)qid, (int)me.MapId, me.Location,
-						out int goEntry, out WoWPoint spawn, out bool hasGoEnder))
+				if (!seen.Add(w.GoEntry)) continue;   // one live-resolve per distinct object entry
+				if (!FollowerQuestLedger.TryNearestGoSpawn(w.GoEntry, (int)me.MapId, me.Location, out WoWPoint spawn))
 				{
-					// Only a quest that HAS a GO ender but no usable spawn is a dead end worth reporting —
-					// 11 of the DB's 457 GO enders have no gameobject_spawns row, 10 with no creature
-					// fallback, so they can never be turned in. A plain creature quest reaching here is the
-					// normal case and must stay silent, or every turn-in logs a bogus "cannot reach".
-					if (hasGoEnder) Block(ref blocked, kv.Value, "its game object has no spawn row in QuestData.db");
+					Block(ref blocked, w.Title, "its game object " + w.GoEntry + " has no spawn row in QuestData.db");
 					continue;
 				}
 				if (me.Location.Distance(spawn) > TurnInVicinity) continue;   // out of range is normal, not a fault
 
 				// Resolve against OUR position, not the DB coordinate. The spawn row is only a hint that this
-				// quest's object is plausibly nearby (the gate above); the LIVE object is the truth, and
-				// matching it tight to the DB coord fails the moment the two drift — live: the Thunder Ale
-				// Barrel (GO 270, a single spawn at the Barleybrew farm) never resolved while we stood next
-				// to it. Scanning only WoWGameObject means the creature/GO id overlap can't bite here.
+				// object is plausibly nearby (the gate above); the LIVE object is the truth, and matching it
+				// tight to the DB coord fails the moment the two drift — live: the Thunder Ale Barrel (GO 270,
+				// a single spawn at the Barleybrew farm) never resolved while we stood next to it. Scanning
+				// only WoWGameObject means the creature/GO id overlap can't bite here.
 				WoWGameObject? go = ObjectManager.GetObjectsOfType<WoWGameObject>(false, false)
-					.Where(g => g != null && g.Entry == (uint)goEntry && g.Distance <= TurnInVicinity)
+					.Where(g => g != null && g.Entry == (uint)w.GoEntry && g.Distance <= TurnInVicinity)
 					.OrderBy(g => g.Distance)
 					.FirstOrDefault();
 				if (go == null)
@@ -3066,7 +3066,7 @@ namespace VibeParty
 					// after its NPC is bribed with Thunder Ale — user, live 2026-07-19). "Not there" is the
 					// normal resting state for those, indistinguishable from "not in view yet", and the bot
 					// cannot trigger the precondition. Note it on the debug channel and move on.
-					Block(ref blocked, kv.Value, "object " + goEntry + " not present yet (conditional spawn / not in view)");
+					Block(ref blocked, w.Title, "object " + w.GoEntry + " not present yet (conditional spawn / not in view)");
 					continue;
 				}
 				if (_turnInCooldown.TryGetValue(go.Guid, out DateTime until) && DateTime.UtcNow < until) continue;
@@ -3076,11 +3076,11 @@ namespace VibeParty
 				{
 					// Permanent for this spawn (off-mesh: on a cart/platform/behind a rail) — the one bail-out
 					// that will never resolve on its own, so it must never be silent.
-					Block(ref blocked, kv.Value, "the mesh has no complete route to " + go.Name);
+					Block(ref blocked, w.Title, "the mesh has no complete route to " + go.Name);
 					continue;
 				}
 
-				_goTurnInObj = go; _goTurnInQuestId = qid; _goTurnInTitle = kv.Value;
+				_goVisitObj = go;
 				return true;
 			}
 			GoBlocked(blocked);
@@ -3112,14 +3112,14 @@ namespace VibeParty
 		// divergence alternate it and every visit counts as "changed" — the same multi-subject narrator bug
 		// GoBlocked below documents. Bounded by the handful of quest NPCs we actually visit.
 		private static readonly Dictionary<uint, string> _divergedAt = new Dictionary<uint, string>();
-		private static void VisitDiverged(WoWUnit npc, string wanted, string presented)
+		private static void VisitDiverged(WoWObject entity, string wanted, string presented)
 		{
 			string line = wanted + "|" + presented;
-			if (_divergedAt.TryGetValue(npc.Entry, out string? seen) && seen == line) return;
-			_divergedAt[npc.Entry] = line;
+			if (_divergedAt.TryGetValue(entity.Entry, out string? seen) && seen == line) return;
+			_divergedAt[entity.Entry] = line;
 			Logging.Write(System.Drawing.Color.Orange,
 				"VibeParty: ledger wanted {0} at {1} but it offers [{2}] — server gate the screen can't see.",
-				wanted, npc.Name, presented.Length == 0 ? "nothing" : presented);
+				wanted, entity.Name, presented.Length == 0 ? "nothing" : presented);
 		}
 
 		// Edge-logged narrator: ONE snapshot of everything currently blocking a game-object turn-in, logged
@@ -3153,7 +3153,7 @@ namespace VibeParty
 		// (Retry + a loud line + the shared throttle) rather than wedging silently.
 		private static RunStatus MoveToGameObject()
 		{
-			MoveResult r = Navigator.MoveTo(_goTurnInObj!.Location);
+			MoveResult r = Navigator.MoveTo(_goVisitObj!.Location);
 			return r == MoveResult.Moved || r == MoveResult.PathGenerated || r == MoveResult.UnstuckAttempt
 				? RunStatus.Success
 				: RunStatus.Failure;
@@ -3168,34 +3168,6 @@ namespace VibeParty
 		private static bool CanReach(WoWPoint dest)
 			=> Navigator.CanNavigateWithinDistance(StyxWoW.Me.Location, dest, TurnInVicinity * 2f);
 
-		// Drive one GO turn-in through the shared core; the shared turn-in cooldown paces retries.
-		private static void VisitQuestGameObject(WoWGameObject go, uint questId, string title)
-		{
-			LocalPlayer me = StyxWoW.Me;
-			if (me.IsMoving) WoWMovement.MoveStop();
-			if (!me.QuestLog.ContainsQuest(questId)) { _goTurnInObj = null; return; }
-
-			TiDebug("visit GO {0} [{1}]: turnin {2} '{3}'", go.Name, go.Entry, questId, title);
-			QuestInteractOutcome outcome = QuestInteractionCore.TurnIn(go, (int)questId, title, "VibeParty[quest]",
-				ShouldAcceptOffer);
-			// ⚠ DO NOT put a Sleep/WaitState between TurnIn and this close. Lua events are only delivered
-			// inside a pump, so with straight-line code here no offer handler can fire in this gap — which
-			// is the whole reason this close is safe OUTSIDE the ownership scope (closing a frame declines
-			// whatever it held). Add a pump here and a share delivered in that window gets closed = lost.
-			CloseQuestFrames();
-
-			if (outcome == QuestInteractOutcome.Success)
-				Logging.Write("VibeParty: Turned in '{0}' at {1}.", title, go.Name);
-			else
-				// No failure tally: the quest leaving our log is the only success signal, and the shared
-				// visit throttle keeps a transient miss from becoming a hot loop. A PERSISTENT failure here
-				// means the DB ender is wrong — that must stay visible in the log, not be latched away.
-				Logging.Write("VibeParty: '{0}' did not turn in at {1} ({2}) — retrying after the visit throttle.",
-					title, go.Name, outcome);
-			SetTurnInCooldown(go.Guid);   // the ONE generic entity-visit throttle, shared with NPCs
-			_goTurnInObj = null;
-		}
-
 		// Gate + NPC resolution in ONE pass: sets _turnInNpc for the children this tick (avoids re-scanning the
 		// object manager per child lambda). Cheap checks first so most ticks bail before the OM scan.
 		private static bool WantTurnIn()
@@ -3208,6 +3180,17 @@ namespace VibeParty
 			var logIds = new HashSet<uint>();
 			foreach (var pq in StyxWoW.Me.QuestLog.GetAllQuests())
 				if (pq != null) logIds.Add(pq.Id);
+
+			// A quest LEAVING our log is the authoritative "we just finished (or dropped) something" edge, and
+			// the server-queried completed set is a derived view of it cached for a MINUTE. Invalidating on the
+			// edge makes that cache SELF-HEALING: no code path can leave it stale by forgetting to credit
+			// itself. Live proof of the alternative — a turn-in that landed but was misreported skipped the
+			// invalidate, and the chained follow-up quest stayed invisible for exactly 60.0s.
+			if (_lastLogIds != null)
+				foreach (uint id in _lastLogIds)
+					if (!logIds.Contains(id)) { Styx.Logic.Questing.QuestLog.InvalidateCompletedQuestCache(); break; }
+			_lastLogIds = logIds;
+
 			var doneSet = new HashSet<uint>(StyxWoW.Me.QuestLog.GetCompletedQuests() ?? Enumerable.Empty<uint>());
 			FollowerQuestLedger.Refresh(_leaderQuests.Keys.ToList(), QuestBlocked, logIds, completed, doneSet);
 
@@ -3376,82 +3359,101 @@ namespace VibeParty
 		// frame WE opened raises QUEST_DETAIL while nobody owns it, the offer handler arms for a frame this
 		// visit is about to handle, and a tick later it answers an already-closed frame. Scoped as a WRAPPER
 		// (same shape as PickUp/TurnIn) so every early return releases ownership by construction.
-		private static void VisitQuestNpc(WoWUnit npc)
+		private static void VisitQuestEntity(WoWObject entity)
 		{
-			using (QuestInteractionCore.Drive()) VisitQuestNpcOwned(npc);
+			using (QuestInteractionCore.Drive()) VisitQuestEntityOwned(entity);
 		}
 
-		// ASK, don't guess: open the frame and read what this NPC actually PRESENTS. Predicting the
-		// worklist (ledger + a "?"-sweep) is what let a GO-ender quest be demanded of a creature and
-		// loop forever on the refusal; a quest the NPC won't serve simply never appears in these lists.
-		private static void VisitQuestNpcOwned(WoWUnit npc)
+		// ASK, don't guess: open the frame and act ONLY on what this entity actually PRESENTS.
+		//
+		// ⛔ THE DIVISION OF AUTHORITY (the design rule this whole path exists to honour):
+		//   the DB/ledger says where to WALK; the FRAME says what to DO. Neither does the other's job.
+		// Everything the SERVER already decides — is it completable, is it available, are the prereqs/level/
+		// exclusive-group satisfied — is answered by the open frame and must NEVER be re-derived from a
+		// cached client view. Re-deriving it is what produced every failure this path has had: gating
+		// turn-ins on the client `isComplete` flag deadlocked "discover the corpse" quests forever (it is
+		// nil for them BY DESIGN — interacting with the ender is what completes them), and gating pickups on
+		// a `GetCompletedQuests`-derived prereq check stalled a chained follow-up for that cache's full 60s.
+		// Only OUR OWN policy is applied here: the leader whitelist and the no-repeatables rule.
+		// Shared by creature NPCs and game objects — the frame flow is identical for both.
+		private static void VisitQuestEntityOwned(WoWObject entity)
 		{
 			LocalPlayer me = StyxWoW.Me;
 			if (me.IsMoving) WoWMovement.MoveStop();
 
-			if (!QuestInteractionCore.OpenInteraction(npc, 0, "VibeParty[quest]"))
+			if (!QuestInteractionCore.OpenInteraction(entity, 0, "VibeParty[quest]"))
 			{
-				NoProgressAtNpc(npc);
+				NoProgressAtNpc(entity);
 				return;
 			}
 
-			Dictionary<uint, string> complete = CompletedQuestsLua();
-			List<QuestWork> wanted = FollowerQuestLedger.BusinessAt(npc.Entry);   // ledger = the WHITELIST screen only
+			bool isGo = entity is WoWGameObject;
+			List<PlayerQuest> held = me.QuestLog.GetAllQuests() ?? new List<PlayerQuest>();
+			// What the DB says this entity offers — a pure title→id map (3.3.5a's greeting API carries no
+			// ids), never a permission. Also the routing intent, kept ONLY to name the collider on a miss.
+			List<QuestWork> offers = FollowerQuestLedger.OffersAt(entity.Entry, isGo);
 			var work = new List<QuestWork>();
 
-			// Turn-ins: actives the NPC flags COMPLETE that our own log also holds complete. Same-title
-			// quests are different ids, so each presented entry consumes ONE candidate id.
-			var byTitle = new Dictionary<string, List<uint>>(StringComparer.OrdinalIgnoreCase);
-			foreach (var kv in complete)
+			// Turn-ins: an active the FRAME flags complete that we actually hold. Ids come from our LIVE quest
+			// log (it carries both id and title, uncached) — no derived completed-set, so a quest whose
+			// completion the log never flags is handled identically to one it does. Same-title quests are
+			// different ids, so each presented entry consumes ONE candidate id.
+			var heldByTitle = new Dictionary<string, List<uint>>(StringComparer.OrdinalIgnoreCase);
+			foreach (PlayerQuest pq in held)
 			{
-				if (!byTitle.TryGetValue(kv.Value, out var ids)) byTitle[kv.Value] = ids = new List<uint>();
-				ids.Add(kv.Key);
+				if (pq == null || FollowerQuestLedger.IsRepeatable((int)pq.Id)) continue;   // policy: never blue quests
+				if (!heldByTitle.TryGetValue(pq.Name, out var ids)) heldByTitle[pq.Name] = ids = new List<uint>();
+				ids.Add(pq.Id);
 			}
 			foreach (QuestInteractionCore.PresentedQuest p in QuestInteractionCore.PresentedActives())
 			{
 				if (!p.IsComplete) continue;
-				if (!byTitle.TryGetValue(p.Title, out var ids) || ids.Count == 0) continue;
+				if (!heldByTitle.TryGetValue(p.Title, out var ids) || ids.Count == 0) continue;
 				work.Add(new QuestWork { QuestId = ids[0], Title = p.Title, TurnIn = true });
 				ids.RemoveAt(0);
 			}
 
-			// Pickups: availables the NPC presents that the ledger also wants here (that join applies the
-			// leader whitelist + class/race/level/prereq screen). Anything else presented is left alone.
+			// Pickups: an available the FRAME offers, mapped back to an id through the DB, then screened by
+			// OUR policy alone (leader whitelist + no repeatables). That the server offered it already proves
+			// its own gates are satisfied.
 			List<QuestInteractionCore.PresentedQuest> presentedAvail = QuestInteractionCore.PresentedAvailables();
 			foreach (QuestInteractionCore.PresentedQuest p in presentedAvail)
-				foreach (QuestWork w in wanted)
-					if (!w.TurnIn && string.Equals(w.Title, p.Title, StringComparison.OrdinalIgnoreCase))
-					{ work.Add(w); break; }
+				foreach (QuestWork o in offers)
+					if (string.Equals(o.Title, p.Title, StringComparison.OrdinalIgnoreCase) && MayPickUp(o.QuestId))
+					{ work.Add(o); break; }
 
-			// Single-quest givers open the DETAIL/PROGRESS panel directly — no gossip or greeting list at
-			// all, so the SHOWN quest is the presented entry.
+			// Single-quest entities open the DETAIL/PROGRESS panel directly — no list at all, and that panel
+			// carries the id, so it needs no title round-trip: holding the quest means this is a turn-in,
+			// otherwise it's an offer.
 			if (work.Count == 0 && QuestFrame.Instance.IsVisible)
 			{
 				uint shown = QuestInteractionCore.ShownQuestId();
-				if (shown != 0 && complete.TryGetValue(shown, out string? st))
-					work.Add(new QuestWork { QuestId = shown, Title = st, TurnIn = true });
-				else if (shown != 0)
-					foreach (QuestWork w in wanted)
-						if (!w.TurnIn && w.QuestId == shown) { work.Add(w); break; }
+				if (shown != 0 && !FollowerQuestLedger.IsRepeatable((int)shown))
+				{
+					if (me.QuestLog.ContainsQuest(shown))
+						work.Add(new QuestWork { QuestId = shown, Title = HeldTitle(held, shown), TurnIn = true });
+					else if (MayPickUp(shown))
+						work.Add(new QuestWork { QuestId = shown, Title = OfferTitle(offers, shown), TurnIn = false });
+				}
 			}
 
 			work.Sort((a, b) => b.TurnIn.CompareTo(a.TurnIn));   // turn-ins first: they unlock chained pickups
 
 			if (work.Count == 0)
 			{
-				// Doctrine rule 5 — NAME THE COLLIDER. The ledger sent us here for a pickup and the server
-				// presented none: a server gate the screen can't see (or title drift). Without this line it's
-				// an invisible 15s walk-back loop; edge-logged, so a standing divergence prints once.
-				string wantedPick = string.Join(", ", wanted.Where(w => !w.TurnIn).Select(w => w.QuestId + " '" + w.Title + "'"));
+				// Doctrine rule 5 — NAME THE COLLIDER. Routing sent us here for a pickup and the server
+				// presented none: a gate the routing screen can't see (or title drift). Diagnostics ONLY —
+				// routing never authorises the action above. Edge-logged, so a standing divergence prints once.
+				string wantedPick = string.Join(", ", RoutedPickups(entity, isGo).Select(w => w.QuestId + " '" + w.Title + "'"));
 				if (wantedPick.Length > 0)
-					VisitDiverged(npc, wantedPick, string.Join(" | ", presentedAvail.Select(p => p.Title)));
-				TiDebug("visit {0} [{1}] status={2}: presents nothing for us — cooldown.", npc.Name, npc.Entry, npc.QuestGiverStatus);
+					VisitDiverged(entity, wantedPick, string.Join(" | ", presentedAvail.Select(p => p.Title)));
+				TiDebug("visit {0} [{1}] status={2}: presents nothing for us — cooldown.", entity.Name, entity.Entry, EntityStatus(entity));
 				CloseQuestFrames();
-				SetTurnInCooldown(npc.Guid);
+				SetTurnInCooldown(entity.Guid);
 				return;
 			}
 
-			TiDebug("visit {0} [{1}] status={2}: {3}", npc.Name, npc.Entry, npc.QuestGiverStatus,
+			TiDebug("visit {0} [{1}] status={2}: {3}", entity.Name, entity.Entry, EntityStatus(entity),
 				string.Join(", ", work.Select(w => (w.TurnIn ? "turnin " : "pickup ") + w.QuestId + " '" + w.Title + "'")));
 
 			int turnedIn = 0, pickedUp = 0, retries = 0;
@@ -3459,46 +3461,94 @@ namespace VibeParty
 			{
 				if (me.Combat) break;   // combat reactivity between per-quest transactions
 				QuestInteractOutcome outcome = w.TurnIn
-					? QuestInteractionCore.TurnIn(npc, (int)w.QuestId, w.Title, "VibeParty[quest]",
+					? QuestInteractionCore.TurnIn(entity, (int)w.QuestId, w.Title, "VibeParty[quest]",
 						ShouldAcceptOffer)
-					: QuestInteractionCore.PickUp(npc, (int)w.QuestId, w.Title, "VibeParty[quest]");
+					: QuestInteractionCore.PickUp(entity, (int)w.QuestId, w.Title, "VibeParty[quest]");
 				switch (outcome)
 				{
 					case QuestInteractOutcome.Success:
 						if (w.TurnIn) turnedIn++; else pickedUp++;
 						break;
 					case QuestInteractOutcome.Retry:
-						retries++;
+						retries++;   // ONLY a transient/reach problem feeds the ladder below
+						break;
+					case QuestInteractOutcome.NotComplete:
+						// The server's own verdict: objectives outstanding. A normal answer, not a failure —
+						// we asked because the frame listed it (or the list was ambiguous), and the server
+						// arbitrated. Must NOT charge the reach ladder, or a multi-quest giver holding one
+						// unfinished quest would be blacklisted for the session.
+						TiDebug("{0}: q{1} '{2}' not completable yet — leaving it.", entity.Name, w.QuestId, w.Title);
 						break;
 					case QuestInteractOutcome.NotOffered:
-						// The NPC LISTED this a moment ago and then wouldn't serve it — a genuine race (the
+						// The entity LISTED this a moment ago and then wouldn't serve it — a genuine race (the
 						// list shifted under us), not a standing condition. Nothing to remember: the next
 						// visit re-reads the list, and if it's really gone it simply won't be picked again.
-						retries++;
-						Logging.Write("VibeParty: {0} listed '{1}' but would not serve it — re-reading its list next visit.", npc.Name, w.Title);
+						Logging.Write("VibeParty: {0} listed '{1}' but would not serve it — re-reading its list next visit.", entity.Name, w.Title);
 						break;
 					case QuestInteractOutcome.NoGiverFlag:
-						_turnInDeadNpc.Add(npc.Guid);
-						Logging.Write("VibeParty: {0} carries no questgiver flag — giving up on it this session.", npc.Name);
-						SetTurnInCooldown(npc.Guid);
+						_turnInDeadNpc.Add(entity.Guid);
+						Logging.Write("VibeParty: {0} carries no questgiver flag — giving up on it this session.", entity.Name);
+						SetTurnInCooldown(entity.Guid);
 						return;
 				}
 			}
 
 			CloseQuestFrames();
 
-			if (turnedIn > 0) Logging.Write("VibeParty: Turned in {0} quest(s) at {1}.", turnedIn, npc.Name);
-			if (pickedUp > 0) Logging.Write("VibeParty: Picked up {0} quest(s) at {1}.", pickedUp, npc.Name);
+			if (turnedIn > 0) Logging.Write("VibeParty: Turned in {0} quest(s) at {1}.", turnedIn, entity.Name);
+			if (pickedUp > 0) Logging.Write("VibeParty: Picked up {0} quest(s) at {1}.", pickedUp, entity.Name);
 
 			if (turnedIn == 0 && pickedUp == 0 && retries > 0)
 			{
-				NoProgressAtNpc(npc);
+				NoProgressAtNpc(entity);
 				return;
 			}
-			_turnInFrameFails.Remove(npc.Guid);
-			_turnInCloseUntil.Remove(npc.Guid);
-			SetTurnInCooldown(npc.Guid);
+			_turnInFrameFails.Remove(entity.Guid);
+			_turnInCloseUntil.Remove(entity.Guid);
+			SetTurnInCooldown(entity.Guid);
 		}
+
+		// OUR policy on accepting an offer the server is already willing to give: it must be one of the
+		// leader's quests (the mirror invariant) and never a repeatable "blue" one (turning it in re-offers
+		// it, so a follower would loop). Deliberately NOT a re-derivation of any server rule.
+		private static bool MayPickUp(uint questId)
+			=> ShouldAcceptOffer(questId) && !FollowerQuestLedger.IsRepeatable((int)questId);
+
+		private static string HeldTitle(List<PlayerQuest> held, uint id)
+		{
+			foreach (PlayerQuest pq in held)
+				if (pq != null && pq.Id == id) return pq.Name;
+			return FollowerQuestLedger.QuestName((int)id);
+		}
+
+		private static string OfferTitle(List<QuestWork> offers, uint id)
+		{
+			foreach (QuestWork o in offers)
+				if (o.QuestId == id) return o.Title;
+			return FollowerQuestLedger.QuestName((int)id);
+		}
+
+		// What ROUTING intended to do here — diagnostics only (the divergence line). Never authorises work.
+		private static List<QuestWork> RoutedPickups(WoWObject entity, bool isGo)
+		{
+			var list = new List<QuestWork>();
+			if (isGo)
+			{
+				foreach (GoWork g in FollowerQuestLedger.GoBusiness)
+					if (g.GoEntry == (int)entity.Entry && !g.TurnIn)
+						list.Add(new QuestWork { QuestId = g.QuestId, Title = g.Title, TurnIn = false });
+			}
+			else
+			{
+				foreach (QuestWork w in FollowerQuestLedger.BusinessAt(entity.Entry))
+					if (!w.TurnIn) list.Add(w);
+			}
+			return list;
+		}
+
+		// The "?" status for the trace line — a WoWUnit exposes the server's marker; a game object has none.
+		private static string EntityStatus(WoWObject entity)
+			=> entity is WoWUnit u ? u.QuestGiverStatus.ToString() : "object";
 
 		private static void CloseQuestFrames()
 		{
@@ -3506,25 +3556,26 @@ namespace VibeParty
 			else if (QuestFrame.Instance.IsVisible) QuestFrame.Instance.Close();
 		}
 
-		// The ONE failure ladder we keep, and it's about REACHING the NPC, not about any quest: the frame
-		// never opened / nothing advanced. A ghost or unreachable NPC must not orbit us forever.
-		private static void NoProgressAtNpc(WoWUnit npc)
+		// The ONE failure ladder we keep, and it's about REACHING the entity, not about any quest: the frame
+		// never opened / nothing advanced. A ghost or unreachable NPC (or an off-mesh object) must not orbit
+		// us forever.
+		private static void NoProgressAtNpc(WoWObject entity)
 		{
-			int fails = _turnInFrameFails.TryGetValue(npc.Guid, out int f) ? f + 1 : 1;
-			_turnInFrameFails[npc.Guid] = fails;
+			int fails = _turnInFrameFails.TryGetValue(entity.Guid, out int f) ? f + 1 : 1;
+			_turnInFrameFails[entity.Guid] = fails;
 			Logging.Write(System.Drawing.Color.Orange,
-				"VibeParty: quest visit at {0} made no progress (attempt {1}) — will retry.", npc.Name, fails);
+				"VibeParty: quest visit at {0} made no progress (attempt {1}) — will retry.", entity.Name, fails);
 			if (fails >= 6)
 			{
-				_turnInDeadNpc.Add(npc.Guid);
-				Logging.Write("VibeParty: {0} has made no progress in {1} visits — giving up on it this session.", npc.Name, fails);
-				PublishAlert(false, "gave up on quest NPC " + npc.Name + " after " + fails + " stalled visits");
+				_turnInDeadNpc.Add(entity.Guid);
+				Logging.Write("VibeParty: {0} has made no progress in {1} visits — giving up on it this session.", entity.Name, fails);
+				PublishAlert(false, "gave up on quest giver " + entity.Name + " after " + fails + " stalled visits");
 			}
 			int cooldownSec = fails >= 2 ? 120 : 15;
-			_turnInCooldown[npc.Guid] = DateTime.UtcNow.AddSeconds(cooldownSec);
+			_turnInCooldown[entity.Guid] = DateTime.UtcNow.AddSeconds(cooldownSec);
 			// The retry must approach tighter (NeedTightApproach); +12s of travel budget past the
 			// cooldown covers the ≤1yd close-in plus a stuck-jiggle before the fallback kicks in.
-			_turnInCloseUntil[npc.Guid] = DateTime.UtcNow.AddSeconds(cooldownSec + 12);
+			_turnInCloseUntil[entity.Guid] = DateTime.UtcNow.AddSeconds(cooldownSec + 12);
 		}
 
 		// Turn-in trace — the debug channel that answers "what the fuck did the quester decide".
@@ -3632,15 +3683,14 @@ namespace VibeParty
 		private static readonly HashSet<ulong> _turnInDeadNpc = new HashSet<ulong>();                       // no-flag / 6 stalled visits → dead for the session
 		private static readonly ConcurrentDictionary<uint, DateTime> _leaderPickupLog = new ConcurrentDictionary<uint, DateTime>();   // npc entry → leader accepted a quest there (hub thread writes)
 		private static bool _leaderSignal;                        // LeaderAtQuestGiver(), cached per tick by WantTurnIn
+		private static HashSet<uint>? _lastLogIds;                // previous tick's held quests — the log-shrank edge
 		private static WoWUnit? _turnInNpc;                       // resolved once per tick by WantTurnIn(), committed while usable
 		private const float TurnInVicinity = 40f;                 // hub radius for the nearest-giver fallback
 
-		// Game-object turn-ins: the ender is a WoWGameObject with no "?" — driven off the ledger, bounded
-		// by a reachability probe up front (CanReach) and the shared entity-visit throttle. No per-quest
-		// failure memory: a refusal we can't attempt in the first place never needs remembering.
-		private static WoWGameObject? _goTurnInObj;               // resolved per tick by WantGoTurnIn()
-		private static uint _goTurnInQuestId;
-		private static string _goTurnInTitle = "";
+		// Game-object quest visits: the ender/giver is a WoWGameObject with no "?" — driven off the ledger,
+		// bounded by a reachability probe up front (CanReach) and the shared entity-visit throttle. No
+		// per-quest failure memory: a refusal we can't attempt in the first place never needs remembering.
+		private static WoWGameObject? _goVisitObj;                // resolved per tick by WantGoVisit()
 		private static readonly Dictionary<uint, DateTime> _starterCooldown = new Dictionary<uint, DateTime>();
 		private static WoWItem? _starterItemCache;
 		private static DateTime _starterCheckAt = DateTime.MinValue;
