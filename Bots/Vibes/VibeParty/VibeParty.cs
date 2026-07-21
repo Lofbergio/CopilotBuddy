@@ -563,6 +563,11 @@ namespace VibeParty
 					if (int.TryParse(tok.Substring(6), out int free)) mp.FreeBags = free;
 					continue;
 				}
+				if (tok.StartsWith("#errand:"))   // self-directed vendor run in progress
+				{
+					mp.Errand = tok.Substring(8);
+					continue;
+				}
 				int c = tok.IndexOf(':');
 				if (c <= 0) continue;
 				if (uint.TryParse(tok.Substring(0, c), out uint qid) && qid != 0)
@@ -615,6 +620,7 @@ namespace VibeParty
 					_progressReportAt = DateTime.Now;
 					ReportProgress(bus);
 				}
+				ErrandReportTick();         // vendor/repair/train runs are self-directed — tell the leader
 				_partyWater?.WaterTick();   // requester: ask for water when low; mage: advertise + clean stale (throttled)
 				LoadMailboxesIfMapChanged();   // keep the synthetic profile's mailboxes on the current map
 				MirrorLeaderTeleportTick();    // LFG: match the leader's inside/outside-the-dungeon state
@@ -702,6 +708,46 @@ namespace VibeParty
 			return _leaderBagsOpen;
 		}
 
+		// ──────────────────────────────────────────────────────────────────────
+		// Errand visibility — a follower peeling off to a vendor is SELF-directed
+		// ──────────────────────────────────────────────────────────────────────
+
+		// NeedToSell/Repair/Train fire on the follower's own judgement, so the leader gets no say and
+		// no notice — the follower just walks off mid-grind. Reported BOTH ways on purpose: as live
+		// STATE (heartbeat → the Main tab's errand line, which stands until the errand ends) and as an
+		// EDGE (one alert → the dock, visible from every tab). The state line is what makes it
+		// un-missable; the alert is what makes the moment visible.
+		private static PoiType _errandPoi = PoiType.None;
+		private static string _errand = "";
+
+		private static string ErrandWord(PoiType t)
+		{
+			switch (t)
+			{
+				case PoiType.Sell:   return "selling";
+				case PoiType.Repair: return "repairing";
+				case PoiType.Buy:    return "restocking";
+				case PoiType.Train:  return "training";
+				case PoiType.Mail:   return "mailing";
+				default:             return "";
+			}
+		}
+
+		private static void ErrandReportTick()
+		{
+			PoiType t = BotPoi.Current.Type;
+			string word = ErrandWord(t);
+			if (word.Length == 0) t = PoiType.None;   // every non-errand POI is the same "no errand" state
+			if (t == _errandPoi) return;
+			_errandPoi = t;
+			_errand = word;
+			if (word.Length == 0) return;             // errand ended — the line clearing says it
+			string where = BotPoi.Current.Name ?? "";
+			Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] errand: {0}{1}.", word,
+				where.Length > 0 ? " at " + where : "");
+			PublishAlert(false, where.Length > 0 ? word + " at " + TruncRaw(where, 16) : word);
+		}
+
 		// Follower (bot thread): report per-quest completion. Sent even OUTSIDE a party — the report
 		// is also the liveness/name beacon AutoInviteTick's roster is built from. Completion comes
 		// from the LUA quest log (CompletedQuestsLua) — PlayerQuest.IsCompleted false-positives on
@@ -714,6 +760,7 @@ namespace VibeParty
 			System.Text.StringBuilder sb = new System.Text.StringBuilder();
 			sb.Append("#rez:").Append(ComputeCanRezNow() ? '1' : '0').Append(':').Append(MyRole()).Append(';');
 			sb.Append("#bags:").Append(StyxWoW.Me.FreeBagSlots).Append(';');
+			if (_errand.Length > 0) sb.Append("#errand:").Append(_errand).Append(';');
 			foreach (PlayerQuest q in quests)
 			{
 				if (q == null || q.Id == 0) continue;
@@ -1059,6 +1106,7 @@ namespace VibeParty
 			public bool CanRez;                 // reported: alive + knows its class res + ready (mana / druid reagent+CD)
 			public string Role = "Damage";      // reported LfgRole intent (Tank/Healer/Damage) — rez target priority
 			public int FreeBags = -1;           // reported free bag slots; -1 = never reported (old client / first beat)
+			public string Errand = "";          // self-directed vendor errand in progress ("selling"…), "" = none
 			public readonly Dictionary<uint, bool> QuestComplete = new Dictionary<uint, bool>();
 		}
 
@@ -1558,6 +1606,10 @@ namespace VibeParty
 			// (re-injection would orphan a ghost frame; #1 injected-UI trap). The slash handler and the
 			// UISpecialFrames de-registration run BEFORE the reuse early-return, so a bot restart both
 			// installs the current handler and fixes up a frame injected by an older build.
+			// ⚠ REUSE IS VERSION-GATED (PANEL_VER, below): a WoW client outlives many CB restarts, so a
+			// layout change used to be invisible until the user relogged or /reload'd — the panel kept
+			// the old frame AND its old Apply. The stamp is a hash of this whole script, so ANY edit
+			// here rebuilds the frame automatically; there is no version constant to forget to bump.
 			// ⚠ DELIBERATELY NOT in UISpecialFrames: Escape is the user's "clear every other panel"
 			// reflex, and it must not take the command panel down with them. /vp is the only toggle.
 			// Every show — first injection, bot restart, /vp — re-centers: the panel must land where
@@ -1576,6 +1628,11 @@ namespace VibeParty
 				for i = #UISpecialFrames, 1, -1 do
 					if UISpecialFrames[i] == 'VibePartyPanel' then tremove(UISpecialFrames, i) end
 				end
+				if VibePartyPanel and VibePartyPanel.vpVer ~= PANEL_VER then
+					VibePartyPanel:Hide()   -- 3.3.5 cannot destroy a frame; orphan it (inert: hidden, no OnUpdate)
+					VibePartyPanel = nil
+					VibePartyPanelApply = nil
+				end
 				if VibePartyPanel then
 					VibePartyPanel:ClearAllPoints()
 					VibePartyPanel:SetPoint('CENTER', UIParent, 'CENTER', 0, 0)
@@ -1583,6 +1640,7 @@ namespace VibeParty
 					return
 				end
 				local f = CreateFrame('Frame', 'VibePartyPanel', UIParent)
+				f.vpVer = PANEL_VER
 				f:SetWidth(340) f:SetHeight(240)
 				f:SetPoint('CENTER', UIParent, 'CENTER', 0, 0)
 				f:SetFrameStrata('MEDIUM') f:SetToplevel(true) f:SetClampedToScreen(true)
@@ -1659,7 +1717,10 @@ namespace VibeParty
 				wt:SetText('|cff707070Water: no mage report|r')
 				local bg2 = mp:CreateFontString('VibePartyPanelBagsText', 'OVERLAY', 'GameFontHighlightSmall')
 				bg2:SetPoint('TOPLEFT', 0, -60) bg2:SetPoint('TOPRIGHT', 0, -60) bg2:SetJustifyH('LEFT')
-				bg2:SetText('|cff707070Bags: no reports|r')
+				bg2:SetText('')
+				local er = mp:CreateFontString('VibePartyPanelErrandText', 'OVERLAY', 'GameFontHighlightSmall')
+				er:SetPoint('TOPLEFT', 0, -74) er:SetPoint('TOPRIGHT', 0, -74) er:SetJustifyH('LEFT')
+				er:SetText('')
 				local fd = mp:CreateFontString('VibePartyPanelFeedText', 'OVERLAY', 'GameFontHighlightSmall')
 				fd:SetPoint('TOPLEFT', 0, -76) fd:SetPoint('BOTTOMRIGHT', 0, 0)
 				fd:SetJustifyH('LEFT') fd:SetJustifyV('TOP') fd:SetSpacing(2)
@@ -1686,13 +1747,31 @@ namespace VibeParty
 				qt:SetPoint('TOPLEFT', 0, 0) qt:SetPoint('BOTTOMRIGHT', 0, 0)
 				qt:SetJustifyH('LEFT') qt:SetJustifyV('TOP') qt:SetSpacing(3)
 				qt:SetText('|cff707070no quest data yet|r')
-				function VibePartyPanelApply(head, feed, alerts, quests, plain, disp, infos, water, bags)
+				function VibePartyPanelApply(head, feed, alerts, quests, plain, disp, infos, water, bags, errand)
 					VibePartyPanelHeadText:SetText(head)
-					VibePartyPanelFeedText:SetText(feed)
 					VibePartyPanelAlertText:SetText(alerts)
 					VibePartyPanelQuestText:SetText(quests)
-					if water then VibePartyPanelWaterText:SetText(water) end
-					if bags then VibePartyPanelBagsText:SetText(bags) end
+					-- Status lines COLLAPSE when they have nothing to say and the feed takes the space
+					-- back. C# counts the same non-empty lines to pick how many feed lines it sends —
+					-- one line too many spills past the divider (FontStrings are not clipped here).
+					local y = -46
+					local function status(fs, txt)
+						if txt and txt ~= '' then
+							fs:ClearAllPoints()
+							fs:SetPoint('TOPLEFT', 0, y) fs:SetPoint('TOPRIGHT', 0, y)
+							fs:SetText(txt) fs:Show()
+							y = y - 14
+						else
+							fs:SetText('') fs:Hide()
+						end
+					end
+					status(VibePartyPanelWaterText, water)
+					status(VibePartyPanelBagsText, bags)
+					status(VibePartyPanelErrandText, errand)
+					VibePartyPanelFeedText:ClearAllPoints()
+					VibePartyPanelFeedText:SetPoint('TOPLEFT', 0, y - 2)
+					VibePartyPanelFeedText:SetPoint('BOTTOMRIGHT', 0, 0)
+					VibePartyPanelFeedText:SetText(feed)
 					for i = 1, 4 do
 						local row = _G['VibePartyPanelSlot'..i]
 						if plain[i] then row.member = plain[i] row.name:SetText(disp[i]) row.info:SetText(infos[i]) row:Show()
@@ -1702,7 +1781,18 @@ namespace VibeParty
 				SelectTab(1)
 				DEFAULT_CHAT_FRAME:AddMessage('VibeParty: control panel ready - /vp toggles (opens centered).')
 				""";
-			Lua.DoString(lua);
+			Lua.DoString("local PANEL_VER = " + PanelScriptVersion(lua) + "\n" + lua);
+		}
+
+		// FNV-1a over the generated panel script — a stable layout identity across processes (unlike
+		// string.GetHashCode, which .NET randomises per process and would rebuild the frame on every
+		// bot start). Edit anything about the panel and the stamp changes; touch nothing and a client
+		// that has already been injected keeps its frame.
+		private static uint PanelScriptVersion(string script)
+		{
+			uint h = 2166136261;
+			foreach (char c in script) { h ^= c; h *= 16777619; }
+			return h;
 		}
 
 		// Panel clicks land in a Lua-side queue (buttons can't call C#); the leader drains it here
@@ -1749,7 +1839,7 @@ namespace VibeParty
 		private static string ComposeWaterLine()
 		{
 			string? raw = _waterStatusRaw;
-			if (string.IsNullOrEmpty(raw)) return "|cff707070Water: no mage report|r";
+			if (string.IsNullOrEmpty(raw)) return "";   // no mage in the party — collapse, don't print a placeholder
 			int bar = raw.IndexOf('|');
 			string stock = bar < 0 ? raw : raw.Substring(0, bar);
 			var names = new List<string>();
@@ -1789,13 +1879,26 @@ namespace VibeParty
 
 			int worst = tight[0].Free;
 			if (worst > BagsTightThreshold)
-				return "|cff909090Bags:|r |cff40ff40all clear|r |cff707070(lowest " + worst + ")|r";
+				return "";   // nothing to warn about — collapse the line, the feed gets the space
 			// Name everyone at the worst level — "Eagan 0" when three are full is a misleading readout.
 			var names = new List<string>();
 			foreach (var t in tight)
 				if (t.Free <= BagsTightThreshold && names.Count < 4) names.Add(t.Name);
 			return "|cff909090Bags:|r " + (worst == 0 ? "|cffff4040" : "|cffffc040")
 				+ EscLua(TruncRaw(string.Join(", ", names), 30)) + "|r |cffd0d0d0" + worst + " free|r";
+		}
+
+		// Main-tab errand line: who has peeled off to a vendor right now. Empty string when nobody has —
+		// the Lua side then COLLAPSES the line and hands its 14px back to the alert feed.
+		private static string ComposeErrandLine()
+		{
+			long cutoff = DateTime.UtcNow.Ticks - TimeSpan.FromSeconds(ProgressLivenessSeconds).Ticks;
+			var busy = new List<string>();
+			foreach (var kv in _partyProgress.OrderBy(k => k.Value.Name))
+				if (kv.Value.LastUtcTicks >= cutoff && kv.Value.Errand.Length > 0 && !string.IsNullOrEmpty(kv.Value.Name))
+					busy.Add(TruncRaw(kv.Value.Name, 10) + " " + kv.Value.Errand);
+			if (busy.Count == 0) return "";
+			return "|cff909090Errand:|r |cffffc040" + EscLua(TruncRaw(string.Join(", ", busy), 40)) + "|r";
 		}
 
 		private void UpdateLeaderPanelTick()
@@ -1886,10 +1989,13 @@ namespace VibeParty
 			// Feeds: newest first — mid-combat the leader reads "what just fired" top-down.
 			// ⚠ The line count is a HARD box fit, not a preference: 3.3.5 FontStrings are not clipped
 			// by their parent frame, so an extra line spills over the divider into the alert dock.
-			// MainFeedLines = the 68px left under the quick buttons + status lines, at ~14px a line.
-			const int MainFeedLines = 4;
+			// The status lines collapse when empty (Lua `status()`), so the feed's box grows with them:
+			// 96px under the quick buttons, minus 14 per shown status line, at ~14px a line.
+			string water = ComposeWaterLine(), bags = ComposeBagsLine(), errand = ComposeErrandLine();
+			int statusLines = (water.Length > 0 ? 1 : 0) + (bags.Length > 0 ? 1 : 0) + (errand.Length > 0 ? 1 : 0);
+			int mainFeedLines = (96 - 14 * statusLines) / 14;
 			var feed = new System.Text.StringBuilder();
-			for (int i = _alerts.Count - 1; i >= 0 && i >= _alerts.Count - MainFeedLines; i--)
+			for (int i = _alerts.Count - 1; i >= 0 && i >= _alerts.Count - mainFeedLines; i--)
 				feed.Append(AlertLine(_alerts[i])).Append("\\n");
 			if (feed.Length == 0) feed.Append("|cff707070no alerts yet|r");
 
@@ -1903,8 +2009,8 @@ namespace VibeParty
 			string infoArr = string.Join(",", infos.Select(n => "'" + n + "'"));
 			Lua.DoString("if VibePartyPanelApply and VibePartyPanel:IsShown() then VibePartyPanelApply('"
 				+ head + "', '" + feed + "', '" + dock + "', '" + questsOut + "', {"
-				+ plainArr + "}, {" + dispArr + "}, {" + infoArr + "}, '" + ComposeWaterLine()
-				+ "', '" + ComposeBagsLine() + "') end");
+				+ plainArr + "}, {" + dispArr + "}, {" + infoArr + "}, '" + water
+				+ "', '" + bags + "', '" + errand + "') end");
 		}
 
 		private void OnPartyChat(WoWChat.ChatLanguageSpecificEventArgs e)
