@@ -18,6 +18,10 @@ namespace Bots.Vibes.Shared
         Retry,
         /// <summary>The server says no: the quest isn't in this NPC's gossip list here/now.</summary>
         NotOffered,
+        /// <summary>The server's progress panel says this quest is NOT completable yet (objectives
+        /// outstanding). A normal answer to "is there work here", NOT a failure — callers must not
+        /// charge a reach/failure ladder for it.</summary>
+        NotComplete,
         /// <summary>The entity carries no questgiver npcflag at all — it can never serve this quest
         /// until a world action enables it. Callers decide how permanent that is.</summary>
         NoGiverFlag,
@@ -206,8 +210,19 @@ namespace Bots.Vibes.Shared
                 if (!me.QuestLog.ContainsQuest((uint)questId))
                     break;   // landed
 
+                // ⚠ A CLOSED FRAME IS NOT PROOF OF FAILURE — the frame closes ON SUCCESS too, and the quest
+                // log routinely lags it past the 400ms below. Returning Retry here reported a LANDED turn-in
+                // as a miss (live: Bart 08:04:39.671 "made no progress", then "We leveled up!" 11ms later),
+                // which skipped InvalidateCompletedQuestCache and left the completed set stale for its full
+                // 60s server cache — stalling the chained follow-up quest by a minute and wrongly charging
+                // the NoProgressAtNpc ladder. The LOG is the truth (this class's own rule): give it the same
+                // bounded window every other state read gets before calling this a miss.
                 if (!QuestFrame.Instance.IsVisible)
-                    return QuestInteractOutcome.Retry;   // frame died without completion — re-approach
+                {
+                    if (WaitState(() => !me.QuestLog.ContainsQuest((uint)questId), LogUpdateTimeoutMs))
+                        break;   // landed — the frame closed because it completed
+                    return QuestInteractOutcome.Retry;   // genuinely died without completing — re-approach
+                }
 
                 // Greeting panel (fresh window, or the window fell back to it after another quest):
                 // select our active entry by title; absence is the server's "not turn-in-able here".
@@ -243,9 +258,9 @@ namespace Bots.Vibes.Shared
                 if (Lua.GetReturnVal<int>(
                         "return ((QuestFrameProgressPanel and QuestFrameProgressPanel:IsShown()) and not IsQuestCompletable()) and 1 or 0", 0U) == 1)
                 {
-                    Logging.WriteDebug("{0} turn-in q{1}: server says NOT completable — closing, retry.", logTag, questId);
+                    Logging.WriteDebug("{0} turn-in q{1}: server says NOT completable — nothing to do here yet.", logTag, questId);
                     QuestFrame.Instance.Close();
-                    return QuestInteractOutcome.Retry;
+                    return QuestInteractOutcome.NotComplete;
                 }
 
                 // Reward choice — ONLY while the offer-reward panel is shown: GetNumQuestChoices()
