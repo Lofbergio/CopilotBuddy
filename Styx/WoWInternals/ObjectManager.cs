@@ -37,7 +37,7 @@ namespace Styx.WoWInternals
         private const uint IsInGameOffset = 0xBD0792;  // 12388242U
         
         // Performance counter for aura timing
-        private const uint PerformanceCounterOffset = 0x0086AE20; // 8830240
+        private const uint PerformanceCounterOffset = 0x0086AE20; // 8826400
         
         #endregion
         

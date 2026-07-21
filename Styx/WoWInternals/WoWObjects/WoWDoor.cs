@@ -108,7 +108,7 @@ namespace Styx.WoWInternals.WoWObjects
 
         /// <summary>
         /// Builds the assembler for CanOpenNow.
-        /// Calls the native WoW function at offset 7412176 (0x00713050).
+        /// Calls the native WoW function at offset 7412176 (0x007119D0).
         /// </summary>
         private void BuildCanOpenNowAsm(ExecutorRand executor, uint reason, uint interactDistance)
         {

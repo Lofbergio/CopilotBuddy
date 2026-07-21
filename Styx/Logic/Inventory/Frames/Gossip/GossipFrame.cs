@@ -24,7 +24,7 @@ namespace Styx.Logic.Inventory.Frames.Gossip
 
         /// <summary>
         /// Gets available quest info at index.
-        /// Address: 5809760 (0x58A2E0) - CGQuestInfo_C__GetAvailableQuestInfoFromIndex
+        /// Address: 5809760 (0x58A660) - CGQuestInfo_C__GetAvailableQuestInfoFromIndex
         /// </summary>
         private static GossipQuestEntry GetAvailableQuestInfo(int index)
         {
@@ -49,7 +49,7 @@ namespace Styx.Logic.Inventory.Frames.Gossip
 
         /// <summary>
         /// Gets active quest info at index.
-        /// Address: 5810000 (0x58A3D0) - CGQuestInfo_C__GetActiveQuestFromIndex
+        /// Address: 5810000 (0x58A750) - CGQuestInfo_C__GetActiveQuestFromIndex
         /// </summary>
         private static GossipQuestEntry GetActiveQuestInfo(int index)
         {

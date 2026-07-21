@@ -27,14 +27,9 @@ namespace Styx.Logic
 
         public static bool LootFrameIsOpen
         {
-            get
-            {
-                // HB 3.3.5a: pure memory read at 0xBFACD8 (12560600).
-                // Non-zero = loot frame is shown.  No Lua needed.
-                Memory? wow = ObjectManager.Wow;
-                if (wow == null) return false;
-                return wow.Read<uint>((uint)0xBFACD8) != 0U;
-            }
+            // Delegates to LootFrame so the looting-object address has exactly one owner; the copy
+            // that used to live here had drifted to an address nothing in the client references.
+            get { return Inventory.Frames.LootFrame.LootFrame.Instance.IsVisible; }
         }
 
         protected override void DefaultRemoveTargetsFilter(List<WoWObject> objects)

@@ -24,7 +24,7 @@ namespace Styx.WoWInternals
 		// Stop movement function - FROM HB 3.3.5a GlobalOffsets.cs
 		private const uint CTM_Stop_Function = 0x0072B3A0;  // 7517088 decimal (CGPlayer_C__ClickToMoveStop)
 		// Click to move base address - FROM HB 3.3.5a (0xCA11D8)
-		private const uint ClickToMove_Base = 0xCA11D8;  // 13243864 decimal
+		private const uint ClickToMove_Base = 0xCA11D8;  // 13242840 decimal
 		// CTM TurnSpeed field — offset 0x4 from CTM_Base. Confirmed via IDA on 3.3.5a 12340.
 		// CGPlayer_C__ClickToMove overwrites this with CMovementData.TurnSpeed on each call,
 		// so we write our custom value AFTER the native call.

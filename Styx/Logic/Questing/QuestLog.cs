@@ -23,7 +23,7 @@ namespace Styx.Logic.Questing
 
 		/// <summary>
 		/// Number of quests in the log.
-		/// Address: 12729040 (0xC24350)
+		/// Address: 12729040 (0xC23AD0)
 		/// </summary>
 		public uint QuestCount
 		{
@@ -134,7 +134,7 @@ namespace Styx.Logic.Questing
 
 		/// <summary>
 		/// Abandons a quest by ID.
-		/// Address: 12729052 (0xC2435C), Call: 6163648 (0x5E1CC0)
+		/// Address: 12729052 (0xC23ADC), Call: 6163648 (0x5E0CC0)
 		/// </summary>
 		public void AbandonQuestById(uint questId)
 		{

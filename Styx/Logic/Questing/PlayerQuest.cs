@@ -46,7 +46,7 @@ namespace Styx.Logic.Questing
 
 		/// <summary>
 		/// Gets completion info for this quest.
-		/// Address: 12729088 (0xC24380)
+		/// Address: 12729088 (0xC23B00)
 		/// </summary>
 		public WoWQuestCompletionInfo GetCompletionInfo()
 		{

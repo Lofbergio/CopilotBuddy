@@ -16,8 +16,8 @@ namespace Styx.Logic.Questing
 		// its "11337204" comment already pointed at 0xACFDF4) walked into garbage. Matches StyxWoW.cs:270.
 		private const uint CompletedQuestsPtr = 0xACFDF4; // 11337204
 
-		// CGQuestLog__GetQuestIDByIndex function address (3.3.5a 12340)
-		private const uint CGQuestLogGetQuestIDByIndex = 0x5E3E40; // 6174784
+		// Must stay aliased to Patchables — a hand-copied literal here had drifted to a mid-function address.
+		private const uint CGQuestLogGetQuestIDByIndex = (uint)Patchables.GlobalOffsets.CGQuestLog__GetQuestIdByIndex;
 
 		/// <summary>
 		/// Gets all completed quest IDs for the current character.

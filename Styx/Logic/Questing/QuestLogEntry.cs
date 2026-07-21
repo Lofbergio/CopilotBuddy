@@ -5,7 +5,7 @@ namespace Styx.Logic.Questing
 	/// <summary>
 	/// Quest log entry structure (20 bytes).
 	/// Layout: Id(4) + State(4) + ObjectiveRequiredCounts(8) + Time(4) = 20 bytes.
-	/// Read from address 12728252 (0xC23F3C).
+	/// Read from address 12728252 (0xC237BC).
 	/// WoW 3.3.5a build 12340.
 	/// </summary>
 	[StructLayout(LayoutKind.Sequential)]

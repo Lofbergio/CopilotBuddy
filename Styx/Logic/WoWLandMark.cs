@@ -81,7 +81,7 @@ namespace Styx.Logic
 
         /// <summary>
         /// Gets WorldState value by calling native function
-        /// Offset: 5541136 (0x00548810) - UIParent::GetWorldState
+        /// Offset: 5541136 (0x00548D10) - UIParent::GetWorldState
         /// </summary>
         private static uint GetWorldState(uint stateId)
         {

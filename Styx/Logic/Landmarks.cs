@@ -9,19 +9,19 @@ namespace Styx.Logic
 {
     /// <summary>
     /// Manages map landmarks/POIs for 3.3.5a
-    /// Offsets: NumMapLandmarks at 12488416 (0x00BE8260), LandmarkArray at 12488476 (0x00BE829C)
+    /// Offsets: NumMapLandmarks at 12488416 (0x00BE8EE0), LandmarkArray at 12488476 (0x00BE8F1C)
     /// </summary>
     public class Landmarks
     {
         public readonly List<WoWLandMark> LandmarkList = new List<WoWLandMark>();
 
         /// <summary>
-        /// Offset: 0x00BE8260 (12488416) - NumMapLandmarks counter
+        /// Offset: 0x00BE8EE0 (12488416) - NumMapLandmarks counter
         /// </summary>
         private const uint NumMapLandmarksOffset = 12488416;
         
         /// <summary>
-        /// Offset: 0x00BE829C (12488476) - Landmark array base
+        /// Offset: 0x00BE8F1C (12488476) - Landmark array base
         /// </summary>
         private const uint LandmarkArrayOffset = 12488476;
         

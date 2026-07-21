@@ -4,7 +4,7 @@ namespace Styx.Logic.Questing
 {
 	/// <summary>
 	/// Quest completion info structure (48 bytes).
-	/// Read from address 12729088 (0xC24380) - array of 25 entries.
+	/// Read from address 12729088 (0xC23B00) - array of 25 entries.
 	/// </summary>
 	[StructLayout(LayoutKind.Sequential, Size = 48)]
 	public struct WoWQuestCompletionInfo

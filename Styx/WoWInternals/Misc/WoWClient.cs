@@ -31,7 +31,7 @@ namespace Styx.WoWInternals.Misc
 		{
 			get
 			{
-				// 3.3.5a offset: 0x00C7B1F4 = 13081844, sub offset 11860
+				// 3.3.5a offset: 0x00C7B1F4 = 13087220, sub offset 11860
 				return ObjectManager.Wow.Read<NetStats>(new uint[] { 0x00C7B1F4, 11860 });
 			}
 		}
