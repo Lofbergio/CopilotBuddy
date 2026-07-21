@@ -764,9 +764,9 @@ namespace Styx.WoWInternals.WoWObjects
 
         #region Party & Raid Members
 
-        // 3.3.5a static addresses for party/raid
-        private const uint PartyMemberGuidsPtr = 0xBD1DD8;   // 12393944 - Party member GUIDs (5 slots * 8 bytes)
-        private const uint RaidMemberPtrsPtr = 0xBECFC8;     // 12505032 - Raid member pointers (40 slots * 4 bytes)
+        // Party GUIDs 12392776 (0xBD1948, 5 slots * 8 bytes); raid member pointers 12498280
+        // (0xBEB568, 40 slots * 4 bytes). Both are used inline below and confirmed by their xref
+        // density in the client; two unused constants here held addresses the client never touches.
 
         /// <summary>
         /// Gets the GUID of a party member by index (0-4).
@@ -781,7 +781,7 @@ namespace Styx.WoWInternals.WoWObjects
 
         /// <summary>
         /// Gets the GUID of a party member by index (0-3).
-        /// Ported from HB 3.3.5a - Address 12393944 (0xBD1DD8)
+        /// Ported from HB 3.3.5a - Address 12392776 (0xBD1948)
         /// </summary>
         public ulong GetPartyMemberGuid(int index)
         {
@@ -804,7 +804,7 @@ namespace Styx.WoWInternals.WoWObjects
 
         /// <summary>
         /// Gets the GUID of a raid member by index (0-39).
-        /// Ported from HB 3.3.5a - Address 12505032 (0xBECFC8)
+        /// Ported from HB 3.3.5a - Address 12498280 (0xBEB568)
         /// </summary>
         public ulong GetRaidMemberGuid(int index)
         {
