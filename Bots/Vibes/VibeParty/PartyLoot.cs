@@ -186,8 +186,18 @@ namespace VibeParty
 				// Held too long without clearing it (bag full / can't loot) → give up + blacklist (§9 redo-loop cap).
 				if (now - leaseSince > TimeSpan.FromSeconds(MaxHold).Ticks)
 				{
-					_blacklist[lease] = now + TimeSpan.FromSeconds(BlacklistTtl).Ticks;
-					Logging.Write("[PartyLoot] giving up object {0} after {1}s (blacklisted locally).", lease, MaxHold);
+					// WHY we could not finish decides the response. BAGS FULL is not a bad object, it is a
+					// bad US — the chest still holds loot we own, and blacklisting it for BlacklistTtl locks
+					// us out of our own drop for two minutes. Release it WITHOUT blacklisting so it can be
+					// retaken the moment there is room (a sell/mail errand, or the in-instance clearout).
+					// Only a genuine redo-loop (held, lootable, and we DO have space) earns the blacklist.
+					bool bagsFull = StyxWoW.Me.FreeBagSlots == 0;
+					if (!bagsFull)
+						_blacklist[lease] = now + TimeSpan.FromSeconds(BlacklistTtl).Ticks;
+					Logging.Write("[PartyLoot] giving up object {0} after {1}s — {2}.", lease, MaxHold,
+						bagsFull
+							? "BAGS FULL, released but NOT blacklisted (retake it once there is room)"
+							: "blacklisted locally for " + BlacklistTtl + "s");
 					ReleaseMine(lease);
 					return;
 				}
