@@ -2534,15 +2534,15 @@ namespace Styx.WoWInternals.WoWObjects
 
         #region Pending Cursor Spell
 
-        // Offsets for pending cursor spell (3.3.5a)
-        // SpellTargetMode - indicates if we're in targeting mode: 0x00CEC1CC
-        // SpellTargetSpellId - the spell ID being targeted: 0x00CEC1D0
-        private const uint SpellTargetModePtr = 0x00CEC1CC;
-        private const uint SpellTargetSpellIdPtr = 0x00CEC1D0;
+        // 0xD3F4E4 holds a POINTER to the pending-cast object, not a mode flag: the client's own
+        // SpellIsTargeting is `cmp [0xD3F4E4], 0; setne al` (sub_7FD620), and the id accessor is
+        // `mov eax,[0xD3F4E4]; mov eax,[eax+0x20]` (sub_7FD630). The 4.3.4-era pair this used
+        // (0xCEC1CC/0xCEC1D0) is dead in 3.3.5a -- both read garbage, so this always returned null.
+        private const uint PendingCastPtr = 0x00D3F4E4;
+        private const uint PendingCastSpellIdOffset = 0x20;
 
         /// <summary>
         /// Gets the spell currently awaiting target selection (null if none).
-        /// Ported from HB 4.3.4.
         /// </summary>
         public WoWSpell? CurrentPendingCursorSpell
         {
@@ -2550,9 +2550,10 @@ namespace Styx.WoWInternals.WoWObjects
             {
                 if (Memory == null)
                     return null;
-                if (Memory.Read<uint>(SpellTargetModePtr) == 0U)
+                uint pendingCast = Memory.Read<uint>(PendingCastPtr);
+                if (pendingCast == 0U)
                     return null;
-                int spellId = Memory.Read<int>(SpellTargetSpellIdPtr);
+                int spellId = Memory.Read<int>(pendingCast + PendingCastSpellIdOffset);
                 if (spellId <= 0)
                     return null;
                 return WoWSpell.FromId(spellId);
