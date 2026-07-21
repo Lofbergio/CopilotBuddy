@@ -272,6 +272,13 @@ namespace Styx.Logic.BehaviorTree
 		/// </summary>
 		private static async Task<bool> InGameCheckAsync()
 		{
+			// "Only hook this location for relogging purposes" — this IS the relog hook. Must run on
+			// the in-game path too: the Relogger's recovery state can only CLEAR inside Tick() when it
+			// sees in-game, and its own timer defers while the bot runs — ticking only when not in
+			// game leaves a zoning-engaged recovery latched (clock accruing) for the rest of the run.
+			// Cheap when idle; RunTickBody's auto-stop stands down while it recovers.
+			Relogging.Relogger.Tick();
+
 			if (StyxWoW.IsInWorld)
 			{
 				_notInWorld.Reset();
@@ -295,11 +302,6 @@ namespace Styx.Logic.BehaviorTree
 					Logging.Write("Still not in game after {0}s.", sec);
 				}
 			}
-
-			// "Only hook this location for relogging purposes" — this IS the relog hook.
-			// Drives the glue login on the worker thread while the bot stays alive;
-			// RunTickBody's auto-stop stands down while it recovers.
-			Relogging.Relogger.Tick();
 
 			return true; // not in game → skip tick
 		}
