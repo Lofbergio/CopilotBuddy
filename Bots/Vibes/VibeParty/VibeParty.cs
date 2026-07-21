@@ -323,6 +323,17 @@ namespace VibeParty
 				return;   // cast in flight — FollowLeader's cast-hold keeps us planted
 			}
 
+			HearthWindowTick();
+		}
+
+		// The armed hearth window, executed. Split out of the mirror because it is the UNIVERSAL half:
+		// the leader has no leader to mirror, but a #hearth order arms the same window on it and the
+		// same retry rules apply (deferred by combat/cast, landed = attempted + stone on cooldown).
+		private static void HearthWindowTick()
+		{
+			var me = StyxWoW.Me;
+			if (me == null || !me.IsValid) return;
+			if (IsHearthCast(me.CastingSpellId)) return;   // our cast is already in flight
 			if (DateTime.UtcNow >= _hearthPendingUntil) return;
 			if (me.Dead || me.IsGhost || me.Combat || me.IsCasting) return;   // window retries once these clear
 
@@ -547,6 +558,11 @@ namespace VibeParty
 					if (f.Length >= 2) { mp.CanRez = f[0] == "1"; mp.Role = f[1]; }
 					continue;
 				}
+				if (tok.StartsWith("#bags:"))   // free bag slots — the usual reason a follower stalls
+				{
+					if (int.TryParse(tok.Substring(6), out int free)) mp.FreeBags = free;
+					continue;
+				}
 				int c = tok.IndexOf(':');
 				if (c <= 0) continue;
 				if (uint.TryParse(tok.Substring(0, c), out uint qid) && qid != 0)
@@ -586,6 +602,7 @@ namespace VibeParty
 				QuestAbandonSyncTick(bus);  // abandoned (NOT completed) quests propagate to the party
 				ShowLeaderCommandPanel();     // inject the addon-style control panel once attached + in world
 				DrainPanelOrdersTick(bus);    // panel button clicks → PartyBus "Order" messages
+				HearthWindowTick();           // the leader's own #hearth order (no mirror — nobody to mirror)
 				AlertDrainTick();             // follower alerts: strip data + OOM raid warning (fires even with the panel hidden)
 				UpdateLeaderPanelTick();      // push live roster/quests/alerts into the panel (~2s, panel-shown gated)
 				if ((DateTime.Now - _rezBrokerAt).TotalSeconds >= 2) { _rezBrokerAt = DateTime.Now; RezBrokerTick(bus); }  // party-rez broker (runs while dead)
@@ -696,6 +713,7 @@ namespace VibeParty
 			var completed = CompletedQuestsLua();
 			System.Text.StringBuilder sb = new System.Text.StringBuilder();
 			sb.Append("#rez:").Append(ComputeCanRezNow() ? '1' : '0').Append(':').Append(MyRole()).Append(';');
+			sb.Append("#bags:").Append(StyxWoW.Me.FreeBagSlots).Append(';');
 			foreach (PlayerQuest q in quests)
 			{
 				if (q == null || q.Id == 0) continue;
@@ -950,11 +968,25 @@ namespace VibeParty
 		// (the follower heartbeat carries its name). Localhost hub ⇒ only our own toons can be on it.
 		private DateTime _inviteTickAt = DateTime.MinValue;
 		private readonly Dictionary<ulong, DateTime> _invitedAt = new Dictionary<ulong, DateTime>();
+		// A leavegroup order is in flight — see the empty-party gate below. Released by world state
+		// (the party actually emptied), never by a timer or an attempt count.
+		private bool _disbanding;
 
 		private void AutoInviteTick()
 		{
 			if ((DateTime.Now - _inviteTickAt).TotalSeconds < 5) return;
 			_inviteTickAt = DateTime.Now;
+			// Disband in progress: re-inviting while members are still dropping would rebuild the
+			// SAME group and leave the dungeon bound. Wait for a genuinely empty party — that is the
+			// state the reset depends on — then reform immediately (the 15s spam throttle guards a
+			// party that never formed, not a deliberate regroup).
+			if (_disbanding)
+			{
+				if (StyxWoW.Me.PartyMembers.Count > 0) return;
+				_disbanding = false;
+				_invitedAt.Clear();
+				Logging.Write(System.Drawing.Color.MediumSeaGreen, "[VibeParty] party disbanded — reforming a fresh group.");
+			}
 			if (StyxWoW.Me.IsInRaid) return;
 			if (StyxWoW.Me.PartyMembers.Count >= 4) return;
 
@@ -1026,6 +1058,7 @@ namespace VibeParty
 			public long LastUtcTicks;
 			public bool CanRez;                 // reported: alive + knows its class res + ready (mana / druid reagent+CD)
 			public string Role = "Damage";      // reported LfgRole intent (Tank/Healer/Damage) — rez target priority
+			public int FreeBags = -1;           // reported free bag slots; -1 = never reported (old client / first beat)
 			public readonly Dictionary<uint, bool> QuestComplete = new Dictionary<uint, bool>();
 		}
 
@@ -1446,7 +1479,7 @@ namespace VibeParty
 		private static readonly (string Cmd, string Desc, bool Self)[] LeaderCommands =
 		{
 			("vendor",            "run the whole errand: sell + repair + mail", false),
-			("hearth",            "everyone uses their hearthstone",            false),
+			("hearth",            "everyone uses their hearthstone",            true),
 			("forcesell",         "force a sell run",                           false),
 			("forcerepair",       "force a repair run",                         false),
 			("forcemail",         "force a mail run",                           false),
@@ -1459,6 +1492,7 @@ namespace VibeParty
 			("clearpoi",          "drop the followers active POI",              false),
 			("enterdungeon",      "LFG teleport into the dungeon",              false),
 			("leavedungeon",      "LFG teleport out",                           false),
+			("leavegroup",        "disband the party (resets the dungeon)",     true),
 			("leavebattleground", "leave the battleground",                     false),
 			("dance",             "morale",                                     false),
 		};
@@ -1489,16 +1523,21 @@ namespace VibeParty
 			if (_leaderPanelShown) return;
 			_leaderPanelShown = true;
 
-			// Orders reference tab: 16 commands as 2 columns of 8 flat buttons, description on hover.
+			// Orders reference tab: the command table in 2 columns of flat buttons, description on
+			// hover. The grid SIZES ITSELF to LeaderCommands (pitch shrinks to fit the 184px content
+			// area) — a hardcoded row count silently pushes the next command added into the alert dock.
+			const int OrdersGridHeight = 184;   // page frame: TOPLEFT 8,-52 → BOTTOMRIGHT -8,44 on a 280px panel
 			var rows = new System.Text.StringBuilder();
+			int gridRows = (LeaderCommands.Length + 1) / 2;
+			int pitch = Math.Min(22, OrdersGridHeight / gridRows);
 			int idx = 0;
 			foreach (var (cmd, desc, _) in LeaderCommands)
 			{
-				int col = idx / 8, row = idx % 8;
+				int col = idx / gridRows, row = idx % gridRows;
 				idx++;
 				rows.Append($$$"""
-					do local b = Btn(cp, 158, 20, '|cff7fd5ff{{{cmd}}}|r')
-					b:SetPoint('TOPLEFT', {{{col * 166}}}, {{{-row * 22}}})
+					do local b = Btn(cp, 158, {{{pitch - 2}}}, '|cff7fd5ff{{{cmd}}}|r')
+					b:SetPoint('TOPLEFT', {{{col * 166}}}, {{{-row * pitch}}})
 					b.text:ClearAllPoints() b.text:SetPoint('LEFT', 6, 0)
 					b:SetScript('OnClick', function() Send('{{{cmd}}}') end)
 					b:SetScript('OnEnter', function() GameTooltip:SetOwner(b, 'ANCHOR_RIGHT') GameTooltip:SetText('{{{desc}}}') GameTooltip:Show() end)
@@ -1586,18 +1625,23 @@ namespace VibeParty
 				al:SetPoint('BOTTOMLEFT', 8, 7) al:SetPoint('BOTTOMRIGHT', -8, 7) al:SetHeight(30)
 				al:SetJustifyH('LEFT') al:SetJustifyV('BOTTOM') al:SetSpacing(2)
 				al:SetText('|cff707070no alerts yet|r')
-				local money = {{'Vendor','vendor'},{'Hearth','hearth'},{'Follow','follow'},{'Hold','wait'}}
-				for i = 1, 4 do
-					local b = Btn(mp, 78, 24, money[i][1])
-					b:SetPoint('TOPLEFT', (i - 1) * 82, 0)
-					local order = money[i][2]
+				local quick = {
+					{'Vendor','vendor'},   {'Hearth','hearth'},    {'Follow','follow'},   {'Hold','wait'},
+					{'Mount','mountup'},   {'Dismount','dismount'},{'Leave Dg','leavedungeon'},{'Leave Grp','leavegroup'}}
+				for i = 1, 8 do
+					local b = Btn(mp, 78, 24, quick[i][1])
+					b:SetPoint('TOPLEFT', ((i - 1) % 4) * 82, -math.floor((i - 1) / 4) * 28)
+					local order = quick[i][2]
 					b:SetScript('OnClick', function() Send(order) end)
 				end
 				local wt = mp:CreateFontString('VibePartyPanelWaterText', 'OVERLAY', 'GameFontHighlightSmall')
-				wt:SetPoint('TOPLEFT', 0, -30) wt:SetPoint('TOPRIGHT', 0, -30) wt:SetJustifyH('LEFT')
+				wt:SetPoint('TOPLEFT', 0, -62) wt:SetPoint('TOPRIGHT', 0, -62) wt:SetJustifyH('LEFT')
 				wt:SetText('|cff707070Water: no mage report|r')
+				local bg2 = mp:CreateFontString('VibePartyPanelBagsText', 'OVERLAY', 'GameFontHighlightSmall')
+				bg2:SetPoint('TOPLEFT', 0, -78) bg2:SetPoint('TOPRIGHT', 0, -78) bg2:SetJustifyH('LEFT')
+				bg2:SetText('|cff707070Bags: no reports|r')
 				local fd = mp:CreateFontString('VibePartyPanelFeedText', 'OVERLAY', 'GameFontHighlightSmall')
-				fd:SetPoint('TOPLEFT', 0, -46) fd:SetPoint('BOTTOMRIGHT', 0, 0)
+				fd:SetPoint('TOPLEFT', 0, -98) fd:SetPoint('BOTTOMRIGHT', 0, 0)
 				fd:SetJustifyH('LEFT') fd:SetJustifyV('TOP') fd:SetSpacing(3)
 				fd:SetText('|cff707070alerts appear here, newest first|r')
 				{{{rows}}}
@@ -1622,12 +1666,13 @@ namespace VibeParty
 				qt:SetPoint('TOPLEFT', 0, 0) qt:SetPoint('BOTTOMRIGHT', 0, 0)
 				qt:SetJustifyH('LEFT') qt:SetJustifyV('TOP') qt:SetSpacing(3)
 				qt:SetText('|cff707070no quest data yet|r')
-				function VibePartyPanelApply(head, feed, alerts, quests, plain, disp, infos, water)
+				function VibePartyPanelApply(head, feed, alerts, quests, plain, disp, infos, water, bags)
 					VibePartyPanelHeadText:SetText(head)
 					VibePartyPanelFeedText:SetText(feed)
 					VibePartyPanelAlertText:SetText(alerts)
 					VibePartyPanelQuestText:SetText(quests)
 					if water then VibePartyPanelWaterText:SetText(water) end
+					if bags then VibePartyPanelBagsText:SetText(bags) end
 					for i = 1, 4 do
 						local row = _G['VibePartyPanelSlot'..i]
 						if plain[i] then row.member = plain[i] row.name:SetText(disp[i]) row.info:SetText(infos[i]) row:Show()
@@ -1702,6 +1747,35 @@ namespace VibeParty
 			if (names.Count > 0)
 				line += " |cff909090-|r |cffffc040" + EscLua(TruncRaw(string.Join(", ", names), 24)) + " waiting|r";
 			return line;
+		}
+
+		// Main-tab bags line: the tightest bags in the party, because a full-bag follower silently stops
+		// looting and the leader has no other way to see it. The leader reads its OWN slots locally
+		// (Publish never delivers to the sender), followers report #bags in the heartbeat. Members that
+		// have never reported are simply absent — no placeholder that reads as "0 free".
+		// DISPLAY threshold only — nothing acts on it. The vendor tree's own trigger is the profile's
+		// MinFreeBagSlots (0 on the synthetic profile, i.e. it reacts when bags are ALREADY full), so the
+		// readout deliberately warns earlier: ~one loot-heavy pull of lead time.
+		private const int BagsTightThreshold = 4;
+
+		private static string ComposeBagsLine()
+		{
+			long cutoff = DateTime.UtcNow.Ticks - TimeSpan.FromSeconds(ProgressLivenessSeconds).Ticks;
+			var tight = new List<(string Name, int Free)> { (StyxWoW.Me.Name, (int)StyxWoW.Me.FreeBagSlots) };
+			foreach (var kv in _partyProgress)
+				if (kv.Value.LastUtcTicks >= cutoff && kv.Value.FreeBags >= 0 && !string.IsNullOrEmpty(kv.Value.Name))
+					tight.Add((kv.Value.Name, kv.Value.FreeBags));
+			tight.Sort((a, b) => a.Free != b.Free ? a.Free.CompareTo(b.Free) : string.CompareOrdinal(a.Name, b.Name));
+
+			int worst = tight[0].Free;
+			if (worst > BagsTightThreshold)
+				return "|cff909090Bags:|r |cff40ff40all clear|r |cff707070(lowest " + worst + ")|r";
+			// Name everyone at the worst level — "Eagan 0" when three are full is a misleading readout.
+			var names = new List<string>();
+			foreach (var t in tight)
+				if (t.Free <= BagsTightThreshold && names.Count < 4) names.Add(t.Name);
+			return "|cff909090Bags:|r " + (worst == 0 ? "|cffff4040" : "|cffffc040")
+				+ EscLua(TruncRaw(string.Join(", ", names), 30)) + "|r |cffd0d0d0" + worst + " free|r";
 		}
 
 		private void UpdateLeaderPanelTick()
@@ -1803,7 +1877,8 @@ namespace VibeParty
 			string infoArr = string.Join(",", infos.Select(n => "'" + n + "'"));
 			Lua.DoString("if VibePartyPanelApply and VibePartyPanel:IsShown() then VibePartyPanelApply('"
 				+ head + "', '" + feed + "', '" + dock + "', '" + questsOut + "', {"
-				+ plainArr + "}, {" + dispArr + "}, {" + infoArr + "}, '" + ComposeWaterLine() + "') end");
+				+ plainArr + "}, {" + dispArr + "}, {" + infoArr + "}, '" + ComposeWaterLine()
+				+ "', '" + ComposeBagsLine() + "') end");
 		}
 
 		private void OnPartyChat(WoWChat.ChatLanguageSpecificEventArgs e)
@@ -1849,6 +1924,15 @@ namespace VibeParty
 					case "enterdungeon":
 						Logging.Write("VibeParty: Entering Dungeon");
 						Lua.DoString("LFGTeleport(0)");
+						break;
+					case "leavegroup":
+						// Dungeon reset: the instance is bound to the GROUP, so porting out doesn't
+						// free it — the party has to actually dissolve. Everyone drops their own
+						// party (the leader included); the leader's AutoInviteTick reforms a NEW
+						// group once it sees its own party empty.
+						Logging.Write("VibeParty: leavegroup — leaving the party.");
+						_disbanding = true;
+						Lua.DoString("LeaveParty()");
 						break;
 					case "clearpoi":
 						BotPoi.Clear("Leader said so");
