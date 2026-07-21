@@ -68,14 +68,10 @@ namespace Styx.Offsets
 		/// <summary>Pointer to local player name.</summary>
 		public const uint PlayerName = 0x00C79D18;
 
-		/// <summary>Pointer to name cache (for other units).</summary>
-		public const uint NameCacheBase = 0x00C5D940;
-
-		/// <summary>Offset within name cache entry to name string.</summary>
-		public const uint NameCacheNameOffset = 0x21;
-
-		/// <summary>Offset within name cache entry to next entry.</summary>
-		public const uint NameCacheNextOffset = 0xC;
+		// NameCacheBase/NameOffset/NextOffset removed: a Honorbuddy-4.x construct that does not exist
+		// in 3.3.5a. 0x00C5D940 has ZERO references anywhere in the client (Ghidra, indirect included)
+		// and the trio had no readers here. Unit names resolve through WoWCache +
+		// DbNameCache_GetInfoBlockById, which is verified working — use that.
 
 		// ==================== Camera ====================
 		/// <summary>Pointer to world frame (camera parent).</summary>

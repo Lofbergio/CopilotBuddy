@@ -45,7 +45,7 @@ namespace Styx.WoWInternals.WoWObjects
 
         /// <summary>
         /// Memory layout of one GO type slot-mapping entry (HB 3.3.5a Struct64).
-        /// 36 of these are read from 0xA38F90; each maps a GO type to its slot ID array.
+        /// 36 of these are read from 0xA36F30; each maps a GO type to its slot ID array.
         /// </summary>
         [StructLayout(LayoutKind.Sequential)]
         private struct SlotMappingEntry
@@ -508,7 +508,7 @@ namespace Styx.WoWInternals.WoWObjects
         public bool GetDataSlot(uint dataSlot, out int value)
         {
             // HB 3.3.5a port: look up which Properties[] index corresponds to the
-            // requested dataSlot using the per-GO-type slot mapping table at 0xA38F90.
+            // requested dataSlot using the per-GO-type slot mapping table at 0xA36F30.
             WoWCache.WoWCache.GameObjectCacheEntry entry;
             if (!GetCachedInfo(out entry))
             {
@@ -553,7 +553,7 @@ namespace Styx.WoWInternals.WoWObjects
         }
 
         /// <summary>
-        /// Reads the 36-entry slot mapping table from WoW memory at 0xA38F90.
+        /// Reads the 36-entry slot mapping table from WoW memory at 0xA36F30.
         /// Each GO type has its own uint[] of slot IDs that map to Properties[] indices.
         /// Only sets _slotMappingTable on success — stays null on failure so next call retries.
         /// </summary>

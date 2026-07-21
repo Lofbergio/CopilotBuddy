@@ -299,7 +299,7 @@ public class ForcedQuestPickUp : ForcedBehavior
 
     /// <summary>
     /// Comprehensive QuestFrame handler for PickUp.
-    /// Reads CurrentShownQuestId from memory (0xC0E92C) to determine what the NPC is showing.
+    /// Reads CurrentShownQuestId from memory (0xC0D65C) to determine what the NPC is showing.
     /// Handles the case where a turn-in quest opens directly before our pickup quest is available.
     ///
     /// WoW 3.3.5a QuestFrame button layout:

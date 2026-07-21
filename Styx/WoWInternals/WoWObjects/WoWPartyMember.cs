@@ -124,6 +124,10 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
+                WoWPlayer p = ToPlayer();
+                if (p != null)
+                    return p.IsDead;
+
                 var result = Lua.GetReturnVal<int>($"return UnitIsDead('{_unitId}') and 1 or 0", 0);
                 return result == 1;
             }
@@ -238,15 +242,37 @@ namespace Styx.WoWInternals.WoWObjects
 
         #region Health & Power
 
+        // Vitals come from the object manager whenever the member is in range: a descriptor read is a
+        // single ReadProcessMemory, while every Lua call allocates in the game process, assembles a
+        // stub and waits on the game thread. A healer polling four members' HealthPercent was paying
+        // eight frame-synced round-trips per tick. Lua stays as the out-of-range fallback, because the
+        // object manager does not hold units the client has not sent us.
+
         /// <summary>
         /// Gets the current health.
         /// </summary>
-        public uint Health => (uint)Lua.GetReturnVal<int>($"return UnitHealth('{_unitId}')", 0);
+        public uint Health
+        {
+            get
+            {
+                WoWPlayer p = ToPlayer();
+                return p != null ? (uint)p.CurrentHealth
+                                 : (uint)Lua.GetReturnVal<int>($"return UnitHealth('{_unitId}')", 0);
+            }
+        }
 
         /// <summary>
         /// Gets the maximum health.
         /// </summary>
-        public uint HealthMax => (uint)Lua.GetReturnVal<int>($"return UnitHealthMax('{_unitId}')", 0);
+        public uint HealthMax
+        {
+            get
+            {
+                WoWPlayer p = ToPlayer();
+                return p != null ? (uint)p.MaxHealth
+                                 : (uint)Lua.GetReturnVal<int>($"return UnitHealthMax('{_unitId}')", 0);
+            }
+        }
 
         /// <summary>
         /// Gets the health percentage.
@@ -255,25 +281,55 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
-                var max = HealthMax;
-                return max > 0 ? (Health * 100.0 / max) : 0;
+                // One object-manager lookup, not two -- routing through Health/HealthMax would double it.
+                WoWPlayer p = ToPlayer();
+                if (p != null)
+                    return p.HealthPercent;
+
+                uint max = (uint)Lua.GetReturnVal<int>($"return UnitHealthMax('{_unitId}')", 0);
+                if (max == 0) return 0;
+                return Lua.GetReturnVal<int>($"return UnitHealth('{_unitId}')", 0) * 100.0 / max;
             }
         }
 
         /// <summary>
         /// Gets the current power (mana/rage/energy).
         /// </summary>
-        public uint Power => (uint)Lua.GetReturnVal<int>($"return UnitMana('{_unitId}')", 0);
+        public uint Power
+        {
+            get
+            {
+                WoWPlayer p = ToPlayer();
+                return p != null ? (uint)p.CurrentPower
+                                 : (uint)Lua.GetReturnVal<int>($"return UnitMana('{_unitId}')", 0);
+            }
+        }
 
         /// <summary>
         /// Gets the maximum power.
         /// </summary>
-        public uint PowerMax => (uint)Lua.GetReturnVal<int>($"return UnitManaMax('{_unitId}')", 0);
+        public uint PowerMax
+        {
+            get
+            {
+                WoWPlayer p = ToPlayer();
+                return p != null ? (uint)p.MaxPower
+                                 : (uint)Lua.GetReturnVal<int>($"return UnitManaMax('{_unitId}')", 0);
+            }
+        }
 
         /// <summary>
         /// Gets the power type.
         /// </summary>
-        public WoWPowerType PowerType => (WoWPowerType)Lua.GetReturnVal<int>($"return UnitPowerType('{_unitId}')", 0);
+        public WoWPowerType PowerType
+        {
+            get
+            {
+                WoWPlayer p = ToPlayer();
+                return p != null ? p.PowerType
+                                 : (WoWPowerType)Lua.GetReturnVal<int>($"return UnitPowerType('{_unitId}')", 0);
+            }
+        }
 
         #endregion
 
@@ -282,7 +338,14 @@ namespace Styx.WoWInternals.WoWObjects
         /// <summary>
         /// Gets the level.
         /// </summary>
-        public int Level => Lua.GetReturnVal<int>($"return UnitLevel('{_unitId}')", 0);
+        public int Level
+        {
+            get
+            {
+                WoWPlayer p = ToPlayer();
+                return p != null ? p.Level : Lua.GetReturnVal<int>($"return UnitLevel('{_unitId}')", 0);
+            }
+        }
 
         /// <summary>
         /// Gets the class.
@@ -291,6 +354,10 @@ namespace Styx.WoWInternals.WoWObjects
         {
             get
             {
+                WoWPlayer p = ToPlayer();
+                if (p != null)
+                    return p.Class;
+
                 var classFile = Lua.GetReturnVal<string>($"local _, classFile = UnitClass('{_unitId}'); return classFile or ''", 0);
                 return ParseClass(classFile);
             }
