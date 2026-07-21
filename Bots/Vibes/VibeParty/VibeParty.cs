@@ -2901,7 +2901,70 @@ namespace VibeParty
 
 		private static void PruneDangerousCollectibles(List<WoWObject> incoming, HashSet<WoWObject> outgoing)
 		{
-			outgoing.RemoveWhere(o => o is WoWGameObject go && HostileBubbleCovers(go.Location));
+			outgoing.RemoveWhere(o => o is WoWGameObject go
+				&& (HostileBubbleCovers(go.Location) || HostileBubbleOnPathTo(go)));
+		}
+
+		// The object being clear is NOT the same as the WALK being clear. The bubble test above only asks
+		// about the destination, so a chest sitting in a safe corner behind a pack still read as safe and a
+		// follower — usually the rogue going for a locked chest, which is the whole point of the detour —
+		// pathed straight through the pack to reach it. This asks about the CORRIDOR.
+		//
+		// Deliberately applied to every collectible, not just chests: the flaw was never chest-specific.
+		//
+		// Reachability counts as danger: a null/empty path means we cannot get there, and the loot pipeline
+		// would otherwise charge at it in a straight line (the mesh is what knows about the wall).
+		private const float PathProbeStepYards = 8f;      // < the smallest aggro bubble, so nothing is stepped over
+		private const int PathProbeCacheMs = 2000;
+		private static readonly Dictionary<ulong, (DateTime When, bool Blocked)> _pathProbeCache =
+			new Dictionary<ulong, (DateTime, bool)>();
+
+		private static bool HostileBubbleOnPathTo(WoWGameObject go)
+		{
+			// GeneratePath is the expensive part, so the verdict is cached briefly per object — the loot
+			// filter re-runs several times a second and the world does not change that fast.
+			if (_pathProbeCache.TryGetValue(go.Guid, out var cached)
+				&& (DateTime.UtcNow - cached.When).TotalMilliseconds < PathProbeCacheMs)
+				return cached.Blocked;
+
+			bool blocked = ProbePathBlocked(go.Location);
+			_pathProbeCache[go.Guid] = (DateTime.UtcNow, blocked);
+			if (_pathProbeCache.Count > 128) PrunePathProbeCache();
+			return blocked;
+		}
+
+		private static bool ProbePathBlocked(WoWPoint dest)
+		{
+			WoWPoint me = StyxWoW.Me.Location;
+			WoWPoint[] path = Navigator.GeneratePath(me, dest);
+			if (path == null || path.Length == 0) return true;   // unreachable → treat as blocked
+
+			WoWPoint prev = me;
+			foreach (WoWPoint node in path)
+			{
+				// Waypoints can sit far apart, so walk BETWEEN them: a mesh corner either side of a camp
+				// would otherwise straddle the pack and both test clear.
+				float seg = prev.Distance(node);
+				int steps = (int)(seg / PathProbeStepYards);
+				for (int i = 1; i <= steps; i++)
+				{
+					float t = (float)i / (steps + 1);
+					var mid = new WoWPoint(prev.X + (node.X - prev.X) * t,
+					                       prev.Y + (node.Y - prev.Y) * t,
+					                       prev.Z + (node.Z - prev.Z) * t);
+					if (HostileBubbleCovers(mid)) return true;
+				}
+				if (HostileBubbleCovers(node)) return true;
+				prev = node;
+			}
+			return false;
+		}
+
+		private static void PrunePathProbeCache()
+		{
+			DateTime cut = DateTime.UtcNow.AddMilliseconds(-PathProbeCacheMs);
+			foreach (ulong g in _pathProbeCache.Where(kv => kv.Value.When < cut).Select(kv => kv.Key).ToList())
+				_pathProbeCache.Remove(g);
 		}
 
 		// Quest ground objects come in TWO GO types: chest-loot (LevelBot admits those via LootChests) and
