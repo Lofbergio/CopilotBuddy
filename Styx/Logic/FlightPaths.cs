@@ -116,9 +116,37 @@ namespace Styx.Logic
             StyxWoW.Me.Location.DistanceSqr(TakingPathTo.Location) < 25.0;
 
         /// <summary>
-        /// Path to flight paths XML file
+        /// Path to flight paths XML file — per character PER REALM.
         /// </summary>
-        private static string XmlPath => $"{Logging.ApplicationPath}\\Settings\\FlightPaths_{StyxWoW.Me.Name}.xml";
+        /// <remarks>
+        /// Keying on the NAME alone made same-named characters on different servers share one file, and a
+        /// node the OTHER realm's character had learned read as already-known here: NeedNearbyUpdate never
+        /// fired, the bot never walked to the master, and the flight point stayed undiscovered forever.
+        /// Live 2026-07-21: three followers each carried a level-9 Thelsamar record from another realm and
+        /// stood at that master doing nothing, while the one character without such a record learned it.
+        /// The realm is resolved ONCE per Initialize — an empty mid-session read must never point load and
+        /// save at different files. Legacy name-only path is used only when the realm is genuinely unknown.
+        /// </remarks>
+        private static string _realmTag;
+
+        private static string RealmTag
+        {
+            get
+            {
+                if (_realmTag == null)
+                {
+                    string realm = StyxWoW.Me?.RealmName ?? string.Empty;
+                    foreach (char c in Path.GetInvalidFileNameChars())
+                        realm = realm.Replace(c, '_');
+                    _realmTag = realm.Replace(" ", "");
+                }
+                return _realmTag;
+            }
+        }
+
+        private static string XmlPath => RealmTag.Length > 0
+            ? $"{Logging.ApplicationPath}\\Settings\\FlightPaths_{RealmTag}_{StyxWoW.Me.Name}.xml"
+            : $"{Logging.ApplicationPath}\\Settings\\FlightPaths_{StyxWoW.Me.Name}.xml";
 
         /// <summary>
         /// Reset flight path state
@@ -245,6 +273,7 @@ namespace Styx.Logic
             Lua.Events.AttachEvent("TAXIMAP_OPENED", HandleTaxiMapOpened);
             BotEvents.OnBotStop += args => Reset();
             XmlNodes = new List<XmlFlightNode>();
+            _realmTag = null;   // re-resolve: the relogger can bring us back on a DIFFERENT realm
 
             if (File.Exists(XmlPath))
             {
