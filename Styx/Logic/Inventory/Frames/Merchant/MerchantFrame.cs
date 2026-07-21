@@ -27,7 +27,7 @@ namespace Styx.Logic.Inventory.Frames.Merchant
 
         /// <summary>
         /// The merchant NPC.
-        /// Address: 12559336U (0xBF9BE8)
+        /// Address: 12559336U (0xBFA3E8)
         /// </summary>
         public WoWUnit Merchant
         {
@@ -40,7 +40,7 @@ namespace Styx.Logic.Inventory.Frames.Merchant
 
         /// <summary>
         /// Number of buyback items.
-        /// Address: 12559348U (0xBF9BF4)
+        /// Address: 12559348U (0xBFA3F4)
         /// </summary>
         public int NumBuybackItems
         {
@@ -140,7 +140,7 @@ namespace Styx.Logic.Inventory.Frames.Merchant
 
         /// <summary>
         /// Number of items the merchant sells.
-        /// Address: 12559344U (0xBF9BF0)
+        /// Address: 12559344U (0xBFA3F0)
         /// </summary>
         public int MerchantNumItems
         {
@@ -341,7 +341,7 @@ if ok then return res else return '' end";
 
         /// <summary>
         /// Gets merchant item at specified index.
-        /// Base address: 12554536U (0xBF87A8)
+        /// Base address: 12554536U (0xBF9128)
         /// Item size: 32 bytes
         /// </summary>
         private static MerchantItem GetMerchantItemAtIndex(int index)
@@ -353,7 +353,7 @@ if ok then return res else return '' end";
 
         /// <summary>
         /// Gets a buyback item by index.
-        /// Address: 12554488U (0xBF8778)
+        /// Address: 12554488U (0xBF90F8)
         /// </summary>
         public WoWItem GetBuybackItem(int index)
         {

@@ -94,7 +94,10 @@ class Binary:
 
 
 def scan_mismatches(src):
-    dec = re.compile(r"\b(\d{6,9})\b")
+    # The [uU]? suffix is load-bearing: `12559336U` has no word boundary before the U, so a plain
+    # \b-terminated pattern silently skips every C# unsigned literal -- which hid the whole
+    # MerchantFrame block from the first sweep.
+    dec = re.compile(r"\b(\d{6,9})[uU]?\b")
     hexp = re.compile(r"0x([0-9A-Fa-f]{5,8})\b")
     out = []
     for rel, txt in source_files(src):
@@ -122,7 +125,7 @@ def is_address_context(line, va):
 
 def scan_addresses(src):
     """Every client-range literal used in an address-like context, with its site."""
-    pat = re.compile(r"0x0*([4-9A-Fa-f][0-9A-Fa-f]{5})\b|\b(\d{7,8})\b")
+    pat = re.compile(r"0x0*([4-9A-Fa-f][0-9A-Fa-f]{5})\b|\b(\d{7,8})[uU]?\b")
     sites = collections.defaultdict(list)
     for rel, txt in source_files(src):
         for n, line in enumerate(txt.splitlines(), 1):

@@ -31,8 +31,12 @@ namespace Styx.WoWInternals.Misc
 		{
 			get
 			{
-				// 3.3.5a offset: 0x00C7B1F4 = 13087220, sub offset 11860
-				return ObjectManager.Wow.Read<NetStats>(new uint[] { 0x00C7B1F4, 11860 });
+				// Connection object at 0x00C79CF4 (13081844) — the client's own netstats provider
+				// (sub_6B0970) reads exactly this dword. The old 0x00C7B1F4 was dead: it read 0, so
+				// every field came back zero. Sub-offset 11860 (0x2E54) is confirmed by sub_6320D0,
+				// which reads the counters at +0x2E9C/0x2EA0/0x2EA4 — i.e. 0x2E54 + the struct's
+				// 0x48-byte latency block lands BytesSent on 0x2E9C.
+				return ObjectManager.Wow.Read<NetStats>(new uint[] { 0x00C79CF4, 11860 });
 			}
 		}
 

@@ -1607,10 +1607,11 @@ namespace Styx.WoWInternals.WoWObjects
 
         #region Faction & Reactions
 
-        // Forced reactions array - address in WoW 3.3.5a
-        private const uint ForcedReactionsCountPtr = 0xC20230;  // 12713520U -> 12727440U
-        private const uint ForcedReactionsArrayPtr = 0xC20234;  // 12713524U -> 12727444U
-        private const uint FactionStandingBasePtr = 0xC202F0;   // 12725104U
+        // The hex here had drifted off the decimals beside it and pointed into unreferenced memory
+        // (0xC20230/34/F0 read as zeros). These are the decimals' addresses, each carrying real xrefs.
+        private const uint ForcedReactionsCountPtr = 0xC23490;  // 12727440
+        private const uint ForcedReactionsArrayPtr = 0xC23494;  // 12727444
+        private const uint FactionStandingBasePtr = 0xC22B70;   // 12725104
 
         /// <summary>
         /// Struct for forced reaction entries.
