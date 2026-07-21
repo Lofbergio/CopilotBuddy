@@ -1511,11 +1511,14 @@ namespace VibeParty
 			return false;
 		}
 
-		// Layout (fixed 340x280, adversarially reviewed): 20px title row (brand + live party summary
+		// Layout (fixed 340x240, adversarially reviewed): 20px title row (brand + live party summary
 		// + flat close), 22px full-background tab bar (real click targets — the old text-only tabs
 		// were the complaint), fixed-height content, 2-line alert dock pinned bottom on EVERY tab.
 		// Fixed height on purpose: per-tab resizing dragged the always-on alert dock up and down —
-		// the one element that must never move. Buttons are a flat-dark factory (BACKGROUND texture
+		// the one element that must never move. HEIGHT IS SET BY THE TALLEST TAB, which is Orders —
+		// it went 2 columns × 9 rows → 3 × 6 precisely so the panel could lose 40px, because this
+		// thing lives on screen permanently. Widening Orders again re-inflates every tab.
+		// Buttons are a flat-dark factory (BACKGROUND texture
 		// + free HIGHLIGHT-layer hover); UIPanelButtonTemplate's gold cannot be desaturated on this
 		// client and clashes with the dark skin. ⚠ 3.3.5a has no SetWordWrap/SetMaxLines — every
 		// pushed line is truncated C#-side (TruncRaw) or long text wraps and breaks the fixed rows.
@@ -1524,21 +1527,26 @@ namespace VibeParty
 			if (_leaderPanelShown) return;
 			_leaderPanelShown = true;
 
-			// Orders reference tab: the command table in 2 columns of flat buttons, description on
-			// hover. The grid SIZES ITSELF to LeaderCommands (pitch shrinks to fit the 184px content
-			// area) — a hardcoded row count silently pushes the next command added into the alert dock.
-			const int OrdersGridHeight = 184;   // page frame: TOPLEFT 8,-52 → BOTTOMRIGHT -8,44 on a 280px panel
+			// Orders reference tab: the command table as a grid of flat buttons, description on hover.
+			// The grid SIZES ITSELF to LeaderCommands in BOTH axes (column width and row pitch derive
+			// from the page box) — a hardcoded row count silently pushed the next command added into
+			// the alert dock. 3 columns: the longest label ('leavebattleground') still fits 106px, and
+			// 3-wide is what lets the whole panel be 240 tall instead of 280.
+			const int OrdersGridHeight = 144;   // page box: TOPLEFT 8,-52 → BOTTOMRIGHT -8,44 on a 240px panel
+			const int OrdersGridWidth = 324;    // 340 panel - 8px padding each side
+			const int OrdersCols = 3;
 			var rows = new System.Text.StringBuilder();
-			int gridRows = (LeaderCommands.Length + 1) / 2;
+			int gridRows = (LeaderCommands.Length + OrdersCols - 1) / OrdersCols;
 			int pitch = Math.Min(22, OrdersGridHeight / gridRows);
+			int colPitch = OrdersGridWidth / OrdersCols;
 			int idx = 0;
 			foreach (var (cmd, desc, _) in LeaderCommands)
 			{
 				int col = idx / gridRows, row = idx % gridRows;
 				idx++;
 				rows.Append($$$"""
-					do local b = Btn(cp, 158, {{{pitch - 2}}}, '|cff7fd5ff{{{cmd}}}|r')
-					b:SetPoint('TOPLEFT', {{{col * 166}}}, {{{-row * pitch}}})
+					do local b = Btn(cp, {{{colPitch - 2}}}, {{{pitch - 2}}}, '|cff7fd5ff{{{cmd}}}|r')
+					b:SetPoint('TOPLEFT', {{{col * colPitch}}}, {{{-row * pitch}}})
 					b.text:ClearAllPoints() b.text:SetPoint('LEFT', 6, 0)
 					b:SetScript('OnClick', function() Send('{{{cmd}}}') end)
 					b:SetScript('OnEnter', function() GameTooltip:SetOwner(b, 'ANCHOR_RIGHT') GameTooltip:SetText('{{{desc}}}') GameTooltip:Show() end)
@@ -1575,7 +1583,7 @@ namespace VibeParty
 					return
 				end
 				local f = CreateFrame('Frame', 'VibePartyPanel', UIParent)
-				f:SetWidth(340) f:SetHeight(280)
+				f:SetWidth(340) f:SetHeight(240)
 				f:SetPoint('CENTER', UIParent, 'CENTER', 0, 0)
 				f:SetFrameStrata('MEDIUM') f:SetToplevel(true) f:SetClampedToScreen(true)
 				f:SetBackdrop({bgFile='Interface\\Buttons\\WHITE8X8', edgeFile='Interface\\Buttons\\WHITE8X8', edgeSize=1})
@@ -1641,20 +1649,20 @@ namespace VibeParty
 					{'Vendor','vendor'},   {'Hearth','hearth'},    {'Follow','follow'},   {'Hold','wait'},
 					{'Mount','mountup'},   {'Dismount','dismount'},{'Leave Dg','leavedungeon'},{'Leave Grp','leavegroup'}}
 				for i = 1, 8 do
-					local b = Btn(mp, 78, 24, quick[i][1])
-					b:SetPoint('TOPLEFT', ((i - 1) % 4) * 82, -math.floor((i - 1) / 4) * 28)
+					local b = Btn(mp, 80, 20, quick[i][1])
+					b:SetPoint('TOPLEFT', ((i - 1) % 4) * 81, -math.floor((i - 1) / 4) * 22)
 					local order = quick[i][2]
 					b:SetScript('OnClick', function() Send(order) end)
 				end
 				local wt = mp:CreateFontString('VibePartyPanelWaterText', 'OVERLAY', 'GameFontHighlightSmall')
-				wt:SetPoint('TOPLEFT', 0, -62) wt:SetPoint('TOPRIGHT', 0, -62) wt:SetJustifyH('LEFT')
+				wt:SetPoint('TOPLEFT', 0, -46) wt:SetPoint('TOPRIGHT', 0, -46) wt:SetJustifyH('LEFT')
 				wt:SetText('|cff707070Water: no mage report|r')
 				local bg2 = mp:CreateFontString('VibePartyPanelBagsText', 'OVERLAY', 'GameFontHighlightSmall')
-				bg2:SetPoint('TOPLEFT', 0, -78) bg2:SetPoint('TOPRIGHT', 0, -78) bg2:SetJustifyH('LEFT')
+				bg2:SetPoint('TOPLEFT', 0, -60) bg2:SetPoint('TOPRIGHT', 0, -60) bg2:SetJustifyH('LEFT')
 				bg2:SetText('|cff707070Bags: no reports|r')
 				local fd = mp:CreateFontString('VibePartyPanelFeedText', 'OVERLAY', 'GameFontHighlightSmall')
-				fd:SetPoint('TOPLEFT', 0, -98) fd:SetPoint('BOTTOMRIGHT', 0, 0)
-				fd:SetJustifyH('LEFT') fd:SetJustifyV('TOP') fd:SetSpacing(3)
+				fd:SetPoint('TOPLEFT', 0, -76) fd:SetPoint('BOTTOMRIGHT', 0, 0)
+				fd:SetJustifyH('LEFT') fd:SetJustifyV('TOP') fd:SetSpacing(2)
 				fd:SetText('|cff707070alerts appear here, newest first|r')
 				{{{rows}}}
 				for i = 1, 4 do
@@ -1860,7 +1868,9 @@ namespace VibeParty
 					if (!d) behind.Add(kv.Value.Name);
 				}
 				if (anyReport && behind.Count == 0) { doneQ++; continue; }
-				if (listed >= 9) { overflow++; continue; }
+				// Same hard box fit as the feed: 7 quest lines + the "N done" line + the "(+N more)"
+				// line = 9, all that the 144px page holds before the text spills into the alert dock.
+				if (listed >= 7) { overflow++; continue; }
 				listed++;
 				behind.Sort();
 				string verdict = !anyReport ? "|cff707070no reports|r"
@@ -1874,8 +1884,12 @@ namespace VibeParty
 			if (questsOut.Length == 0) questsOut.Append("|cff707070no quests in your log|r");
 
 			// Feeds: newest first — mid-combat the leader reads "what just fired" top-down.
+			// ⚠ The line count is a HARD box fit, not a preference: 3.3.5 FontStrings are not clipped
+			// by their parent frame, so an extra line spills over the divider into the alert dock.
+			// MainFeedLines = the 68px left under the quick buttons + status lines, at ~14px a line.
+			const int MainFeedLines = 4;
 			var feed = new System.Text.StringBuilder();
-			for (int i = _alerts.Count - 1; i >= 0 && i >= _alerts.Count - 8; i--)
+			for (int i = _alerts.Count - 1; i >= 0 && i >= _alerts.Count - MainFeedLines; i--)
 				feed.Append(AlertLine(_alerts[i])).Append("\\n");
 			if (feed.Length == 0) feed.Append("|cff707070no alerts yet|r");
 
