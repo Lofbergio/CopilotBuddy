@@ -176,12 +176,13 @@ namespace Styx.WoWInternals.WoWObjects
             get
             {
                 if (Memory == null) return 0U;
-                uint mapId = Memory.Read<uint>(MapIdPtr);
-                // 0x00AB63BC is event-written by the client (set on the map-load handshake,
-                // reset to -1 on some transitions / GM teleports that skip it). When it reads the
-                // -1 sentinel, fall back to the live object-manager map id (CurMgr+0xCC).
+                // CurMgr+0xCC is the live, authoritative map id. The 0xAB63BC static is only
+                // event-written on the map-load handshake and can hold a STALE map (an LFG
+                // teleport + relog leaves it on the dungeon map while the character stands in
+                // the world) — read it only while the object manager is down (glue, mid-zoning).
+                uint mapId = ObjectManager.CurrentMapId;
                 if (mapId == 0xFFFFFFFFU)
-                    mapId = ObjectManager.CurrentMapId;
+                    mapId = Memory.Read<uint>(MapIdPtr);
                 return mapId;
             }
         }
