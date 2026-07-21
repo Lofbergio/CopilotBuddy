@@ -172,8 +172,13 @@ namespace VibeParty
 
 			if (lease != 0)
 			{
-				// Object gone (looted by us or despawned) → release, done (grant≠success + loot-success).
-				if (ObjectManager.GetObjectByGuid<WoWGameObject>(lease) == null)
+				// DONE = gone OR no longer offering us loot. A looted chest does NOT vanish — it lingers as
+				// a used object — so an existence-only test read a SUCCESSFUL open as a stuck lease, and the
+				// max-hold below then blacklisted a chest we had just emptied (live 2026-07-21: the rogue
+				// picked a locked chest, looted it, and 30s later "giving up … blacklisted locally").
+				// CanLoot is the same question the claim step asks, so success and eligibility agree.
+				WoWGameObject held = ObjectManager.GetObjectByGuid<WoWGameObject>(lease);
+				if (held == null || !held.CanLoot)
 				{
 					ReleaseMine(lease);
 					return;
