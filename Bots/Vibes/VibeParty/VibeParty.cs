@@ -1522,9 +1522,13 @@ namespace VibeParty
 		// Descriptions stay apostrophe-free (they land inside single-quoted Lua strings).
 		private static bool _leaderPanelShown;
 		// Order names, no prefix — the transport is the PartyBus ("Order" messages), never chat.
-		// Self: the order acts on the leader's own body too. Most orders drive follower-only machinery
-		// (vendor runs, POIs, follow glue) the manually-driven leader must never be dragged into — but
-		// "everyone mounts" means everyone: the clicker riding along is the whole point of the button.
+		// Self: the order acts on the leader's own body too. The dividing line is what the order DRIVES —
+		// follower-only machinery (vendor runs, POIs, follow glue) must never drag the manually-driven
+		// leader in, but an order that is purely an action on your OWN character ("everyone mounts",
+		// "everyone hearths", the LFG/battleground teleports) means everyone, clicker included: that IS
+		// the button. ExecuteOrder self-guards the targeted form, so "leavedungeon Bob" still can't port
+		// the leader. (`dance` stays false on purpose — the only cosmetic order, and the leader is being
+		// played by hand.)
 		private static readonly (string Cmd, string Desc, bool Self)[] LeaderCommands =
 		{
 			("vendor",            "run the whole errand: sell + repair + mail", false),
@@ -1539,10 +1543,10 @@ namespace VibeParty
 			("dismount",          "everyone dismounts",                         true),
 			("interact",          "followers interact with your target",        false),
 			("clearpoi",          "drop the followers active POI",              false),
-			("enterdungeon",      "LFG teleport into the dungeon",              false),
-			("leavedungeon",      "LFG teleport out",                           false),
+			("enterdungeon",      "LFG teleport into the dungeon",              true),
+			("leavedungeon",      "LFG teleport out",                           true),
 			("leavegroup",        "disband the party (resets the dungeon)",     true),
-			("leavebattleground", "leave the battleground",                     false),
+			("leavebattleground", "leave the battleground",                     true),
 			("dance",             "morale",                                     false),
 		};
 
