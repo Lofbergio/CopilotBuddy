@@ -1440,25 +1440,41 @@ namespace VibeParty
 		// Descriptions stay apostrophe-free (they land inside single-quoted Lua strings).
 		private static bool _leaderPanelShown;
 		// Order names, no prefix — the transport is the PartyBus ("Order" messages), never chat.
-		private static readonly (string Cmd, string Desc)[] LeaderCommands =
+		// Self: the order acts on the leader's own body too. Most orders drive follower-only machinery
+		// (vendor runs, POIs, follow glue) the manually-driven leader must never be dragged into — but
+		// "everyone mounts" means everyone: the clicker riding along is the whole point of the button.
+		private static readonly (string Cmd, string Desc, bool Self)[] LeaderCommands =
 		{
-			("vendor",            "run the whole errand: sell + repair + mail"),
-			("hearth",            "everyone uses their hearthstone"),
-			("forcesell",         "force a sell run"),
-			("forcerepair",       "force a repair run"),
-			("forcemail",         "force a mail run"),
-			("forcetrain",        "force a class trainer visit"),
-			("follow",            "clear holds, snap everyone to /follow"),
-			("wait",              "toggle hold-position"),
-			("mountup",           "everyone mounts"),
-			("dismount",          "everyone dismounts"),
-			("interact",          "followers interact with your target"),
-			("clearpoi",          "drop the followers active POI"),
-			("enterdungeon",      "LFG teleport into the dungeon"),
-			("leavedungeon",      "LFG teleport out"),
-			("leavebattleground", "leave the battleground"),
-			("dance",             "morale"),
+			("vendor",            "run the whole errand: sell + repair + mail", false),
+			("hearth",            "everyone uses their hearthstone",            false),
+			("forcesell",         "force a sell run",                           false),
+			("forcerepair",       "force a repair run",                         false),
+			("forcemail",         "force a mail run",                           false),
+			("forcetrain",        "force a class trainer visit",                false),
+			("follow",            "clear holds, snap everyone to /follow",      false),
+			("wait",              "toggle hold-position",                       false),
+			("mountup",           "everyone mounts",                            true),
+			("dismount",          "everyone dismounts",                         true),
+			("interact",          "followers interact with your target",        false),
+			("clearpoi",          "drop the followers active POI",              false),
+			("enterdungeon",      "LFG teleport into the dungeon",              false),
+			("leavedungeon",      "LFG teleport out",                           false),
+			("leavebattleground", "leave the battleground",                     false),
+			("dance",             "morale",                                     false),
 		};
+
+		// "cmd" / "cmd Name" → does the leader run this one on itself? (ExecuteOrder self-guards the
+		// targeted form, so a "mountup Bob" click never mounts the leader.)
+		private static bool IsSelfOrder(string raw)
+		{
+			string token = raw.Trim();
+			int sp = token.IndexOf(' ');
+			if (sp > 0) token = token.Substring(0, sp);
+			foreach (var c in LeaderCommands)
+				if (c.Self && string.Equals(c.Cmd, token, StringComparison.OrdinalIgnoreCase))
+					return true;
+			return false;
+		}
 
 		// Layout (fixed 340x280, adversarially reviewed): 20px title row (brand + live party summary
 		// + flat close), 22px full-background tab bar (real click targets — the old text-only tabs
@@ -1476,7 +1492,7 @@ namespace VibeParty
 			// Orders reference tab: 16 commands as 2 columns of 8 flat buttons, description on hover.
 			var rows = new System.Text.StringBuilder();
 			int idx = 0;
-			foreach (var (cmd, desc) in LeaderCommands)
+			foreach (var (cmd, desc, _) in LeaderCommands)
 			{
 				int col = idx / 8, row = idx % 8;
 				idx++;
@@ -1629,7 +1645,7 @@ namespace VibeParty
 		// prefixed chat as GM-command syntax and eats it).
 		private static DateTime _panelOrderPollAt = DateTime.MinValue;
 
-		private static void DrainPanelOrdersTick(PartyBus bus)
+		private void DrainPanelOrdersTick(PartyBus bus)
 		{
 			if (!_leaderPanelShown) return;
 			if ((DateTime.Now - _panelOrderPollAt).TotalMilliseconds < 250) return;
@@ -1642,6 +1658,9 @@ namespace VibeParty
 				if (string.IsNullOrWhiteSpace(order)) continue;
 				Logging.Write("[VibeParty] panel order: {0}", order);
 				bus.Publish("Order", order);
+				// Self orders run here too — same executor, same tick, so the leader mounts with the
+				// party instead of watching it ride off. (Bot thread: Pulse, so Lua/casts are safe.)
+				if (IsSelfOrder(order)) ExecuteOrder(order);
 			}
 		}
 
