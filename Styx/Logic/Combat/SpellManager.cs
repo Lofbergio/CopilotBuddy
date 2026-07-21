@@ -111,15 +111,45 @@ namespace Styx.Logic.Combat
 		// SpellbookDebounceMs, do a single FORCED rebuild (bypasses the count guard so a same-count rank
 		// upgrade is still caught). Called from the read accessors, so it lands the moment the routine next
 		// queries spell data after the burst settles — no per-event rebuild, no timer/pulse hook needed.
+		// Post-ding verification window (armed by OnLevelUp). A core that grants spells silently on level-up
+		// fires no spell event at all, which froze the book at its login snapshot for a whole session: live
+		// 2026-07-21, a level-13 paladin dinged 14, was granted Blessing of Wisdom, and went on handing the
+		// party's mage and priest Blessing of Might for an hour because HasSpell still answered out of the
+		// level-13 book. A ding is the one moment a silent grant can land, so for a few seconds after it we
+		// verify against the authoritative COUNT rather than trust that some event will arrive. Idle at all
+		// other times — this is a bounded check after a real edge, never a steady poll.
+		private static DateTime _countWatchUntil = DateTime.MinValue;
+		private static DateTime _countCheckedAt = DateTime.MinValue;
+		private const int CountPollMs = 1000;
+		private const int LevelUpWatchSeconds = 15;
+
 		private static void RefreshIfDirty()
 		{
-			if (!_spellbookDirty)
+			if (_spellbookDirty)
+			{
+				if ((DateTime.Now - _spellbookDirtyStamp).TotalMilliseconds < SpellbookDebounceMs)
+					return;
+				_spellbookDirty = false;
+				_lastKnownSpellCount = 0;   // force the rebuild branch in Refresh()
+				Refresh();
 				return;
-			if ((DateTime.Now - _spellbookDirtyStamp).TotalMilliseconds < SpellbookDebounceMs)
+			}
+
+			if (DateTime.Now > _countWatchUntil)
 				return;
-			_spellbookDirty = false;
-			_lastKnownSpellCount = 0;   // force the rebuild branch in Refresh()
-			Refresh();
+			if ((DateTime.Now - _countCheckedAt).TotalMilliseconds < CountPollMs)
+				return;
+			_countCheckedAt = DateTime.Now;
+			if (NumKnownSpells != _lastKnownSpellCount)
+				Refresh();   // granted with no event — Refresh's own guard performs the rebuild
+		}
+
+		/// <summary>Arms the post-ding count check: the grant can land a moment after the level-up packet,
+		/// so we watch the book settle instead of guessing a single delay.</summary>
+		private static void OnLevelUp(object sender, LuaEventArgs e)
+		{
+			_countWatchUntil = DateTime.Now.AddSeconds(LevelUpWatchSeconds);
+			Logging.WriteDebug("[SpellManager] Level up — verifying the spellbook for {0}s", LevelUpWatchSeconds);
 		}
 
 		public static bool CastBarVisible
@@ -976,13 +1006,21 @@ namespace Styx.Logic.Combat
 			_lastKnownSpellCount = 0;
 			Refresh();
 
-			// Idempotent: detach first to avoid duplicate subscriptions (HB 4.3.4 pattern)
+			// Idempotent: detach first to avoid duplicate subscriptions (HB 4.3.4 pattern).
+			// SPELLS_CHANGED is the BROAD signal — it fires whenever the book's contents actually change, so
+			// it covers a talent-granted spell and a silent level-up grant that LEARNED_SPELL_IN_TAB misses.
+			// (ACTIVE_TALENT_GROUP_CHANGED is a dual-spec SWITCH, not spending a point — it never covered
+			// learning a talent.) PLAYER_LEVEL_UP only arms the count check; it does not itself rebuild.
 			Lua.Events.DetachEvent("LEARNED_SPELL_IN_TAB", new LuaEventHandlerDelegate(OnSpellBookChanged));
 			Lua.Events.DetachEvent("ACTIVE_TALENT_GROUP_CHANGED", new LuaEventHandlerDelegate(OnSpellBookChanged));
+			Lua.Events.DetachEvent("SPELLS_CHANGED", new LuaEventHandlerDelegate(OnSpellBookChanged));
+			Lua.Events.DetachEvent("PLAYER_LEVEL_UP", new LuaEventHandlerDelegate(OnLevelUp));
 			Lua.Events.AttachEvent("LEARNED_SPELL_IN_TAB", new LuaEventHandlerDelegate(OnSpellBookChanged));
 			Lua.Events.AttachEvent("ACTIVE_TALENT_GROUP_CHANGED", new LuaEventHandlerDelegate(OnSpellBookChanged));
+			Lua.Events.AttachEvent("SPELLS_CHANGED", new LuaEventHandlerDelegate(OnSpellBookChanged));
+			Lua.Events.AttachEvent("PLAYER_LEVEL_UP", new LuaEventHandlerDelegate(OnLevelUp));
 
-			Logging.WriteDebug("[SpellManager] Subscribed to LEARNED_SPELL_IN_TAB, ACTIVE_TALENT_GROUP_CHANGED");
+			Logging.WriteDebug("[SpellManager] Subscribed to LEARNED_SPELL_IN_TAB, ACTIVE_TALENT_GROUP_CHANGED, SPELLS_CHANGED, PLAYER_LEVEL_UP");
 		}
 
 		/// <summary>
