@@ -980,7 +980,16 @@ namespace Styx.Logic.Combat
 			BotEvents.OnBotStart += OnBotStarted_RefreshSpells;
 			_knownSpells.Clear();
 			_lastKnownSpellCount = 0;
-			Refresh();
+			// Run the handler DIRECTLY rather than waiting for the event to deliver it. Initialize() is
+			// called from inside TreeRoot.OnBotStart, which is itself a BotEvents.OnBotStart handler, and a
+			// multicast delegate snapshots its invocation list at invoke time \u2014 so the subscription above is
+			// skipped for the dispatch that is running right now. On a session that starts the bot once (the
+			// Relogger auto-start does exactly that) OnBotStarted_RefreshSpells would never run at all, and
+			// with it none of the Lua subscriptions it makes: the spellbook then answers out of its login
+			// snapshot for the whole session, so a talent- or trainer-granted spell stays invisible until CB
+			// restarts, and the post-ding count watch never arms because PLAYER_LEVEL_UP is unsubscribed.
+			// Safe to call twice \u2014 it detaches before it attaches.
+			OnBotStarted_RefreshSpells(EventArgs.Empty);
 			Logging.WriteDebug("[SpellManager] Initialize \u2014 subscribed to BotEvents.OnBotStart");
 		}
 
