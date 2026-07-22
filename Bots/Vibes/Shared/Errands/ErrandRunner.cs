@@ -489,7 +489,7 @@ namespace Bots.Vibes.Shared.Errands
         {
             return new PrioritySelector(
                 // A Fly POI is serviced, never planned — see the class doc.
-                new Decorator(ctx => BotPoi.Current.Type == PoiType.Fly,
+                new Decorator(ctx => _flightPaths && BotPoi.Current.Type == PoiType.Fly,
                     new PrioritySelector(
                         new Decorator(ctx => BotPoi.Current.Location.Distance(StyxWoW.Me.Location) > 5.0,
                             new ActionMoveToPoi()),

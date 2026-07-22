@@ -77,6 +77,7 @@ namespace Bots.Vibes.Shared.Errands
             _ammoClass = WoWItemProjectileClass.None;
             _sellable = 0;
             _mailPayload = 0;
+            _warnedAt.Clear();   // a warning issued minutes before a restart must not silence the first one after it
         }
 
         /// <summary>Force the next scan to re-measure. Called after a transaction: we just changed the
