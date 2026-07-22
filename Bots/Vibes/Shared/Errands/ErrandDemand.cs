@@ -147,28 +147,13 @@ namespace Bots.Vibes.Shared.Errands
                 demands.Add(new ErrandDemand(ErrandKind.Train, "new class spells available"));
 
             // --- Mail: a payload is the precondition; bag pressure is what makes it worth a TRIP. ---
-            // ForceMail promotes the demand to HARD, exactly as ForceSell/ForceRepair/ForceBuy/ForceTrainer do
-            // above: an OPPORTUNISTIC mail demand is dropped outright by ErrandStop.InsertMail when the tour is
-            // empty ("no route to be on"), so without this an explicit !forcemail on healthy bags is a silent
-            // no-op — the flag had no reader anywhere in the tree.
             if (_mailPayload > 0 && me.Level >= profile.MinMailLevel)
             {
                 uint total = TotalBagSlots(me);
-                bool pressure = Vendors.ForceMail
-                                || (total > 0 && me.FreeBagSlots < total * MailFreeSlotsPressurePct / 100.0);
+                bool pressure = total > 0 && me.FreeBagSlots < total * MailFreeSlotsPressurePct / 100.0;
                 demands.Add(new ErrandDemand(ErrandKind.Mail,
                     string.Format("{0} item(s) to send, {1}/{2} slots free", _mailPayload, me.FreeBagSlots, total),
                     opportunistic: !pressure));
-            }
-            else if (Vendors.ForceMail)
-            {
-                // Asked to mail with nothing to send. Say WHY and drop the flag — silence reads as a broken
-                // button, and a flag nothing can satisfy would otherwise stay armed for the session.
-                Warn("forcemail", "[Errand] Told to mail but there is nothing to send — {0}.",
-                    !MailboxService.MailingConfigured ? "no MailRecipient is set"
-                    : me.Level < profile.MinMailLevel ? string.Format("level {0} is below MinMailLevel {1}", me.Level, profile.MinMailLevel)
-                    : "nothing in bags is classified Mail (check the loot policy)");
-                Vendors.ForceMail = false;
             }
 
             return demands;
