@@ -19,10 +19,6 @@ namespace Bots.VibeGrinder.Selection
     /// </summary>
     public class SpotSelector
     {
-        // 3.3.5a UNIT_FLAGS to exclude: NON_ATTACKABLE(0x2) | IMMUNE_TO_PC(0x100) | NOT_SELECTABLE(0x2000000).
-        // TODO: confirm against Styx/Patchables/Offsets335.txt if any target type is wrongly excluded.
-        internal const long ImmuneUnitFlagMask = Bots.Vibes.Shared.EngagementGovernor.ImmuneUnitFlagMask;   // one copy, in Shared
-
         private static VibeGrinderSettings S => VibeGrinderSettings.Instance;
 
         private readonly FactionResolver _factions;
@@ -101,7 +97,7 @@ namespace Bots.VibeGrinder.Selection
             int lvlMax = playerLevel + 2;
 
             List<MobSpawn> eligible = GrindMobsRepository.QueryEligibleSpawns(
-                mapId, lvlMin, lvlMax, _factions, ImmuneUnitFlagMask);
+                mapId, lvlMin, lvlMax, _factions);
 
             Logging.Write("[VibeGrinder] Selecting: L{0} band[{1},{2}] map {3}, {4} hostile + {5} neutral factions, {6} eligible spawns.",
                 playerLevel, lvlMin, lvlMax, mapId,
@@ -158,7 +154,7 @@ namespace Bots.VibeGrinder.Selection
                 // average level of nearby ATTACKABLE mobs (not just the band-eligible cluster), so a couple
                 // of band-edge anchors surrounded by lowbies can't win on density alone. Quadratic falloff
                 // the further the local average sits below the player.
-                float avgLevel = GrindMobsRepository.AverageAttackableLevelNear(mapId, c.Centroid, S.GrindRadius, _factions, ImmuneUnitFlagMask);
+                float avgLevel = GrindMobsRepository.AverageAttackableLevelNear(mapId, c.Centroid, S.GrindRadius, _factions);
                 float below = avgLevel > 0f ? Math.Max(0f, playerLevel - avgLevel) : 0f;
                 float levelFactor = 1f / (1f + S.LowLevelSpotPenalty * below * below);
 

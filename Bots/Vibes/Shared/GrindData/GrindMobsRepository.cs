@@ -27,6 +27,20 @@ namespace Bots.Vibes.Shared.GrindData
         // Critters are never grind targets; 8 == CREATURE_TYPE_CRITTER (3.3.5a).
         private const int CritterType = 8;
 
+        /// <summary>
+        /// Vertical band every box query trims to. A cave 40yd under a mesa is not "near" the mesa —
+        /// the same column-query Z bug class the blackspots fixed. It is a property of the query, not
+        /// of the bot asking: a caller that could choose it would only ever choose this.
+        /// </summary>
+        private const float QueryZBand = 40f;
+
+        /// <summary>
+        /// unit_flags that make a creature untargetable/unattackable in practice (NON_ATTACKABLE |
+        /// IMMUNE_TO_PLAYER | NOT_SELECTABLE). Lives here because it screens creature TEMPLATE rows,
+        /// which is what this file owns; every query applied the identical mask when callers passed it.
+        /// </summary>
+        public const long ImmuneUnitFlagMask = 0x2L | 0x100L | 0x2000000L;
+
         private sealed class MobMeta
         {
             public int MinLevel, MaxLevel, Faction, Rank, Type;
@@ -192,7 +206,7 @@ namespace Bots.Vibes.Shared.GrindData
         /// against the attackable set (computed live by FactionResolver).
         /// </summary>
         public static List<MobSpawn> QueryEligibleSpawns(
-            uint mapId, int lvlMin, int lvlMax, FactionResolver factions, long immuneUnitFlagMask)
+            uint mapId, int lvlMin, int lvlMax, FactionResolver factions)
         {
             EnsureInitialized();
             var result = new List<MobSpawn>();
@@ -203,7 +217,7 @@ namespace Bots.Vibes.Shared.GrindData
             {
                 MobMeta m = r.Meta;
                 if (m == null || m.Rank != 0 || m.MinLevel > lvlMax || m.MaxLevel < lvlMin) continue;
-                if (m.Type == CritterType || m.NpcFlag != 0 || (m.UnitFlags & immuneUnitFlagMask) != 0) continue;
+                if (m.Type == CritterType || m.NpcFlag != 0 || (m.UnitFlags & ImmuneUnitFlagMask) != 0) continue;
                 // Two-tier safety lives in FactionResolver (hostile any type; neutral non-humanoid only).
                 if (!factions.IsAttackable(m.Faction, m.Type)) continue;
                 result.Add(new MobSpawn(r.Entry, new WoWPoint(r.X, r.Y, r.Z), m.MaxLevel, m.Rank, m.Faction));
@@ -234,7 +248,7 @@ namespace Bots.Vibes.Shared.GrindData
             EnsureInitialized();
             if (!_isAvailable) return 0;
 
-            float zBand = VibeTuning.Current.SpotQueryZBand;
+            float zBand = QueryZBand;
             float r2 = radius * radius;
             int total = 0;
             foreach (SpawnRec r in GetMap(mapId).InBox(center.X - radius, center.X + radius, center.Y - radius, center.Y + radius))
@@ -252,18 +266,18 @@ namespace Bots.Vibes.Shared.GrindData
         /// surrounded by gray lowbies produce a low average and the spot scores down. 0 if none / DB absent.
         /// </summary>
         public static float AverageAttackableLevelNear(uint mapId, WoWPoint center, float radius,
-            FactionResolver factions, long immuneUnitFlagMask)
+            FactionResolver factions)
         {
             EnsureInitialized();
             if (!_isAvailable || factions == null) return 0f;
 
-            float zBand = VibeTuning.Current.SpotQueryZBand;
+            float zBand = QueryZBand;
             float r2 = radius * radius;
             long levelSum = 0, count = 0;
             foreach (SpawnRec r in GetMap(mapId).InBox(center.X - radius, center.X + radius, center.Y - radius, center.Y + radius))
             {
                 MobMeta m = r.Meta;
-                if (m == null || m.Rank != 0 || m.Type == CritterType || m.NpcFlag != 0 || (m.UnitFlags & immuneUnitFlagMask) != 0)
+                if (m == null || m.Rank != 0 || m.Type == CritterType || m.NpcFlag != 0 || (m.UnitFlags & ImmuneUnitFlagMask) != 0)
                     continue;
                 float dx = r.X - center.X, dy = r.Y - center.Y;
                 if (dx * dx + dy * dy > r2 || Math.Abs(r.Z - center.Z) > zBand)
@@ -290,7 +304,7 @@ namespace Bots.Vibes.Shared.GrindData
             var result = new List<MobSpawn>();
             if (!_isAvailable) return result;
 
-            float zBand = VibeTuning.Current.SpotQueryZBand;
+            float zBand = QueryZBand;
             int dangerLevel = level + dangerMargin;
             foreach (SpawnRec r in GetMap(mapId).InBox(center.X - radius, center.X + radius, center.Y - radius, center.Y + radius))
             {

@@ -61,11 +61,6 @@ namespace Bots.Vibes.Shared
         // "Same elevation" tolerance: a hostile more than this many yards above/below is on a different
         // deck (a cliff/bridge) and can't reach us — verified real protection (Kenata Dabyrie, log). One
         // const, six aggro/bubble checks; a retune must not drift between them.
-        /// <summary>unit_flags bits that make a mob permanently unattackable (non-attackable, immune to
-        /// players, uninteractible). DB truth, shared by spot selection and the live entry veto — one copy
-        /// so a retune can't drift between them.</summary>
-        public const long ImmuneUnitFlagMask = 0x2L | 0x100L | 0x2000000L;
-
         private const float SameLevelZTolerance = 5f;
 
         // Pathability-REJECT strikes per guid (session-scoped): 3 no-path rejects of the same mob = a real
@@ -411,7 +406,7 @@ namespace Bots.Vibes.Shared
             bool immune;
             if (_dbImmuneCache.TryGetValue(entry, out immune)) return immune;
             long flags = GrindMobsRepository.GetTemplateUnitFlags(entry);
-            immune = flags > 0 && (flags & ImmuneUnitFlagMask) != 0;
+            immune = flags > 0 && (flags & GrindMobsRepository.ImmuneUnitFlagMask) != 0;
             _dbImmuneCache[entry] = immune;
             return immune;
         }
