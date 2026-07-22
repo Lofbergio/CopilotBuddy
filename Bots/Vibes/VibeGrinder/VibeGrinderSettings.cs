@@ -194,31 +194,9 @@ namespace Bots.VibeGrinder
         // it doesn't reopen the commitment wobble it's meant to prevent.
         [Browsable(false)] public float PreemptAggroBuffer => 6f;
 
-        // Vendor-run commitment (see VibeGrinder.UpdateVendorRun). Hold vendor mode this long past the last
-        // vendor-POI/combat tick — long enough to ride out a peel fight's POI flip + brief gaps, short enough
-        // that we resume grinding promptly after the transaction. Abort (resume grind) if the errand can't
-        // complete within VendorRunAbortSeconds, so an unreachable/unaffordable vendor never wedges us.
-        [Browsable(false)] public int VendorRunStickySeconds => 4;
-        [Browsable(false)] public int VendorRunAbortSeconds => 300;
-
-        // Vendor safety: reject a resolved vendor with at least VendorHostileThreshold player-HOSTILE creature
-        // spawns within VendorHostileRadius yd — it's in enemy territory (e.g. a repair NPC the DB flags inside
-        // an Alliance camp). The vendor is blacklisted and the resolver picks the next-nearest safe one. 0 disables.
-        [Browsable(false)] public float VendorHostileRadius => 45f;
-        [Browsable(false)] public int VendorHostileThreshold => 3;
-
-        // Stay-in-your-zone: vendor resolution is continent-wide (the Barrens, Dustwallow, Mulgore are all map
-        // 1), so the nearest vendor can sit one zone over in much higher-level country (a lvl-21 toon routed
-        // from the Barrens into Dustwallow Marsh dies crossing the border). Reject a vendor whose surrounding
-        // wild mobs (within VendorAreaScanRadius yd) average more than VendorAreaLevelMargin above our level.
-        // Over-level is the gate, NOT distance — a far SAME-level vendor is fine; nearest-first then keeps us in
-        // the current zone among the level-OK options. 0 margin... keep >=4 so a band-edge zone isn't vetoed.
-        [Browsable(false)] public float VendorAreaScanRadius => 200f;
-        [Browsable(false)] public int VendorAreaLevelMargin => 7;
-        // Topology gate (the Caverns-of-Time Yarley case): reject a vendor whose WALK is this many times
-        // the straight-line distance (and past the floor — short trips never trip). 0 disables.
-        [Browsable(false)] public float VendorDetourFactor => 2.5f;
-        [Browsable(false)] public float VendorDetourMinYd => 600f;
+        // (Errand-trip patience and destination-safety numbers moved out: they are constants every Vibes
+        // bot shares, so they live with the code that reads them — Shared/Errands/ErrandRunner and
+        // Shared/DestinationSafety. A bot must not have to import VibeGrinder to run an errand.)
 
         // ---- Supervisor timings ----
         [Browsable(false)] public int SupervisorIntervalSec => 15;
@@ -365,9 +343,6 @@ namespace Bots.VibeGrinder
         // Selection-side bubble-knot gate: a candidate where ≥ this many hostiles' server aggro bubbles
         // cover one kill position is Dangerous — survival, never level-tapered, never ladder-relaxed.
         [Browsable(false)] public int SpotBubbleDangerCount => 4;
-        // Vertical band for the spot-selection box queries (purity / level-avg / hazards): a cave 40yd
-        // under a mesa is not "near" — the same column-query Z bug class the blackspots already fixed.
-        [Browsable(false)] public float SpotQueryZBand => 40f;
 
         /// <summary>
         /// Fear-meter fight-size cap: max TOTAL mobs in a fight we CHOOSE (target + adds). Confident

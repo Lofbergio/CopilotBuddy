@@ -66,6 +66,25 @@ namespace Bots.Vibes.Shared.Errands
         private static readonly TimeSpan InteractEvery = TimeSpan.FromSeconds(2);
         private DateTime _interactAt = DateTime.MinValue;
 
+        /// <summary>How long a whole trip may take before we give up on it and go back to what we were
+        /// doing. GeneratePath sees neither a transaction the server refuses nor a world wedge, so the
+        /// trip needs a clock of its own — generous, because it covers travel, peel fights and the
+        /// transactions, and its job is to catch a wedge, not to hurry.</summary>
+        private const int TripAbortSeconds = 300;
+
+        /// <summary>Topology gate (the Caverns-of-Time Yarley case): reject a stop whose WALK is this
+        /// many times its straight-line distance, past the floor. Geometrically near is not reachably
+        /// near; short trips never trip it.</summary>
+        private const float DetourFactor = 2.5f;
+        private const float DetourMinYd = 600f;
+
+        /// <summary>Below this a partial path is the mesh being coarse, not the stop being unreachable.</summary>
+        private const float PathShortfallYd = 25f;
+
+        /// <summary>Straight-line distance under which a pathfind is not worth the cost — we are close
+        /// enough that walking there is its own proof.</summary>
+        private const float PathProbeMinYd = 50f;
+
         private int _screenedEntry = -1;   // stop already passed the location screen (re-screened per DISTINCT stop)
 
         // A trip that aborts twice on the same stop has a problem with the STOP, not with retrying:
@@ -186,14 +205,12 @@ namespace Bots.Vibes.Shared.Errands
         /// </summary>
         private bool ValidateTrip(LocalPlayer me)
         {
-            var tuning = VibeTuning.Current;
-
             // Airborne on a taxi: the flight latch owns the tick and a long hop is legitimate.
             if (me.OnTaxi) return true;
 
-            if (_tripClock.Elapsed.TotalSeconds > tuning.VendorRunAbortSeconds)
+            if (_tripClock.Elapsed.TotalSeconds > TripAbortSeconds)
             {
-                Abort(string.Format("didn't complete in {0}s", tuning.VendorRunAbortSeconds));
+                Abort(string.Format("didn't complete in {0}s", TripAbortSeconds));
                 return false;
             }
 
@@ -405,55 +422,39 @@ namespace Bots.Vibes.Shared.Errands
         /// </summary>
         private bool ScreenStop(ErrandStop stop, LocalPlayer me)
         {
-            var s = VibeTuning.Current;
-            if (_factions == null) return true;   // no faction data yet → fail-safe, don't block the errand
-
-            if (!stop.IsMailbox)
-            {
-                if (s.VendorHostileThreshold > 0)
-                {
-                    int hostiles = GrindMobsRepository.HostileSpawnCountNear(me.MapId, stop.Location, s.VendorHostileRadius, _factions);
-                    if (hostiles >= s.VendorHostileThreshold)
-                        return Reject(stop, "{0} hostile spawns within {1:F0}yd (enemy territory)", hostiles, s.VendorHostileRadius);
-                }
-
-                if (s.VendorAreaLevelMargin > 0)
-                {
-                    float areaLevel = GrindMobsRepository.AverageAttackableLevelNear(
-                        me.MapId, stop.Location, s.VendorAreaScanRadius, _factions, EngagementGovernor.ImmuneUnitFlagMask);
-                    if (areaLevel > me.Level + s.VendorAreaLevelMargin)
-                        return Reject(stop, "area avg level {0:F0} >> mine {1} (higher-level zone)", areaLevel, me.Level);
-                }
-            }
+            // A mailbox is street furniture — it has no surroundings of its own worth screening, and the
+            // MailboxService already withdrew the ones with a live hostile standing at them.
+            if (!stop.IsMailbox
+                && !DestinationSafety.IsSurvivable(me.MapId, stop.Location, me.Level, _factions, out string unsafeWhy))
+                return Reject(stop, unsafeWhy);
 
             // Reachability is asked ONCE per stop, at the moment we commit to walking to it — the
             // lookahead the doctrine asks for, without paying a pathfind per tick for an answer that
-            // cannot change while we walk a static mesh.
+            // cannot change while we walk a static mesh. It needs no spawn data, so it runs even where
+            // DestinationSafety had to fail open.
             float straight = (float)me.Location.Distance(stop.Location);
-            if (straight > 50f)
-            {
-                WoWPoint[] path = Navigator.GeneratePath(me.Location, stop.Location);
-                if (path == null || path.Length == 0)
-                    return Reject(stop, "no nav path to it");
-                float shortfall = (float)path[path.Length - 1].Distance(stop.Location);
-                if (shortfall > 25f)
-                    return Reject(stop, "partial path (ends {0:F0}yd short)", shortfall);
-                if (s.VendorDetourFactor > 0)
-                {
-                    float walk = 0f;
-                    for (int i = 1; i < path.Length; i++)
-                        walk += (float)path[i - 1].Distance(path[i]);
-                    if (walk > Math.Max(s.VendorDetourMinYd, straight * s.VendorDetourFactor))
-                        return Reject(stop, "walk {0:F0}yd vs {1:F0}yd straight (canyon/cave detour)", walk, straight);
-                }
-            }
+            if (straight <= PathProbeMinYd) return true;
+
+            WoWPoint[] path = Navigator.GeneratePath(me.Location, stop.Location);
+            if (path == null || path.Length == 0)
+                return Reject(stop, "has no nav path to it");
+            float shortfall = (float)path[path.Length - 1].Distance(stop.Location);
+            if (shortfall > PathShortfallYd)
+                return Reject(stop, string.Format("is only partially pathable (the route ends {0:F0}yd short)", shortfall));
+
+            float walk = 0f;
+            for (int i = 1; i < path.Length; i++)
+                walk += (float)path[i - 1].Distance(path[i]);
+            if (walk > Math.Max(DetourMinYd, straight * DetourFactor))
+                return Reject(stop, string.Format("is a {0:F0}yd walk for {1:F0}yd of distance (canyon/cave detour)", walk, straight));
+
             return true;
         }
 
-        private bool Reject(ErrandStop stop, string fmt, params object[] args)
+        private bool Reject(ErrandStop stop, string why)
         {
-            Logging.Write(System.Drawing.Color.Orange, "[{0}/Errand] SKIP {1} — {2}; blacklisting, re-routing.",
-                _tag, stop, string.Format(fmt, args));
+            Logging.Write(System.Drawing.Color.Orange, "[{0}/Errand] SKIP {1} — it {2}; blacklisting, re-routing.",
+                _tag, stop, why);
             BlacklistStop(stop, "was rejected", Styx.Logic.Profiles.Vendor.VendorType.Unknown);
             return false;
         }

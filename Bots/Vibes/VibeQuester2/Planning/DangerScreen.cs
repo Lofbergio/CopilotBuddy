@@ -98,24 +98,10 @@ namespace Bots.Vibes.VibeQuester2.Planning
                 if (sp.Map != (int)me.MapId) continue;
                 var p = new WoWPoint((float)sp.X, (float)sp.Y, (float)sp.Z);
 
-                if (S.VendorHostileThreshold > 0)
+                if (!DestinationSafety.IsSurvivable(me.MapId, p, me.Level, factions, out string why))
                 {
-                    int hostiles = GrindMobsRepository.HostileSpawnCountNear(me.MapId, p, S.VendorHostileRadius, factions);
-                    if (hostiles >= S.VendorHostileThreshold)
-                    {
-                        lastReason = string.Format("{0} in enemy territory ({1} hostile spawns)", kind, hostiles);
-                        continue;
-                    }
-                }
-                if (S.VendorAreaLevelMargin > 0)
-                {
-                    float areaLevel = GrindMobsRepository.AverageAttackableLevelNear(
-                        me.MapId, p, S.VendorAreaScanRadius, factions, SpotSelector.ImmuneUnitFlagMask);
-                    if (areaLevel > me.Level + S.VendorAreaLevelMargin)
-                    {
-                        lastReason = string.Format("{0} in over-level zone (avg {1:F0})", kind, areaLevel);
-                        continue;
-                    }
+                    lastReason = kind + " " + why;
+                    continue;
                 }
                 return null;   // this spawn is fine — quest is reachable
             }
