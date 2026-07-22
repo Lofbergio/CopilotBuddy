@@ -250,7 +250,7 @@ namespace Bots.VibeGrinder
             _selector = new SpotSelector(_factions);
             _supervisor = new GrindSupervisor(_selector, _synth, _factions);
 
-            _errands = new ErrandRunner(_factions, Name);
+            _errands = new ErrandRunner(_factions, Name, flightPaths: true);
             // The give-up clock is a running Stopwatch, so a pull commitment carried into a multi-minute
             // errand comes back already expired and blacklists a mob that never failed us — we simply went
             // shopping. Stop the clock by not having one.
@@ -269,7 +269,7 @@ namespace Bots.VibeGrinder
                 _governor?.DropCommit();
                 _peelGuid = 0;
                 _resting = false;
-                _errands?.Cancel();
+                _errands?.Cancel("the supervisor force-escaped a stall");
             };
             _restGovernor = new RestGovernor();   // dynamic rest thresholds; SafeRest reads these
             _restGovernor.SuppressedFloorHealth = VibeGrinderSettings.Instance.EmergencyMinHealth;   // vendor-run survival floor
@@ -826,6 +826,13 @@ namespace Bots.VibeGrinder
         {
             var me = StyxWoW.Me;
             if (me == null) return;   // null on loading screens / zone transitions
+
+            // Death cancels the trip from HERE, not from the errand branch: CreateDeathBehavior is the
+            // Root's first child, so it owns every dead tick and the branch below it never runs. A trip
+            // left standing holds its POI through the whole ghost walk, then comes back with its 300s
+            // clock already expired and ABORTs — charging an abort strike to a vendor that did nothing.
+            if (_errands != null && _errands.Active && (me.IsDead || me.IsGhost))
+                _errands.Cancel("we died");
 
             Navigator.PathPrecision = System.Math.Clamp(me.MovementInfo.CurrentSpeed * 0.15f, 1.5f, 10f);
             if (_restGovernor != null)

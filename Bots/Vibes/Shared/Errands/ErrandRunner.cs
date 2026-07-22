@@ -42,6 +42,7 @@ namespace Bots.Vibes.Shared.Errands
     {
         private readonly FactionResolver _factions;
         private readonly string _tag;
+        private readonly bool _flightPaths;
 
         /// <summary>Called at the COMMIT edge with the destination, for trek-hazard marking and for
         /// releasing the grind commitment (the give-up clock must be stopped by not having one).</summary>
@@ -93,15 +94,21 @@ namespace Bots.Vibes.Shared.Errands
         private int _abortEntry = -1;
         private int _abortStreak;
 
-        public ErrandRunner(FactionResolver factions, string tag)
+        /// <param name="flightPaths">Whether this host learns flight paths. Only a bot that travels on
+        /// its own does: it is the tail of the errand branch that GrindSupervisor's learn detour hands
+        /// the interact off to, so without it the detour walks up to a master and records nothing. A
+        /// party follower goes where the leader goes — for it this is a way to fly off alone, unbounded
+        /// (a Fly POI carries no trip and so no abort clock), with follow starved the whole time.</param>
+        public ErrandRunner(FactionResolver factions, string tag, bool flightPaths)
         {
             _factions = factions;
             _tag = tag;
+            _flightPaths = flightPaths;
             Reset();   // ErrandDemands' census is static; a fresh run must not inherit the last one's polls
         }
 
         /// <summary>True while an errand owns the bot — the trip, or a Fly POI someone else set.</summary>
-        public bool Active => _tour != null || BotPoi.Current.Type == PoiType.Fly;
+        public bool Active => _tour != null || (_flightPaths && BotPoi.Current.Type == PoiType.Fly);
 
         /// <summary>The errand currently being served, for logs.</summary>
         public ErrandStop CurrentStop => _tour != null && _at < _tour.Count ? _tour[_at] : null;
@@ -109,14 +116,7 @@ namespace Bots.Vibes.Shared.Errands
         /// <summary>What the trip is doing at this stop, for a status line — null when there is no trip.
         /// Read this rather than the POI type: combat and looting borrow the slot mid-errand, so a
         /// POI-derived status blinks off and back on for every mob killed on the way.</summary>
-        public ErrandKind? CurrentKind
-        {
-            get
-            {
-                ErrandStop stop = CurrentStop;
-                return stop == null ? (ErrandKind?)null : stop.PrimaryKind(_outstanding);
-            }
-        }
+        public ErrandKind? CurrentKind => CurrentStop?.PrimaryKind(_outstanding);
 
         public void Reset()
         {
@@ -141,19 +141,16 @@ namespace Bots.Vibes.Shared.Errands
             LocalPlayer me = StyxWoW.Me;
             if (me == null) return false;
 
-            // Dying is a canceller, not a pause: the corpse run owns the bot from here, and a trip left
-            // standing would keep rest and looting suppressed for the whole ghost walk and beyond.
-            if (me.IsDead)
-            {
-                Cancel();
-                return false;
-            }
-
+            // No death canceller here, deliberately. Both hosts put their death/corpse-run branch ABOVE
+            // this one, so a check in the branch gate can never run while dead — it read as a canceller
+            // and was dead code. Death is the HOST's to cancel, from its Pulse, where nothing can starve
+            // it; a trip left standing through a ghost walk holds the POI and suppresses everything that
+            // reads the POI type.
             if (_tour != null)
                 return ValidateTrip(me);
 
             // A Fly POI is another owner's decision; service it and do not plan over it.
-            if (BotPoi.Current.Type == PoiType.Fly)
+            if (_flightPaths && BotPoi.Current.Type == PoiType.Fly)
                 return true;
 
             if (DateTime.UtcNow < _planAt) return false;
@@ -167,7 +164,8 @@ namespace Bots.Vibes.Shared.Errands
             // off to; without it the learn detour walks up to a master and never records anything.
             if (demands.Count == 0)
             {
-                if (FlightPaths.Reason != FlightPathReason.None || FlightPaths.NeedFlightPath || FlightPaths.NeedNearbyUpdate())
+                if (_flightPaths
+                    && (FlightPaths.Reason != FlightPathReason.None || FlightPaths.NeedFlightPath || FlightPaths.NeedNearbyUpdate()))
                 {
                     FlightPaths.SetPoi();
                     return BotPoi.Current.Type == PoiType.Fly;
@@ -179,9 +177,11 @@ namespace Bots.Vibes.Shared.Errands
             tour = Screen(tour);
             if (tour.Count == 0)
             {
-                // Loud, and it repeats: a demand nothing can serve means the night is degrading.
-                Logging.Write(System.Drawing.Color.Orange,
-                    "[{0}/Errand] {1} outstanding but no reachable, safe place to clear it — carrying on grinding.",
+                // Loud, and it repeats — a demand nothing can serve means the night is degrading. On the
+                // shared 5-minute cadence, not the 5-second plan cycle: unsatisfiable is a state that
+                // lasts, and at plan speed it is 720 orange lines an hour.
+                ErrandDemands.Warn("noplace",
+                    "[{0}/Errand] {1} outstanding but no reachable, safe place to clear it — carrying on.",
                     _tag, string.Join(", ", demands.Select(d => d.ToString())));
                 return false;
             }
@@ -340,7 +340,7 @@ namespace Bots.Vibes.Shared.Errands
                 _tag, _tripClock.Elapsed.TotalSeconds);
             _abortEntry = -1;
             _abortStreak = 0;   // a completed trip proves its targets work
-            End();
+            End("errand complete");
         }
 
         private void Abort(string why)
@@ -360,14 +360,19 @@ namespace Bots.Vibes.Shared.Errands
                     BlacklistStop(stuck, "aborted twice", Styx.Logic.Profiles.Vendor.VendorType.Unknown);
                 }
             }
-            // "Resuming grind" is a lie while the POI still points at the target we just abandoned —
-            // it would be re-adopted on the very next tick.
-            BotPoi.Clear("errand aborted");
-            End();
+            End("errand aborted");
         }
 
-        private void End()
+        /// <summary>
+        /// The ONE teardown. Releasing the slot belongs here rather than at each exit: while the trip
+        /// held the POI it also suppressed everything that reads the POI type, so an exit that forgets
+        /// to release leaves the bot standing in town — "resuming" is a lie while the slot still points
+        /// at the stop we just left. That is exactly what happened when only the failure exits cleared
+        /// it and the DONE path did not.
+        /// </summary>
+        private void End(string why)
         {
+            BotPoi.Clear(why);
             _tour = null;
             _at = 0;
             _outstanding.Clear();
@@ -377,13 +382,16 @@ namespace Bots.Vibes.Shared.Errands
             OnEnd?.Invoke();
         }
 
-        /// <summary>Force-escape / activity teardown: drop the trip without ceremony.</summary>
-        public void Cancel()
+        /// <summary>
+        /// The host is taking the bot away — death, an instance, a hold, a force-escape. Drops the trip
+        /// with no blame attached: an ABORT would charge the stop an abort strike and blacklist a
+        /// perfectly good vendor for something the vendor had nothing to do with.
+        /// </summary>
+        public void Cancel(string why)
         {
             if (_tour == null) return;
-            Logging.Write(System.Drawing.Color.Orange, "[{0}/Errand] trip cancelled.", _tag);
-            BotPoi.Clear("errand cancelled");
-            End();
+            Logging.Write(System.Drawing.Color.Orange, "[{0}/Errand] trip cancelled — {1}.", _tag, why);
+            End("errand cancelled");
         }
 
         /// <summary>
@@ -499,11 +507,11 @@ namespace Bots.Vibes.Shared.Errands
         private RunStatus AssertPoi()
         {
             ErrandStop stop = CurrentStop;
-            if (stop == null) return RunStatus.Failure;
-            ErrandKind kind = stop.PrimaryKind(_outstanding);
+            ErrandKind? kind = stop?.PrimaryKind(_outstanding);
+            if (kind == null) return RunStatus.Failure;   // finished stop; the next validate advances past it
             BotPoi poi = BotPoi.Current;
-            if (poi.Type != ErrandKinds.Poi(kind) || poi.Location.Distance(stop.Location) > 5.0)
-                BotPoi.Current = stop.ToPoi(kind);
+            if (poi.Type != ErrandKinds.Poi(kind.Value) || poi.Location.Distance(stop.Location) > 5.0)
+                BotPoi.Current = stop.ToPoi(kind.Value);
             return RunStatus.Failure;
         }
 
@@ -679,7 +687,10 @@ namespace Bots.Vibes.Shared.Errands
                     }
                     // An empty item list is the frame still filling in — next tick.
                 }
-                if (did)
+                // Hold the frame open while a purchase this stop can serve is still outstanding: the
+                // item list arrives a tick or two after the frame does, so closing on the sell/repair
+                // that already succeeded would cost the buy a second approach and interact.
+                if (did && !Wanted(stop, ErrandKind.Buy) && !Wanted(stop, ErrandKind.Ammo))
                 {
                     MerchantFrame.Instance.Close();
                     me.ClearTarget();

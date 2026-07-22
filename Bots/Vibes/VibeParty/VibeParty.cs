@@ -166,7 +166,9 @@ namespace VibeParty
 			// were siblings — every tick servicing returned Failure the decide chain re-resolved a vendor
 			// from wherever we were standing, so mail could only ever happen as a step nested inside a
 			// merchant visit and the leader's !forcemail had nothing to act on.
-			_errands = new ErrandRunner(_factions, Name);
+			// No flight-path learning: a follower goes where the leader goes, and a Fly POI carries no
+			// trip and therefore no abort clock — it would fly off alone, unbounded, with follow starved.
+			_errands = new ErrandRunner(_factions, Name, flightPaths: false);
 			FollowerQuestLedger.EnsureLoaded();   // quest knowledge for id-driven visits (loud if missing)
 			if (_bus == null)
 				_bus = new PartyBus(isLeader: false, StyxWoW.Me.Guid, StyxWoW.Me.Name);
@@ -221,10 +223,16 @@ namespace VibeParty
 			_partyLoot = null;
 			_partyWater = null;
 
-			if (VibePartySettings.Instance.DoNothing || VibePartySettings.Instance.IsLeader)
+			// Tear down what we actually STARTED, not what the settings say NOW. Keyed on the settings,
+			// a Leader or Do-Nothing tick between Start and Stop skipped this whole block: the event
+			// hooks stayed attached, FindVendorsAutomatically stayed forced, the map stamp stayed set so
+			// the next run's FactionResolver never built (silently voiding the destination screens), and
+			// _hooked stayed true — so the next follower Start built a fresh bus and subscribed to
+			// nothing, leaving a deaf follower.
+			if (!_hooked)
 				return;
 
-			_errands?.Cancel();   // drop any in-flight trip, and the POI it was holding
+			_errands?.Cancel("the bot was stopped");   // drop any in-flight trip, and the POI it held
 			_errands = null;
 			_factions = null;
 			_mailboxMap = uint.MaxValue;          // next Start re-reads mailboxes and factions for the map
@@ -617,7 +625,14 @@ namespace VibeParty
 		public override void Pulse()
 		{
 			PartyBus? bus = _bus;
-			if (bus == null || VibePartySettings.Instance.DoNothing) return;
+			if (VibePartySettings.Instance.DoNothing)
+			{
+				// Switched on mid-trip: the tree idles from here, so nothing would drive the trip and
+				// nothing would end it — its clock would run out and blame the stop we were walking to.
+				_errands?.Cancel("do-nothing was switched on");
+				return;
+			}
+			if (bus == null) return;
 
 			_partyLoot?.Tick();   // Phase 5: leader TTL sweep / follower lease upkeep
 
@@ -758,16 +773,19 @@ namespace VibeParty
 		private static bool InsideInstanceOrBg()
 			=> StyxWoW.Me.IsInInstance || Battlegrounds.IsInsideBattleground;
 
-		// The errand branch validates its own trip every tick it runs — but here it sits UNDER death and
-		// the rez/corpse handling and OVER nothing that would revive it, and it is gated off entirely
-		// inside an instance. In both states the branch is never reached, so the trip would stand with
-		// its POI held, telling the leader panel we are shopping while we run a corpse.
+		// The trip re-validates itself on every tick the errand branch RUNS — which is exactly what these
+		// three states stop happening: death hands the tick to the corpse run above, an instance gates
+		// the branch off, and a hold idles the whole tree. A trip left standing keeps its POI held and
+		// keeps telling the leader panel we are shopping, and its 300s clock keeps running until it
+		// ABORTs and charges an abort strike to a stop that did nothing wrong. Cancel, which blames
+		// nobody, is the honest answer to "the bot was taken away".
 		private void ErrandCancellersTick()
 		{
 			LocalPlayer me = StyxWoW.Me;
 			if (me == null || _errands == null || !_errands.Active) return;
-			if (me.Dead || me.IsGhost || InsideInstanceOrBg())
-				_errands.Cancel();
+			if (me.Dead || me.IsGhost) _errands.Cancel("we died");
+			else if (InsideInstanceOrBg()) _errands.Cancel("we went inside");
+			else if (_waiting) _errands.Cancel("the leader called a hold");
 		}
 
 		private static string ErrandWord(ErrandKind k)

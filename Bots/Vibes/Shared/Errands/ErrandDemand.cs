@@ -171,8 +171,8 @@ namespace Bots.Vibes.Shared.Errands
                 // impossible — no recipient means no mail this session however much drops — so say which
                 // it is, and drop a flag nothing can ever satisfy rather than leave it armed all night.
                 bool impossible = !MailboxService.MailingConfigured;
-                Warn("forcemail", "[Errand] Told to mail but there is nothing to send — {0}.",
-                    impossible ? "no MailRecipient is set (General settings)"
+                Warn("forcemail", "[Errand] Told to mail but {0}.",
+                    impossible ? "no MailRecipient is set (General settings), so nothing can be sent"
                     : me.Level < profile.MinMailLevel
                         ? string.Format("level {0} is below the profile's MinMailLevel {1}", me.Level, profile.MinMailLevel)
                         : "nothing in bags is classified Mail (check the loot policy)");
@@ -265,11 +265,12 @@ namespace Bots.Vibes.Shared.Errands
 
         // A condition that blocks an errand all night would say so once and go silent under an
         // edge-triggered log. These are the cases worth repeating: unmissable in a morning review,
-        // too rare to flood it.
+        // too rare to flood it. The ONE throttle for that class of message — the runner's blocked-trip
+        // warnings come through here too rather than growing a second cadence.
         private static readonly TimeSpan WarnEvery = TimeSpan.FromMinutes(5);
         private static readonly Dictionary<string, DateTime> _warnedAt = new Dictionary<string, DateTime>();
 
-        private static void Warn(string key, string fmt, params object[] args)
+        internal static void Warn(string key, string fmt, params object[] args)
         {
             if (_warnedAt.TryGetValue(key, out DateTime at) && DateTime.UtcNow - at < WarnEvery)
                 return;

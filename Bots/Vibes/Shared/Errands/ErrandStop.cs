@@ -28,14 +28,19 @@ namespace Bots.Vibes.Shared.Errands
 
         public bool IsMailbox => Entry == 0;
 
-        /// <summary>The kind this stop wears as its POI type — the first still-outstanding errand it
-        /// serves, in a fixed order so the type cannot flap between ticks.</summary>
-        public ErrandKind PrimaryKind(ICollection<ErrandKind> outstanding)
+        /// <summary>
+        /// The kind this stop wears as its POI type — the first still-outstanding errand it serves, in
+        /// a fixed order so the type cannot flap between ticks. NULL once nothing it serves is
+        /// outstanding: the stop is finished and the next validate advances past it. It used to answer
+        /// Mail in that window, so a sold-out vendor stop reported "mailing" at an NPC that sells.
+        /// </summary>
+        public ErrandKind? PrimaryKind(ICollection<ErrandKind> outstanding)
         {
             foreach (ErrandKind k in ErrandKinds.NpcKinds)
                 if (Serves.Contains(k) && outstanding.Contains(k))
                     return k;
-            return ErrandKind.Mail;
+            return Serves.Contains(ErrandKind.Mail) && outstanding.Contains(ErrandKind.Mail)
+                ? ErrandKind.Mail : (ErrandKind?)null;
         }
 
         public BotPoi ToPoi(ErrandKind kind)
