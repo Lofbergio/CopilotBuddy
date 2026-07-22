@@ -106,6 +106,18 @@ namespace Bots.Vibes.Shared.Errands
         /// <summary>The errand currently being served, for logs.</summary>
         public ErrandStop CurrentStop => _tour != null && _at < _tour.Count ? _tour[_at] : null;
 
+        /// <summary>What the trip is doing at this stop, for a status line — null when there is no trip.
+        /// Read this rather than the POI type: combat and looting borrow the slot mid-errand, so a
+        /// POI-derived status blinks off and back on for every mob killed on the way.</summary>
+        public ErrandKind? CurrentKind
+        {
+            get
+            {
+                ErrandStop stop = CurrentStop;
+                return stop == null ? (ErrandKind?)null : stop.PrimaryKind(_outstanding);
+            }
+        }
+
         public void Reset()
         {
             _tour = null;

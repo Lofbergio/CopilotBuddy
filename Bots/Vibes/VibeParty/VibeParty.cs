@@ -6,7 +6,8 @@ using System.Windows.Forms;
 using System.Xml.Linq;
 using Bots.Grind;
 using Bots.Vibes.Shared;
-using Bots.VibeGrinder;
+using Bots.Vibes.Shared.Errands;
+using Bots.Vibes.Shared.GrindData;
 using CommonBehaviors;
 using CommonBehaviors.Actions;
 using CommonBehaviors.Decorators;
@@ -65,11 +66,22 @@ namespace VibeParty
 					CreateCombatBehavior(),                           // smethod_5
 					CreateEventBehavior(),                            // method_5
 					CreateLootBehavior(),                             // method_3
+					// ERRANDS — one committed trip that clears everything the character owes (sell,
+					// repair, buy, ammo, train, mail) at as few stops as the tour allows. It sits ABOVE
+					// the discretionary party work on purpose: quest visits and water hand-outs would
+					// otherwise interleave, and the trip's abort clock would retire a perfectly good
+					// vendor because the follower kept being called away. Combat/loot/rez above still
+					// preempt it — those are reactive and short, and the trip re-asserts its POI after.
+					new Decorator(ctx => _errands != null && !InsideInstanceOrBg() && _errands.Update(),
+						new PrioritySelector(
+							_errands != null ? _errands.Behavior() : (Composite)new TreeSharp.Action(ctx => RunStatus.Failure),
+							// Own the tick while committed: below this is follow, and a follower yanked
+							// back to the leader mid-trip never finishes one.
+							new TreeSharp.Action(ctx => RunStatus.Success))),
 					CreateTurnInBehavior(),                           // Phase 2 — turn in at the leader's NPC (creature enders)
 					CreateGoVisitBehavior(),                          // Phase 2 — turn in / pick up at a GAME OBJECT (corpses/altars/barrels)
 					CreateUseQuestStarterBehavior(),                  // Phase 1: use drop-only quest-starter items in bags
 					CreateWaterServiceBehavior(),                     // Mage: conjure + hand out water on request (downtime)
-					new Decorator(ctx => !StyxWoW.Me.IsInInstance && !Battlegrounds.IsInsideBattleground, LevelBot.CreateVendorBehavior()),
 					CreateFollowBehavior()                            // smethod_0
 				);
 				return _root;
@@ -86,6 +98,10 @@ namespace VibeParty
 
 		public override void Start()
 		{
+			// Rebuild the tree every Start: its composites capture this run's ErrandRunner, and a cached
+			// tree from the previous Start would keep driving a runner that Stop() already tore down.
+			_root = null;
+
 			// Absolutely idle: do nothing at all (no leader broadcast, no buffing). Checked FIRST so it takes
 			// precedence over Leader mode.
 			if (VibePartySettings.Instance.DoNothing)
@@ -143,7 +159,14 @@ namespace VibeParty
 			// Follower: connect to the leader's hub (:1338) and mirror. The client reconnects on its own, so
 			// starting before the leader is up is fine — it just retries (fail degraded, never blocks).
 			DisableLeaderPluginIfEnabled();
+			_factions = new FactionResolver();    // built per map in OnMapChanged; unbuilt reads as "nothing hostile"
 			EnsurePartyProfile();
+			// Errands: what the character owes decides the trip, and the trip owns the slot until it is
+			// done. Replaces LevelBot's vendor tree, where the deciding chain and the servicing subtree
+			// were siblings — every tick servicing returned Failure the decide chain re-resolved a vendor
+			// from wherever we were standing, so mail could only ever happen as a step nested inside a
+			// merchant visit and the leader's !forcemail had nothing to act on.
+			_errands = new ErrandRunner(_factions, Name);
 			FollowerQuestLedger.EnsureLoaded();   // quest knowledge for id-driven visits (loud if missing)
 			if (_bus == null)
 				_bus = new PartyBus(isLeader: false, StyxWoW.Me.Guid, StyxWoW.Me.Name);
@@ -201,6 +224,12 @@ namespace VibeParty
 			if (VibePartySettings.Instance.DoNothing || VibePartySettings.Instance.IsLeader)
 				return;
 
+			_errands?.Cancel();   // drop any in-flight trip, and the POI it was holding
+			_errands = null;
+			_factions = null;
+			_mailboxMap = uint.MaxValue;          // next Start re-reads mailboxes and factions for the map
+			GrindMobsRepository.Shutdown();       // release the DB handle so a later Start re-opens cleanly
+
 			// Restore the vendor auto-resolve flag we forced in EnsurePartyProfile — a profile-driven
 			// botbase run after us may rely on its authored <Vendor> entries only.
 			if (_origFindVendors.HasValue)
@@ -236,7 +265,7 @@ namespace VibeParty
 		private static DateTime _teleportMismatchSince = DateTime.MinValue;
 		private static DateTime _teleportActedAt = DateTime.MinValue;
 
-		private static void MirrorLeaderTeleportTick()
+		private void MirrorLeaderTeleportTick()
 		{
 			if (_botMessage == null) return;
 			var me = StyxWoW.Me;
@@ -259,10 +288,10 @@ namespace VibeParty
 			}
 			else
 			{
-				// Finish an in-flight vendor errand before porting back in.
-				PoiType poi = BotPoi.Current.Type;
-				if (poi == PoiType.Sell || poi == PoiType.Repair || poi == PoiType.Buy
-					|| poi == PoiType.Train || poi == PoiType.Mail)
+				// Finish an in-flight errand before porting back in. Asked of the trip, not of the POI
+				// type: that enumeration is written nine ways across the tree and every copy has drifted
+				// (this one was missing Fly), and the POI is borrowed by combat and looting anyway.
+				if (_errands != null && _errands.Active)
 					return;
 				Logging.Write("VibeParty: leader is in the dungeon — teleporting in.");
 				Lua.DoString("LFGTeleport(0)");
@@ -379,7 +408,7 @@ namespace VibeParty
 		private static readonly MailboxService _mailboxes = new MailboxService();
 		private static uint _mailboxMap = uint.MaxValue;
 
-		private static void EnsurePartyProfile()
+		private void EnsurePartyProfile()
 		{
 			if (_syntheticProfile == null)
 			{
@@ -401,14 +430,16 @@ namespace VibeParty
 			_origFindVendors ??= CharacterSettings.Instance.FindVendorsAutomatically;
 			CharacterSettings.Instance.FindVendorsAutomatically = true;
 			ProfileManager.UseSyntheticProfile(_syntheticProfile);
-			LoadMailboxesIfMapChanged();
+			OnMapChanged();
 		}
 
-		// Feed the map's faction-safe mailboxes into the synthetic profile so the mail run (which
-		// piggybacks on sell/repair visits when MailRecipient is set) can find one. No toggle: an
-		// unset MailRecipient already means "no mailing", and with no mailbox the Mail items just
-		// stay in bags (the safe failure).
-		private static void LoadMailboxesIfMapChanged()
+		// Per-map data the errand planner needs. Mailboxes: the faction-safe set feeds the synthetic
+		// profile so a mail stop has somewhere to be. No toggle — an unset MailRecipient already means
+		// "no mailing", and with no mailbox the Mail items just stay in bags (the safe failure).
+		// Factions: a follower peels off ALONE to a continent-wide-nearest NPC, so the vendor landing in
+		// enemy territory or one zone up is exactly as lethal here as it is for the grinder. Without the
+		// spawn DB there is no resolver and DestinationSafety fails open, which is the right trade.
+		private void OnMapChanged()
 		{
 			// MapId is event-written and can read -1 (= uint.MaxValue) in some states — skip those ticks.
 			uint map = StyxWoW.Me?.MapId is uint m ? m : uint.MaxValue;
@@ -416,6 +447,7 @@ namespace VibeParty
 			var mgr = ProfileManager.CurrentProfile?.MailboxManager;
 			if (mgr == null) return;
 			mgr.ForcedMailboxes = _mailboxes.LoadSafeMailboxes(map);
+			if (GrindMobsRepository.IsAvailable) _factions?.Build(map);
 			_mailboxMap = map;
 		}
 
@@ -441,7 +473,9 @@ namespace VibeParty
 					if (action == DispositionAction.Mail) willMail++;
 				}
 			}
-			if (protectedCount > 0)
+			// Silent when the caller is a gate: ErrandDemands re-resolves the sell payload through this
+			// hook on every census, and only the real vendor visit passes Verbose.
+			if (protectedCount > 0 && args.Verbose)
 				Logging.Write("[VibeParty] Vendor sweep: protecting {0} item(s) from sale ({1} queued to mail, rest kept).",
 					protectedCount, willMail);
 		}
@@ -463,7 +497,7 @@ namespace VibeParty
 					queued++;
 				}
 			}
-			if (queued > 0)
+			if (queued > 0 && args.Verbose)
 				Logging.Write("[VibeParty] Mail run: queuing {0} valuable item(s) for the bank.", queued);
 		}
 
@@ -620,9 +654,13 @@ namespace VibeParty
 					_progressReportAt = DateTime.Now;
 					ReportProgress(bus);
 				}
-				ErrandReportTick();         // vendor/repair/train runs are self-directed — tell the leader
+				ErrandCancellersTick();     // the two the errand branch can never reach by itself
+				// The runtime backstop the trip's mailbox canceller reads: a live hostile parked at a
+				// mailbox is something the static DB cannot see, and the service withdraws it.
+				if (MailboxService.MailingConfigured) _mailboxes.CheckCurrentMailboxSafety();
+				ErrandReportTick();         // errands are self-directed — tell the leader
 				_partyWater?.WaterTick();   // requester: ask for water when low; mage: advertise + clean stale (throttled)
-				LoadMailboxesIfMapChanged();   // keep the synthetic profile's mailboxes on the current map
+				OnMapChanged();             // keep the synthetic profile's mailboxes + faction data on the current map
 				MirrorLeaderTeleportTick();    // LFG: match the leader's inside/outside-the-dungeon state
 				MirrorLeaderBagsTick();        // bag-visibility sync: leader's bags open ⇒ ours open
 				MirrorLeaderHearthTick();      // hearth sync: leader hearthing ⇒ we hearth (cancel if it cancels)
@@ -653,26 +691,18 @@ namespace VibeParty
 		// leader's fights so FollowLeader()'s combat approach/hold keeps driving the follower. The retired
 		// "Kill" message routed followers into a separate leader-distance-gated arm that duplicated the
 		// assist logic — and left NO active branch for a follower standing outside that gate.
+		// The inherited "Vendor" message ("I am standing at a vendor, come shop here") is gone: a
+		// VibeParty leader is driven by hand and its tree is buffs-then-idle, so it never sets an errand
+		// POI and could not produce the message. Followers decide their own errands from their own bags.
 		private static BotMessage BuildLeaderCommand()
 		{
 			LocalPlayer me = StyxWoW.Me;
 			WoWPoint loc = me.Location;
-			string type;
-			ulong targetGuid = 0;
-			PoiType poi = BotPoi.Current.Type;
-			if ((poi == PoiType.Repair || poi == PoiType.Sell)
-				&& BotPoi.Current.AsObject != null && BotPoi.Current.AsObject.WithinInteractRange)
-			{
-				type = "Vendor";
-				targetGuid = BotPoi.Current.AsObject.Guid;
-			}
-			else type = "FollowLeader";
 
 			return new BotMessage
 			{
-				Message = type,
+				Message = "FollowLeader",
 				LeaderX = loc.X, LeaderY = loc.Y, LeaderZ = loc.Z,
-				TargetGuid = targetGuid,
 				LeaderInInstance = me.IsInInstance,
 				LeaderGhost = me.Dead || me.IsGhost,
 				LeaderGuid = me.Guid,
@@ -712,40 +742,58 @@ namespace VibeParty
 		// Errand visibility — a follower peeling off to a vendor is SELF-directed
 		// ──────────────────────────────────────────────────────────────────────
 
-		// NeedToSell/Repair/Train fire on the follower's own judgement, so the leader gets no say and
-		// no notice — the follower just walks off mid-grind. Reported BOTH ways on purpose: as live
-		// STATE (heartbeat → the Main tab's errand line, which stands until the errand ends) and as an
-		// EDGE (one alert → the dock, visible from every tab). The state line is what makes it
-		// un-missable; the alert is what makes the moment visible.
-		private static PoiType _errandPoi = PoiType.None;
+		// An errand is the follower's OWN judgement about its own bags and gear, so the leader gets no
+		// say and no notice — it just walks off. Reported BOTH ways on purpose: as live STATE (heartbeat
+		// → the Main tab's errand line, which stands until the errand ends) and as an EDGE (one alert →
+		// the dock, visible from every tab). The state line is what makes it un-missable; the alert is
+		// what makes the moment visible.
+		//
+		// Driven by the TRIP, not by BotPoi: combat and looting borrow the POI slot mid-errand, so a
+		// POI-derived state blinked off and re-alerted for every mob killed on the way to town.
+		private static ErrandKind? _errandKind;
 		private static string _errand = "";
 
-		private static string ErrandWord(PoiType t)
+		// No errands inside: a dungeon or battleground has nothing the planner shops for, and walking a
+		// follower out to town mid-instance is never what the party wants.
+		private static bool InsideInstanceOrBg()
+			=> StyxWoW.Me.IsInInstance || Battlegrounds.IsInsideBattleground;
+
+		// The errand branch validates its own trip every tick it runs — but here it sits UNDER death and
+		// the rez/corpse handling and OVER nothing that would revive it, and it is gated off entirely
+		// inside an instance. In both states the branch is never reached, so the trip would stand with
+		// its POI held, telling the leader panel we are shopping while we run a corpse.
+		private void ErrandCancellersTick()
 		{
-			switch (t)
+			LocalPlayer me = StyxWoW.Me;
+			if (me == null || _errands == null || !_errands.Active) return;
+			if (me.Dead || me.IsGhost || InsideInstanceOrBg())
+				_errands.Cancel();
+		}
+
+		private static string ErrandWord(ErrandKind k)
+		{
+			switch (k)
 			{
-				case PoiType.Sell:   return "selling";
-				case PoiType.Repair: return "repairing";
-				case PoiType.Buy:    return "restocking";
-				case PoiType.Train:  return "training";
-				case PoiType.Mail:   return "mailing";
-				default:             return "";
+				case ErrandKind.Sell:   return "selling";
+				case ErrandKind.Repair: return "repairing";
+				case ErrandKind.Buy:    return "restocking";
+				case ErrandKind.Ammo:   return "restocking ammo";
+				case ErrandKind.Train:  return "training";
+				default:                return "mailing";
 			}
 		}
 
-		private static void ErrandReportTick()
+		private void ErrandReportTick()
 		{
-			PoiType t = BotPoi.Current.Type;
-			string word = ErrandWord(t);
-			if (word.Length == 0) t = PoiType.None;   // every non-errand POI is the same "no errand" state
-			if (t == _errandPoi) return;
-			_errandPoi = t;
-			_errand = word;
-			if (word.Length == 0) return;             // errand ended — the line clearing says it
-			string where = BotPoi.Current.Name ?? "";
-			Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] errand: {0}{1}.", word,
+			ErrandKind? kind = _errands?.CurrentKind;
+			if (kind == _errandKind) return;          // includes stop→stop within one tour: each is news
+			_errandKind = kind;
+			_errand = kind.HasValue ? ErrandWord(kind.Value) : "";
+			if (!kind.HasValue) return;               // errand ended — the line clearing says it
+			string where = _errands?.CurrentStop?.Name ?? "";
+			Logging.Write(System.Drawing.Color.Khaki, "[VibeParty] errand: {0}{1}.", _errand,
 				where.Length > 0 ? " at " + where : "");
-			PublishAlert(false, where.Length > 0 ? word + " at " + TruncRaw(where, 16) : word);
+			PublishAlert(false, where.Length > 0 ? _errand + " at " + TruncRaw(where, 16) : _errand);
 		}
 
 		// Follower (bot thread): report per-quest completion. Sent even OUTSIDE a party — the report
@@ -2094,9 +2142,10 @@ namespace VibeParty
 						Vendors.ForceMail = true;
 						break;
 					case "vendor":
-						// The whole town errand in one word — the vendor tree resolves the rest
-						// (nearest sell/repair from data.bin, disposition sweeps, mail if a
-						// recipient is set; NeedToMail self-guards when it isn't).
+						// The whole town errand in one word. Each flag raises a DEMAND, not a trip: the
+						// planner still refuses to plan a stop for business that does not exist (nothing
+						// sellable, nothing to send), and says so rather than walking us somewhere for
+						// nothing. One tour then clears whatever survived, at as few NPCs as it can.
 						Logging.Write("VibeParty: leader said vendor — forcing a sell/repair/mail run.");
 						Vendors.ForceSell = true;
 						Vendors.ForceRepair = true;
@@ -2271,17 +2320,6 @@ namespace VibeParty
 						// switch on Message type
 						new Switch<string>(
 							ctx => ctx is BotMessage m ? m.Message : null,
-							new SwitchArgument<string>("Vendor",
-								new TreeSharp.Action(ctx =>
-								{
-									Logging.WriteDebug("VibeParty: Vendoring");
-									if (_botMessage != null)
-									{
-										WoWUnit? vendor = ObjectManager.GetObjectByGuid<WoWUnit>(_botMessage.TargetGuid);
-										if (vendor != null)
-											BotPoi.Current = new BotPoi(vendor, vendor.IsRepairMerchant ? PoiType.Repair : PoiType.Sell);
-									}
-								})),
 							new SwitchArgument<string>("FollowLeader",
 								new TreeSharp.Action(ctx => FollowLeader()))
 						),
@@ -3950,6 +3988,9 @@ namespace VibeParty
 		// ──────────────────────────────────────────────────────────────────────
 
 		private Composite? _root;
+		// The errand owner: demand → tour → transact, and the sole writer of the errand POI types.
+		private ErrandRunner? _errands;
+		private FactionResolver? _factions;   // shared with _errands; rebuilt per map in OnMapChanged
 		private PartyBus? _bus;
 		private PartyLoot? _partyLoot;
 		private static PartyWater? _partyWater;   // static so the static FollowLeader can read AwaitingWater
