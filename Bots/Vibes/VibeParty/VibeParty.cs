@@ -2167,8 +2167,8 @@ namespace VibeParty
 			bool inParty = StyxWoW.Me.IsInParty;
 			bool inRaid  = StyxWoW.Me.IsInRaid;
 			// PartyMemberGuids excludes SELF (PartyDefenseTarget re-adds it for the same reason). Without it,
-			// a mob whose only target is ME never enters the list — and IsInCombatState()'s FirstUnit gate
-			// then holds the combat branch closed while I'm being hit (follower frozen mid-fight).
+			// a mob whose only target is ME never enters the list — it would be invisible to the pull path and
+			// to anything else reading TargetList.
 			List<ulong> partyGuids = StyxWoW.Me.PartyMemberGuids.ToList();
 			List<ulong> raidGuids  = StyxWoW.Me.RaidMemberGuids.ToList();
 			partyGuids.Add(StyxWoW.Me.Guid);
@@ -2176,9 +2176,9 @@ namespace VibeParty
 			List<WoWPlayer>? members = inParty ? StyxWoW.Me.PartyMembers :
 			                           inRaid  ? StyxWoW.Me.RaidMembers  : null;
 
-			// Always include the leader's target so we register combat and can assist it — this is
-			// what makes IsInCombatState() (which requires a FirstUnit) fire when the leader pulls,
-			// before any mob is actively swinging at a party member.
+			// Always include the leader's target: the engage gate reads the assist resolver directly, but the
+			// inherited Kill-POI pull path and anything else reading TargetList still need the party's fight
+			// represented here before a mob is actively swinging at a member.
 			WoWUnit? leaderTarget = LeaderAssistTarget();
 			if (leaderTarget != null)
 				outgoing.Add(leaderTarget);
@@ -2524,11 +2524,14 @@ namespace VibeParty
 		}
 
 		// smethod_57 — in-combat condition
-		// true when: have a target AND (not mounted AND (in own combat, or an assist target in engage range)),
-		//            or pet is in combat
+		// true when: not mounted AND (in own combat, or an assist target in engage range), or pet is in combat.
+		// ⚠ Deliberately does NOT consult Targeting.FirstUnit. The inherited HB shape gated on it because its
+		// party clause named no enemy at all ("any member is in combat AND I'm near the leader") — FirstUnit was
+		// that clause's only proof an enemy existed. The assist resolver replaced the clause with a verified
+		// live enemy, so the list became a redundant second source of truth for a question the assist already
+		// answers — and whenever the two disagreed the follower froze with a valid target 20yd away.
 		private static bool IsInCombatState()
 		{
-			if (Targeting.Instance.FirstUnit == null) return false;
 			if (!StyxWoW.Me.Mounted)
 			{
 				if (StyxWoW.Me.Combat) return true;
@@ -2536,10 +2539,21 @@ namespace VibeParty
 				// within engage range IS our fight wherever the leader stands. A distance-to-LEADER gate here
 				// starves any follower outside it — it stands silent until the mob walks over and hits it.
 				WoWUnit? assist = LeaderAssistTarget();
-				if (assist != null && assist.Distance <= DefenseEngageRange) return true;
+				if (assist != null && assist.Distance <= DefenseEngageRange)
+				{
+					// DIAGNOSTIC (remove once graded): the list is no longer load-bearing here, but it going
+					// empty under a live assist is an unexplained anomaly — say so rather than hide it.
+					if (Targeting.Instance.FirstUnit == null && DateTime.UtcNow > _emptyTargetListLogAt.AddSeconds(5))
+					{
+						_emptyTargetListLogAt = DateTime.UtcNow;
+						Logging.WriteDebug("VibeParty: Targeting list EMPTY while assisting {0} at {1:0}yd.", assist.Name, assist.Distance);
+					}
+					return true;
+				}
 			}
 			return StyxWoW.Me.GotAlivePet && StyxWoW.Me.Pet!.Combat;
 		}
+		private static DateTime _emptyTargetListLogAt = DateTime.MinValue;
 
 		// ──────────────────────────────────────────────────────────────────────
 		// Assist targeting — focus-fire the leader's target (this is what drives the routine)
