@@ -101,6 +101,11 @@ namespace Bots.Vibes.Shared.Errands
             if (bagsTight && _sellable > 0)
                 demands.Add(new ErrandDemand(ErrandKind.Sell,
                     string.Format("{0} free normal slot(s) <= {1}, {2} sellable", freeNormal, profile.MinFreeBagSlots, _sellable)));
+            else if (Vendors.ForceSell && _sellable == 0)
+                // Told to sell with nothing sellable. The flag STAYS armed — loot is still arriving, and
+                // the order is satisfiable the moment something junk drops. Silence is what reads as a
+                // broken button, so name the reason instead.
+                Warn("forcesell", "[Errand] Told to sell but nothing in bags is classified Vendor (check the loot policy) — still watching.");
 
             // --- Repair: worn AND affordable. An unaffordable repair is not a demand — planning a stop
             // for it is the all-night stand-at-the-vendor loop, and coin is askable before we walk. ---
@@ -147,13 +152,31 @@ namespace Bots.Vibes.Shared.Errands
                 demands.Add(new ErrandDemand(ErrandKind.Train, "new class spells available"));
 
             // --- Mail: a payload is the precondition; bag pressure is what makes it worth a TRIP. ---
+            // ForceMail promotes the demand to HARD, exactly as the four siblings above do. Without it an
+            // explicit order is a silent no-op on healthy bags: an OPPORTUNISTIC mail demand is dropped by
+            // ErrandPlanner when the tour is otherwise empty ("no route to be on"), and this flag — alone
+            // among the five — had no reader anywhere in the tree.
             if (_mailPayload > 0 && me.Level >= profile.MinMailLevel)
             {
                 uint total = TotalBagSlots(me);
-                bool pressure = total > 0 && me.FreeBagSlots < total * MailFreeSlotsPressurePct / 100.0;
+                bool pressure = Vendors.ForceMail
+                                || (total > 0 && me.FreeBagSlots < total * MailFreeSlotsPressurePct / 100.0);
                 demands.Add(new ErrandDemand(ErrandKind.Mail,
                     string.Format("{0} item(s) to send, {1}/{2} slots free", _mailPayload, me.FreeBagSlots, total),
                     opportunistic: !pressure));
+            }
+            else if (Vendors.ForceMail)
+            {
+                // Told to mail with nothing to send. Unlike the sell case this can be STRUCTURALLY
+                // impossible — no recipient means no mail this session however much drops — so say which
+                // it is, and drop a flag nothing can ever satisfy rather than leave it armed all night.
+                bool impossible = !MailboxService.MailingConfigured;
+                Warn("forcemail", "[Errand] Told to mail but there is nothing to send — {0}.",
+                    impossible ? "no MailRecipient is set (General settings)"
+                    : me.Level < profile.MinMailLevel
+                        ? string.Format("level {0} is below the profile's MinMailLevel {1}", me.Level, profile.MinMailLevel)
+                        : "nothing in bags is classified Mail (check the loot policy)");
+                if (impossible) Vendors.ForceMail = false;
             }
 
             return demands;
