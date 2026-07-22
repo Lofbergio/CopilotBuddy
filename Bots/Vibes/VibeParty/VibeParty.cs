@@ -203,6 +203,11 @@ namespace VibeParty
 			}
 		}
 
+		// Pausing stops Pulse entirely (TreeRoot returns before it), so while paused nothing validates a
+		// trip and nothing ends one — but its clock keeps counting. Resume after five minutes and the
+		// first tick ABORTs, charging an abort strike to a stop that did nothing wrong.
+		public override void OnPaused() => _errands?.Cancel("the bot was paused");
+
 		public override void Stop()
 		{
 			if (_leaderHooked)
@@ -223,6 +228,15 @@ namespace VibeParty
 			_partyLoot = null;
 			_partyWater = null;
 
+			// A GLOBAL we forced is restored however far Start got — it is set in EnsurePartyProfile,
+			// before the hooks, so a Start that threw between the two (the follower bus construction can)
+			// would otherwise leave every later botbase resolving vendors automatically.
+			if (_origFindVendors.HasValue)
+			{
+				CharacterSettings.Instance.FindVendorsAutomatically = _origFindVendors.Value;
+				_origFindVendors = null;
+			}
+
 			// Tear down what we actually STARTED, not what the settings say NOW. Keyed on the settings,
 			// a Leader or Do-Nothing tick between Start and Stop skipped this whole block: the event
 			// hooks stayed attached, FindVendorsAutomatically stayed forced, the map stamp stayed set so
@@ -237,14 +251,6 @@ namespace VibeParty
 			_factions = null;
 			_mailboxMap = uint.MaxValue;          // next Start re-reads mailboxes and factions for the map
 			GrindMobsRepository.Shutdown();       // release the DB handle so a later Start re-opens cleanly
-
-			// Restore the vendor auto-resolve flag we forced in EnsurePartyProfile — a profile-driven
-			// botbase run after us may rely on its authored <Vendor> entries only.
-			if (_origFindVendors.HasValue)
-			{
-				CharacterSettings.Instance.FindVendorsAutomatically = _origFindVendors.Value;
-				_origFindVendors = null;
-			}
 
 			DetachLuaEvents();
 			Vendors.OnVendorItems -= OnVendorSweep;
@@ -625,14 +631,15 @@ namespace VibeParty
 		public override void Pulse()
 		{
 			PartyBus? bus = _bus;
-			if (VibePartySettings.Instance.DoNothing)
-			{
-				// Switched on mid-trip: the tree idles from here, so nothing would drive the trip and
-				// nothing would end it — its clock would run out and blame the stop we were walking to.
-				_errands?.Cancel("do-nothing was switched on");
-				return;
-			}
-			if (bus == null) return;
+			// A trip can only be driven — and ended — from the follower path below. Every state that
+			// routes away from it must therefore end the trip HERE: left standing it holds its POI and
+			// its clock keeps running until it ABORTs and charges an abort strike to the stop we were
+			// walking to, which did nothing wrong. One predicate, so a mid-session Do-Nothing tick and a
+			// mid-session Leader tick cannot be covered asymmetrically.
+			if (bus == null || VibePartySettings.Instance.DoNothing || VibePartySettings.Instance.IsLeader)
+				_errands?.Cancel("this bot stopped running errands");
+
+			if (bus == null || VibePartySettings.Instance.DoNothing) return;
 
 			_partyLoot?.Tick();   // Phase 5: leader TTL sweep / follower lease upkeep
 
@@ -785,7 +792,9 @@ namespace VibeParty
 			if (me == null || _errands == null || !_errands.Active) return;
 			if (me.Dead || me.IsGhost) _errands.Cancel("we died");
 			else if (InsideInstanceOrBg()) _errands.Cancel("we went inside");
-			else if (_waiting) _errands.Cancel("the leader called a hold");
+			// The hold itself defers during combat (see the Root's idle gate) — so must ending the trip
+			// for it, or the teardown's POI release wipes the Kill POI combat has borrowed.
+			else if (_waiting && !me.Combat) _errands.Cancel("the leader called a hold");
 		}
 
 		private static string ErrandWord(ErrandKind k)

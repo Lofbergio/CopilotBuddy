@@ -793,6 +793,11 @@ namespace Bots.VibeGrinder
             return RunStatus.Failure;
         }
 
+        // Pausing stops Pulse entirely (TreeRoot returns before it), so while paused nothing validates a
+        // trip and nothing ends one — but its clock keeps counting. Resume after five minutes and the
+        // first tick ABORTs, charging an abort strike to a vendor that did nothing wrong.
+        public override void OnPaused() => _errands?.Cancel("the bot was paused");
+
         public override void Stop()
         {
             Targeting.Instance.IncludeTargetsFilter -= LevelBot.LevelBotIncludeTargetsFilter;
